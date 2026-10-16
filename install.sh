@@ -12,8 +12,6 @@ AUTOSTART_FILE="$AUTOSTART_DIR/linuxpop.desktop"
 APPS_DIR="$HOME/.local/share/applications"
 APP_FILE="$APPS_DIR/${APP_ID}.desktop"
 LEGACY_APP_FILE="$APPS_DIR/linuxpop.desktop"   # old short-name file to clean up
-METAINFO_DIR="$HOME/.local/share/metainfo"
-METAINFO_FILE="$METAINFO_DIR/${APP_ID}.metainfo.xml"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 ICON_FILE="$ICON_DIR/${APP_ID}.svg"
 PLUGIN_DIR="$HOME/.config/linuxpop/plugins"
@@ -29,9 +27,6 @@ uninstall() {
         fi
     done
     update-desktop-database "$APPS_DIR" 2>/dev/null || true
-    if [[ -f "$METAINFO_FILE" ]]; then
-        rm -v "$METAINFO_FILE"
-    fi
     if [[ -f "$ICON_FILE" ]]; then
         rm -v "$ICON_FILE"
     fi
@@ -62,7 +57,7 @@ python3 -c "import Xlib" 2>/dev/null \
     || { echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"; exit 1; }
 
 # Write the autostart .desktop with the absolute path to main.py
-mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$METAINFO_DIR" "$ICON_DIR" "$PLUGIN_DIR"
+mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$PLUGIN_DIR"
 
 # Clean up the old short-name launcher so we don't end up with two
 # duplicate entries in the menu after upgrading.
@@ -83,9 +78,7 @@ StartupNotify=false
 EOF
 chmod +x "$AUTOSTART_FILE"
 
-# Write the launcher .desktop using the reverse-DNS app ID so Mint
-# Software Manager / GNOME Software / KDE Discover can cross-reference
-# it with the AppStream metainfo installed below.
+# Write the launcher .desktop using the app ID as its icon name.
 cat > "$APP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
@@ -104,18 +97,7 @@ EOF
 chmod +x "$APP_FILE"
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
 
-# AppStream metainfo so software centres can see the app, its description,
-# screenshots and donation URL. Without this LinuxPop only shows up by
-# name; with it, it has a proper listing.
-if [[ -f "$REPO_DIR/packaging/${APP_ID}.metainfo.xml" ]]; then
-    install -Dm644 \
-        "$REPO_DIR/packaging/${APP_ID}.metainfo.xml" \
-        "$METAINFO_FILE"
-    echo "[install] AppStream metainfo written to $METAINFO_FILE"
-fi
-
-# Mirror the icon under the canonical reverse-DNS filename so AppStream
-# can resolve <icon type="stock">io.github.GaimsDevSoftware.LinuxPop</icon>.
+# Mirror the icon under the app ID so desktop environments can resolve it.
 if [[ -f "$REPO_DIR/icons/linuxpop.svg" ]]; then
     install -Dm644 "$REPO_DIR/icons/linuxpop.svg" "$ICON_FILE"
 fi

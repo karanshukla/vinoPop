@@ -193,9 +193,8 @@ def replace_selection(new_text: str) -> None:
     _t.sleep(0.05)
     backend.paste()
     if not backend.can_paste():
-        # No keystroke injector (e.g. the Flatpak sandbox on Wayland has no
-        # ydotool/wtype): the result is on the clipboard but wasn't pasted in
-        # place. Tell the user so they aren't left wondering why nothing changed.
+        # The result is on the clipboard but wasn't pasted in place. Tell the
+        # user so they aren't left wondering why nothing changed.
         subprocess.run(
             [
                 "notify-send",
@@ -292,10 +291,6 @@ def search_web(text: str) -> None:
     get_backend().open_url(url)
 
 
-def _in_flatpak() -> bool:
-    return os.path.exists("/.flatpak-info")
-
-
 _TERMINALS = [
     ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c"]),
     ("konsole", ["konsole", "-e", "bash", "-c"]),
@@ -307,30 +302,8 @@ _TERMINALS = [
 ]
 
 
-def _host_has(binary: str) -> bool:
-    """Is `binary` on the host's PATH? Checked through flatpak-spawn so it
-    works from inside the sandbox."""
-    try:
-        r = subprocess.run(
-            ["flatpak-spawn", "--host", "sh", "-c", f"command -v {shlex.quote(binary)}"],
-            capture_output=True,
-            timeout=5,
-        )
-        return r.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 def _find_terminal() -> tuple[str, list[str]] | None:
-    """Return (binary, argv-prefix) for the first available terminal emulator.
-    Inside Flatpak the command has to run on the host (running it in the
-    sandbox would hit the wrong filesystem and tools), so we look for the
-    terminal on the host's PATH and prefix the argv with flatpak-spawn --host."""
-    if _in_flatpak():
-        for binary, argv in _TERMINALS:
-            if _host_has(binary):
-                return binary, ["flatpak-spawn", "--host", *argv]
-        return None
+    """Return (binary, argv-prefix) for the first available terminal emulator."""
     for binary, argv in _TERMINALS:
         if shutil.which(binary):
             return binary, argv
@@ -602,25 +575,6 @@ def run_in_terminal(text: str) -> None:
 
 def open_path(text: str) -> None:
     raw = _strip_invisible(text)
-    if _in_flatpak():
-        # Open on the host: the sandbox can't open an arbitrary host path
-        # (the OpenURI portal needs a readable fd we don't have). Expand a
-        # leading ~ against the HOST's $HOME, then run the host's xdg-open.
-        argv = [
-            "flatpak-spawn",
-            "--host",
-            "sh",
-            "-c",
-            'p="$1"; case "$p" in "~"*) p="$HOME${p#\\~}";; esac; exec xdg-open "$p"',
-            "sh",
-            raw,
-        ]
-        try:
-            subprocess.Popen(argv, start_new_session=True)
-            print(f"[actions] opened path on host: {raw}")
-        except OSError:
-            print("[actions] flatpak-spawn not available")
-        return
     path = os.path.expanduser(raw)
     try:
         subprocess.Popen(
