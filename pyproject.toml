@@ -13,6 +13,16 @@ dependencies = [
     "python-xlib>=0.33",
 ]
 
+[project.optional-dependencies]
+# Offline AI, pinned like requirements-ai.txt (keep the two in step)
+ai = [
+    "openvino==2026.4.1",
+    "openvino-genai==2026.4.1.0",
+    "openvino-tokenizers==2026.4.1.0",
+    "rapidocr>=3.10",
+    "huggingface_hub>=0.30",
+]
+
 # ── uv ────────────────────────────────────────────────────────────────────────
 
 [dependency-groups]
@@ -37,6 +47,7 @@ security.cmd = "uvx --from bandit[toml]==1.9.4 bandit -c pyproject.toml -r ."
 security.help = "the same Bandit scan the Bandit workflow runs"
 check.sequence = ["lint", "fmt", "types", "test"]
 check.help = "everything CI runs, locally"
+doctor = "python main.py --doctor"
 
 # ── Ruff ──────────────────────────────────────────────────────────────────────
 
@@ -59,7 +70,7 @@ ignore = [
 
 [tool.mypy]
 # New code is typed from the start; the GTK3 modules get added as they're ported
-files = ["classifier.py", "xdg_paths.py"]
+files = ["vino_ai", "classifier.py", "xdg_paths.py"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 

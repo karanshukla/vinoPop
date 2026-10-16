@@ -1,0 +1,12 @@
+# Offline AI for vinoPop: OCR, summarize, rewrite, explain, translate.
+#   pip install --user -r requirements-ai.txt
+#
+# OpenVINO is pinned to the exact release the other vino apps use (vinoWhisper's
+# uv.lock): two programs on one NPU must not run different OpenVINO releases.
+# Bump it in step with them; `ovfetch detect` reports the range your NPU driver
+# is known to work with.
+openvino==2026.4.1
+openvino-genai==2026.4.1.0
+openvino-tokenizers==2026.4.1.0
+rapidocr>=3.10
+huggingface_hub>=0.30

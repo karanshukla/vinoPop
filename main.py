@@ -16,6 +16,13 @@ from collections.abc import Callable
 from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING
 
+# `--doctor` runs before GTK is imported so it also works over SSH or
+# with a broken display.
+if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
+    from vino_ai import doctor
+
+    sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -638,7 +645,7 @@ class App:
                     if new_clip:
                         self._start_clipboard_hotkey()
                 # Bind the OCR hotkey if it just became usable - e.g. the
-                # user installed tesseract via the Settings Install button -
+                # user installed the OCR dependencies via the Settings Install button -
                 # so it starts working without a daemon restart.
                 if (self.settings.get("ocr_hotkey") or "").strip() and self.ocr_hotkey is None:
                     self._start_ocr_hotkey()
@@ -783,6 +790,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--reset-first-run", action="store_true", help="Force the welcome flow on next launch"
     )
+    p.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Check what offline AI needs (OpenVINO, devices, ovfetch, models) and exit",
+    )
+    p.add_argument("--json", action="store_true", help="With --doctor: machine-readable output")
     return p.parse_args(argv)
 
 

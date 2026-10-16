@@ -715,7 +715,7 @@ class SettingsDialog:
         # OCR hotkey row - sits next to the popup hotkey so the two
         # "summon something with a key chord" rows cluster together.
         # The status subtitle changes based on whether the OCR backend
-        # is reachable (maim + tesseract), so the user knows whether
+        # is reachable (a capture tool + the OpenVINO OCR engine), so the user knows whether
         # the hotkey will actually do anything when pressed.
         ocr_row = Handy.ActionRow()
         ocr_row.set_title("Screen OCR hotkey")
@@ -754,7 +754,7 @@ class SettingsDialog:
             if argv is None:
                 ocr_install_btn.set_sensitive(False)
                 ocr_install_btn.set_tooltip_text(
-                    "Couldn't detect your package manager - please install tesseract manually."
+                    "Install the OCR engine with: pip install --user -r requirements-ai.txt"
                 )
 
             def _on_ocr_install(btn, argv=argv, row=ocr_row):

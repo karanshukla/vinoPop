@@ -36,7 +36,8 @@ DEFAULT_PLUGIN_SEEDS = (
     "wordcount.py",
     "large_type.py",
     "text_transformations.py",  # case + sort/dedupe/trim, all predicate-guarded
-    "translate.py",  # in-place translation bubble, language picker
+    "translate.py",  # offline translation bubble, language picker
+    "local_ai.py",  # offline summarize / rewrite / explain
 )
 _PLUGIN_SEED_MARKER = USER_PLUGIN_DIR.parent / ".default-plugins-seeded"
 

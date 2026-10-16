@@ -12,8 +12,8 @@ The only network traffic is something you click that is plainly online:
 - the one-time AI model download from Hugging Face, the first time you use an
   AI action
 
-The bundled translate bubble still calls Google's translation endpoint until
-it moves to the local model.
+OCR, summarize, rewrite, explain and translate run on the local OpenVINO
+models; the selected text never leaves the machine.
 
 Clipboard history is stored in plain JSON at `~/.cache/linuxpop/history.json`,
 readable by your user. Treat it as sensitive as whatever you copy.

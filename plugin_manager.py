@@ -332,7 +332,7 @@ class PluginManagerDialog:
         "you save for reuse. The core of what LinuxPop is for.",
         "Productivity": "Everyday actions - math, counts, speech, formatting.",
         "Web shortcuts": "Open the selection in a search engine or web service.",
-        "AI": "Send the selection to a chat AI or run one locally.",
+        "AI": "Summarize, rewrite, explain and translate offline, on your NPU, GPU or CPU.",
         "Developer": "Encoders, hashes and converters for technical text.",
     }
 

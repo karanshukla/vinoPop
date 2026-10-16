@@ -1,0 +1,66 @@
+"""Which OpenVINO device each model runs on.
+
+The `ai_device` setting is "auto" (default), "NPU", "GPU" or "CPU". In
+auto mode the LLM prefers the NPU, since OpenVINO GenAI handles the NPU's
+static-shape requirement itself and the NPU is the efficient choice for a
+model that sits idle between clicks. OCR prefers the iGPU instead: PP-OCR
+detection and recognition take a different input shape for every capture,
+which the NPU can't compile for without padding every image to a fixed
+size.
+"""
+
+from __future__ import annotations
+
+import functools
+import logging
+
+log = logging.getLogger("linuxpop")
+
+LLM_ORDER = ("NPU", "GPU", "CPU")
+OCR_ORDER = ("GPU", "CPU")
+
+
+@functools.lru_cache(maxsize=1)
+def available_devices() -> tuple[str, ...]:
+    import openvino as ov
+
+    devs = tuple(ov.Core().available_devices)
+    log.info("[vino_ai] OpenVINO devices: %s", ", ".join(devs) or "none")
+    return devs
+
+
+@functools.lru_cache(maxsize=1)
+def _log_npu_notes() -> None:
+    """Pass ovfetch's view of the NPU to the log once. Diagnosis only: the
+    NPU is still tried, and a failed compile falls back to GPU/CPU."""
+    import openvino as ov
+
+    from . import ovfetch
+
+    for warning in ovfetch.warnings(ov.__version__):
+        log.warning("[vino_ai] %s (see `linuxpop --doctor`)", warning)
+
+
+def _setting() -> str:
+    try:
+        from settings import get_settings
+
+        return str(get_settings().get("ai_device") or "auto").upper()
+    except Exception:
+        return "AUTO"
+
+
+def candidates(order: tuple[str, ...]) -> list[str]:
+    """Devices to try, best first. An explicit setting comes first and the
+    rest of the order stays as fallback, so a missing NPU driver degrades
+    to GPU/CPU instead of breaking the feature."""
+    devs = available_devices()
+    # "GPU.0"/"GPU.1" on multi-GPU boxes: match on the family prefix.
+    present = [d for d in order if any(x.split(".")[0] == d for x in devs)]
+    if "NPU" in present:
+        _log_npu_notes()
+    choice = _setting()
+    if choice != "AUTO" and choice in present:
+        present.remove(choice)
+        present.insert(0, choice)
+    return present or ["CPU"]

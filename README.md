@@ -4,7 +4,7 @@
 
 ![LinuxPop in action: select text, a popup of context actions appears, here translating the selection](docs/linuxpop-demo.gif)
 
-Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate it, run it as a command, send it to an AI, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
+Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
 
 It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and natively on KDE Plasma 6 / Wayland. Free, open source, and nothing phones home.
 
@@ -18,7 +18,7 @@ It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and nat
 - **Global hotkey** to pop the bar on your current selection from any app.
 - **Tray icon** for settings, the plugin manager, and a quick on/off toggle.
 - **Plugins are just `.py` files.** Drop one in `~/.config/linuxpop/plugins/`, or grab one from the built-in list.
-- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, in-place translate, and run-in-terminal for things that look like commands.
+- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, offline translate / summarize / rewrite / explain, and run-in-terminal for things that look like commands.
 - **Double-click a word** (while holding a modifier) to pop the bar. Works on real Wayland, not just XWayland.
 - **Your text stays on your machine** unless you click something that obviously goes online, like web search or opening a link.
 
@@ -80,6 +80,32 @@ sudo pacman -S python python-gobject gtk3 libayatana-appindicator \
 ```
 
 Optional: `qrencode` for the QR plugin.
+
+#### Offline AI (OCR, summarize, rewrite, explain, translate)
+
+These run on your own machine through OpenVINO: the LLM on an Intel NPU when
+there is one, OCR on the iGPU, and the CPU otherwise. Install the Python side
+for the same Python that runs vinoPop:
+
+```sh
+pip install --user -r requirements-ai.txt
+```
+
+(On Debian/Ubuntu, whose system Python refuses `pip --user`, add
+`--break-system-packages` or run vinoPop from a venv created with
+`--system-site-packages` so it still sees PyGObject.)
+
+The first AI action downloads the model once (Phi-3.5 mini, about 2.2 GB, or
+set `"ai_llm_model": "qwen2.5-1.5b"` for a 1 GB one). After that nothing goes
+online. `"ai_device"` forces `"NPU"`, `"GPU"` or `"CPU"`.
+
+`python3 main.py --doctor` (add `--json` for a bug report) checks the AI
+packages, which devices OpenVINO sees and the order each model will try them
+in, and whether the model is downloaded. With
+[ovfetch](https://github.com/karanshukla/ovfetch) installed it also reports
+whether the pinned OpenVINO is inside the range Intel records for your NPU
+driver. Like vinoWhisper's doctor this is diagnosis only: the NPU is still
+tried, and falls back to GPU/CPU if it won't compile.
 
 #### 2. Install LinuxPop
 
