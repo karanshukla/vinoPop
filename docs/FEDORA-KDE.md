@@ -12,7 +12,7 @@ How it maps each piece of the X11 design onto Wayland/KDE:
 | Auto-popup on selection | `wl-paste --primary --watch` |
 | Popup placement at cursor | `gtk4-layer-shell` (anchor top-left + margins); XWayland if it isn't installed |
 | Global cursor position | KWin scripting `workspace.cursorPos` over D-Bus |
-| Keystroke / paste injection | `wtype` |
+| Keystroke / paste injection | `ydotool` + `ydotoold` on KWin |
 | Global hotkey | KGlobalAccel over D-Bus |
 | Tray icon | StatusNotifierItem via libappindicator (KDE SNI) |
 
@@ -25,10 +25,13 @@ The backend is chosen automatically from `XDG_SESSION_TYPE`. Force it with
 sudo dnf install -y \
     python3 python3-gobject python3-dbus \
     gtk4 libadwaita gtk4-layer-shell \
-    wl-clipboard wtype
+    wl-clipboard ydotool
 # optional: OCR + region capture
 sudo dnf install -y tesseract
 ```
+
+KWin requires `ydotoold` to be running for keystroke injection. `wtype` is
+only an alternative on wlroots/Sway compositors; it does not work on KWin.
 
 ## Run
 
@@ -55,4 +58,4 @@ Logs: `~/.cache/linuxpop/linuxpop.log`.
 - First popup after a selection has ~100-150 ms extra latency (one cursor-
   position round-trip to KWin). A resident helper to remove this is planned.
 
-These are tracked in [FEDORA-KDE-BACKLOG.md](FEDORA-KDE-BACKLOG.md).
+Please report other issues in the [GitHub issue tracker](https://github.com/GaimsDevSoftware/linuxpop/issues).

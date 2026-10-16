@@ -8,7 +8,7 @@ Highlight some text and a little bar of buttons shows up right over it. Copy it,
 
 It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and natively on KDE Plasma 6 / Wayland. Free, open source, and nothing phones home.
 
-> **Heads up if you're on Linux Mint / Cinnamon (or another X11 desktop):** treat 0.9.0 as a beta. Most of the testing and polish this round went into KDE Plasma 6 / Wayland. The X11 side still works (it's where LinuxPop started, after all), but I haven't re-checked every feature on real hardware yet, so you might hit a rough spot or two. If you do, [open an issue](https://github.com/GaimsDevSoftware/linuxpop/issues). That's genuinely the fastest way to get your setup sorted.
+> **X11 desktop users:** LinuxPop supports X11, but recent testing has focused on KDE Plasma 6 / Wayland. If you hit a rough spot on Cinnamon, GNOME-on-X11, XFCE, or MATE, please [open an issue](https://github.com/GaimsDevSoftware/linuxpop/issues).
 
 ---
 
@@ -43,7 +43,7 @@ Want a single file instead? Grab the `.flatpak` bundle from the
 `flatpak install --bundle linuxpop-*.flatpak`. There's a full walkthrough at
 <https://gaimsdevsoftware.github.io/linuxpop-flatpak/>.
 
-In the Flatpak build, "open file/folder" works (it gets read-only access to your home). Screen OCR isn't bundled yet; that's coming in a later release.
+In the Flatpak build, opening files and folders and screen OCR are supported.
 
 ### Native packages
 
@@ -51,7 +51,7 @@ In the Flatpak build, "open file/folder" works (it gets read-only access to your
 [latest release](https://github.com/GaimsDevSoftware/linuxpop/releases/latest):
 
 ```sh
-sudo apt install ./linuxpop_0.9.2_all.deb
+sudo apt install ./linuxpop_*_all.deb
 ```
 
 **Fedora (COPR):** a native RPM that updates through `dnf`:
@@ -156,9 +156,10 @@ Right-click the tray icon and pick **Settings**, or edit
 | `hotkey` | `super+shift+y` | Combo to summon popup. Record via Settings dialog. |
 | `hotkey_source` | `primary` | `primary` (highlighted) or `clipboard` |
 | `show_on_selection` | `true` | Auto-popup when you select text |
-| `auto_hide_initial_ms` | `8000` | Hide if mouse never reaches popup |
+| `auto_hide_initial_ms` | `6500` | Hide if mouse never reaches popup |
 | `auto_hide_leave_ms` | `4000` | Hide this long after mouse leaves the safe zone |
-| `min_selection_length` | `1` | Ignore selections shorter than this |
+| `min_selection_length_enabled` | `false` | Enable the minimum-selection-length filter |
+| `min_selection_length` | `2` | When enabled, ignore selections shorter than this |
 | `terminal_keep_open` | `true` | Keep terminal open after running a command |
 | `ai_paste_delay_seconds` | `2.5` | Wait before auto-pasting into a chat AI |
 | `double_click_popup_enabled` | `false` | Hold a modifier + double-click a word to pop the bar |
@@ -202,7 +203,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
 
 ## Known rough edges
 
-- **Mint / Cinnamon and X11 are beta in 0.9.0.** The recent work went into KDE Plasma 6 / Wayland. The X11 backend (Cinnamon, GNOME-on-X11, XFCE, MATE) still runs, but it didn't get a full pass on real hardware this cycle. Expect the odd glitch, and please file issues. It's the quickest path to a solid 1.0.
+- **X11 support has had less recent testing.** The X11 backend (Cinnamon, GNOME-on-X11, XFCE, MATE) still runs, but recent testing has focused on KDE Plasma 6 / Wayland. Please file issues if you hit a glitch.
 - **Wayland support means KDE Plasma for now.** LinuxPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API. Other compositors (GNOME, wlroots) drop back to the X11 path under XWayland; GNOME's mutter has no layer-shell, so there it always runs on XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), paste goes through `ydotool`, and the active-window blocklist isn't wired up yet. Popup placement, hover persistence, and click-outside dismissal all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
 - **HiDPI** works, but I've mostly tested it at 2× scaling. File an issue if the popup lands in the wrong spot on your setup.
 - **The odd input grab.** If another app is holding an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.

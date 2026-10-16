@@ -118,7 +118,7 @@ PKGBUILD is one of the cheapest packages you can write:
 ```sh
 # /aur/linuxpop/PKGBUILD
 pkgname=linuxpop
-pkgver=0.9.0
+pkgver=0.9.7
 pkgrel=1
 pkgdesc="Floating popup of context-aware actions for selected text"
 arch=('any')
@@ -137,7 +137,7 @@ sha256sums=('SKIP')
 package() {
     cd "$srcdir/$pkgname-$pkgver"
     install -d "$pkgdir/usr/share/linuxpop"
-    cp -r *.py icons plugins_repo recipes_repo "$pkgdir/usr/share/linuxpop/"
+    cp -r *.py icons plugins_repo "$pkgdir/usr/share/linuxpop/"
     install -Dm755 packaging/flatpak/linuxpop.wrapper "$pkgdir/usr/bin/linuxpop"
     install -Dm644 packaging/io.github.GaimsDevSoftware.LinuxPop.desktop \
         "$pkgdir/usr/share/applications/linuxpop.desktop"
