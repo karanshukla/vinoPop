@@ -12,7 +12,6 @@ AUTOSTART_FILE="$AUTOSTART_DIR/linuxpop.desktop"
 APPS_DIR="$HOME/.local/share/applications"
 APP_FILE="$APPS_DIR/${APP_ID}.desktop"
 LEGACY_APP_FILE="$APPS_DIR/linuxpop.desktop"   # old short-name file to clean up
-METAINFO_DIR="$HOME/.local/share/metainfo"
 ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 ICON_FILE="$ICON_DIR/${APP_ID}.svg"
 PLUGIN_DIR="$HOME/.config/linuxpop/plugins"
