@@ -116,6 +116,10 @@ def run(
         cfg = pipe.get_generation_config()
         cfg.max_new_tokens = _MAX_NEW_TOKENS[task]
         cfg.do_sample = False
+        if task == "translate" and "\n\n" not in text:
+            # Phi-3.5 appends "(Note: ...)" disclaimers after a blank line
+            # however the prompt forbids them.
+            cfg.stop_strings = {"\n\n"}
         if hasattr(cfg, "apply_chat_template"):
             cfg.apply_chat_template = False  # already applied above
 
