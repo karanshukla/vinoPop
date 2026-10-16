@@ -63,8 +63,8 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
                 _desktop_file_contents(exec_line),
                 encoding="utf-8",
             )
-            # Make it executable so older DEs that check x-bit honour it
-            AUTOSTART_FILE.chmod(0o755)
+            # systemd-xdg-autostart-generator warns on an executable .desktop
+            AUTOSTART_FILE.chmod(0o644)
             if LEGACY_AUTOSTART_FILE.is_file():
                 LEGACY_AUTOSTART_FILE.unlink()
         else:

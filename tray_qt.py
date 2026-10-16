@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCursor, QIcon
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -191,11 +191,15 @@ class TrayQt:
     # ─── activation ───
     def _on_activated(self, reason) -> None:
         # Right-click already shows the DBusMenu (plasmashell renders it). On
-        # left-click (Trigger) / middle-click, surface the same menu so the user
-        # always reaches Settings/Plugins however they click. The popup here is
-        # driven by a real input event, so it maps on Wayland.
+        # Wayland a left-click arrives over D-Bus with no input event on any of
+        # our surfaces, so a client-side QMenu.popup is refused ("Failed to
+        # create grabbing popup"); open Settings instead.
         R = QSystemTrayIcon.ActivationReason
-        if reason in (R.Trigger, R.MiddleClick):
+        if reason not in (R.Trigger, R.MiddleClick):
+            return
+        if QGuiApplication.platformName() == "wayland":
+            self._emit("settings", None)
+        else:
             self._menu.popup(QCursor.pos())
 
     # ─── menu ───
