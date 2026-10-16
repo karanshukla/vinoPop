@@ -23,6 +23,15 @@ LEGACY_FILES=(
     "$ICON_DIR/io.github.GaimsDevSoftware.LinuxPop.svg"
 )
 PLUGIN_DIR="$HOME/.config/vinopop/plugins"
+# The interpreter the launchers run. The offline-AI packages usually live
+# in a venv, and /usr/bin/python3 can't see them, so prefer one.
+if [[ -n "${VINOPOP_PYTHON:-}" ]]; then
+    PYTHON="$VINOPOP_PYTHON"
+elif [[ -x "$REPO_DIR/.venv/bin/python" ]]; then
+    PYTHON="$REPO_DIR/.venv/bin/python"
+else
+    PYTHON="$(command -v python3 || true)"
+fi
 
 uninstall() {
     if [[ -f "$AUTOSTART_FILE" ]]; then
@@ -38,7 +47,7 @@ uninstall() {
     if [[ -f "$ICON_FILE" ]]; then
         rm -v "$ICON_FILE"
     fi
-    pkill -f "python3 .*(vinopop|linuxpop)/main.py" 2>/dev/null || true
+    pkill -i -f "python[0-9.]* .*(vinopop|linuxpop)/main\.py" 2>/dev/null || true
     echo "[install] any running instances stopped"
 }
 
@@ -50,7 +59,8 @@ fi
 # Verify dependencies
 echo "[install] checking dependencies..."
 missing=()
-for bin in python3 xclip xdg-open; do
+[[ -x "$PYTHON" ]] || missing+=("python3")
+for bin in xclip xdg-open; do
     command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
 done
 if [[ ${#missing[@]} -gt 0 ]]; then
@@ -59,9 +69,9 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     exit 1
 fi
 
-python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
+"$PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
     || { echo "[install] missing GTK 4 / libadwaita for python3-gi: sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1"; exit 1; }
-python3 -c "import Xlib" 2>/dev/null \
+"$PYTHON" -c "import Xlib" 2>/dev/null \
     || { echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"; exit 1; }
 
 # Write the autostart .desktop with the absolute path to main.py
@@ -75,7 +85,7 @@ cat > "$AUTOSTART_FILE" <<EOF
 Type=Application
 Name=vinoPop
 Comment=PopClip-inspired floating action popup
-Exec=/usr/bin/python3 ${REPO_DIR}/main.py
+Exec="${PYTHON}" "${REPO_DIR}/main.py"
 Icon=vinopop
 Terminal=false
 Categories=Utility;
@@ -91,7 +101,7 @@ Type=Application
 Name=vinoPop
 GenericName=Text action popup
 Comment=PopClip-inspired floating popup of context-aware actions on selected text
-Exec=/usr/bin/python3 ${REPO_DIR}/main.py
+Exec="${PYTHON}" "${REPO_DIR}/main.py"
 Icon=${APP_ID}
 Terminal=false
 Categories=Utility;TextTools;
@@ -113,5 +123,6 @@ echo "[install] autostart written to $AUTOSTART_FILE"
 echo "[install] launcher entry written to $APP_FILE"
 echo "[install] vinoPop will start automatically next login,"
 echo "[install]   and shows up in Synapse / Mint menu / GNOME Activities."
-echo "[install] to start now: python3 ${REPO_DIR}/main.py"
+echo "[install] launchers run: ${PYTHON}"
+echo "[install] to start now: ${PYTHON} ${REPO_DIR}/main.py"
 echo "[install] uninstall: bash $0 --uninstall"
