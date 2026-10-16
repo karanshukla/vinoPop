@@ -9,12 +9,16 @@ machine.
 
 from __future__ import annotations
 
+import logging
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 from plugin_base import Plugin
+
+log = logging.getLogger("linuxpop")
 
 # (code, label in its own language, English name for the prompt)
 _LANGS = [
@@ -61,7 +65,7 @@ def _save_target_lang(code: str) -> None:
         s.set("translate_target_lang", code)
         s.save()
     except Exception:
-        pass
+        log.exception("[translate] couldn't save the target language")
 
 
 def _translate(text: str) -> None:

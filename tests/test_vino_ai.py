@@ -118,6 +118,7 @@ def test_models_registry():
     assert models.DEFAULT_LLM in models.LLM_MODELS
     for m in models.LLM_MODELS.values():
         assert m.repo_id.startswith("OpenVINO/") and m.repo_id.endswith("-ov")
+        assert len(m.revision) == 40 and int(m.revision, 16) >= 0  # a full commit sha
 
 
 def test_model_completeness(tmp_path, monkeypatch):

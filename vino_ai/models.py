@@ -30,6 +30,9 @@ class LlmModel:
     repo_id: str
     label: str
     size: str  # rough download size, shown before the first download
+    # Pinned commit, so a changed or compromised upstream repo can't swap
+    # the files under us. Bump deliberately (Hugging Face "sha", 2026-10-16).
+    revision: str
 
 
 LLM_MODELS = {
@@ -40,12 +43,14 @@ LLM_MODELS = {
             "OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov",
             "Phi-3.5 mini (best quality, NPU-friendly)",
             "2.2 GB",
+            "dc27b4e451118b1e82c159a839476df02797837a",
         ),
         LlmModel(
             "qwen2.5-1.5b",
             "OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov",
             "Qwen2.5 1.5B (lighter, faster)",
             "1 GB",
+            "4d14c299e35d8b74e3471f9e92bd1377fae50736",
         ),
     )
 }
@@ -91,7 +96,7 @@ def ensure_llm(model: LlmModel) -> Path:
 
         log.info("[vino_ai] downloading %s to %s", model.repo_id, path)
         path.mkdir(parents=True, exist_ok=True)
-        snapshot_download(repo_id=model.repo_id, local_dir=str(path))
+        snapshot_download(repo_id=model.repo_id, revision=model.revision, local_dir=str(path))
         if not _complete(path):
             raise RuntimeError(f"{model.repo_id} downloaded but has no OpenVINO IR")
     return path

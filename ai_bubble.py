@@ -12,12 +12,15 @@ and plain window moves under X11/XWayland.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
+
+log = logging.getLogger("linuxpop")
 
 _CSS = b"""
 window.linuxpop-ai {
@@ -166,8 +169,8 @@ class ResultBubble:
         L.set_layer(self.win, L.Layer.OVERLAY)
         try:
             L.set_keyboard_mode(self.win, L.KeyboardMode.NONE)
-        except Exception:
-            pass
+        except Exception as exc:  # older gtk-layer-shell: focus default is fine
+            log.debug("[ai_bubble] set_keyboard_mode unavailable: %s", exc)
         L.set_anchor(self.win, L.Edge.LEFT, True)
         L.set_anchor(self.win, L.Edge.TOP, True)
 
@@ -284,7 +287,7 @@ class ResultBubble:
 
             get_backend().set_clipboard(self._text)
         except Exception:
-            pass
+            log.exception("[ai_bubble] copy to clipboard failed")
 
     def _arm_timeout(self) -> None:
         if self._dismiss_id is None:
