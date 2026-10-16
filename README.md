@@ -24,46 +24,9 @@ It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and nat
 
 ---
 
-## Install
+## Install from source
 
-### Flatpak (recommended)
-
-It's a GPG-signed Flatpak served from its own auto-updating repo, so there's no Flathub account or approval standing in the way. One command:
-
-```sh
-flatpak install --from https://gaimsdevsoftware.github.io/linuxpop-flatpak/linuxpop.flatpakref
-flatpak run io.github.GaimsDevSoftware.LinuxPop
-```
-
-New to Flatpak? Add the Flathub runtimes first:
-`flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo`
-
-Want a single file instead? Grab the `.flatpak` bundle from the
-[latest release](https://github.com/GaimsDevSoftware/linuxpop/releases/latest) and run
-`flatpak install --bundle linuxpop-*.flatpak`. There's a full walkthrough at
-<https://gaimsdevsoftware.github.io/linuxpop-flatpak/>.
-
-In the Flatpak build, opening files and folders and screen OCR are supported.
-
-### Native packages
-
-**Debian, Ubuntu, Linux Mint:** grab `linuxpop_*_all.deb` from the
-[latest release](https://github.com/GaimsDevSoftware/linuxpop/releases/latest):
-
-```sh
-sudo apt install ./linuxpop_*_all.deb
-```
-
-**Fedora (COPR):** a native RPM that updates through `dnf`:
-
-```sh
-sudo dnf copr enable gaimsdevsoftware/linuxpop
-sudo dnf install linuxpop
-```
-
-### From source
-
-#### 1. System dependencies
+### System dependencies
 
 ```sh
 # Ubuntu / Linux Mint / Debian
@@ -91,7 +54,7 @@ so a Wayland-native popup couldn't be placed at the selection. On KDE and
 wlroots compositors it uses gtk4-layer-shell when it is installed, and falls
 back to XWayland otherwise.
 
-#### Offline AI (OCR, summarize, rewrite, explain, translate)
+### Offline AI (OCR, summarize, rewrite, explain, translate)
 
 These run on your own machine through OpenVINO: the LLM on an Intel NPU when
 there is one, OCR on the iGPU, and the CPU otherwise. Install the Python side
@@ -117,7 +80,7 @@ whether the pinned OpenVINO is inside the range Intel records for your NPU
 driver. Like vinoWhisper's doctor this is diagnosis only: the NPU is still
 tried, and falls back to GPU/CPU if it won't compile.
 
-#### 2. Install LinuxPop
+### Install LinuxPop
 
 ```sh
 git clone https://github.com/GaimsDevSoftware/linuxpop.git ~/linuxpop
