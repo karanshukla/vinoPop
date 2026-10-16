@@ -33,6 +33,7 @@ from .base import PlatformBackend
 
 _LAYER = None
 
+
 def _kwin_subprocess_env() -> dict:
     """Environment for the `python3 -m platform_backend._kwin_*` helper
     subprocesses. Puts the package root on PYTHONPATH so the child can
