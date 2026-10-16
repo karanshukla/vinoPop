@@ -1,10 +1,10 @@
-"""LinuxPop platform backend selection.
+"""vinoPop platform backend selection.
 
 `get_backend()` returns a cached PlatformBackend chosen by detect():
   - KDE Plasma Wayland  -> WaylandKdeBackend
   - everything else      -> X11Backend (the original behaviour)
 
-main.py may set LINUXPOP_BACKEND=x11 (and GDK_BACKEND=x11) before this runs:
+main.py may set VINOPOP_BACKEND=x11 (and GDK_BACKEND=x11) before this runs:
 on mutter-based Wayland desktops, which have no wlr-layer-shell, the whole
 process runs on XWayland.
 
@@ -26,9 +26,9 @@ def detect() -> str:
 
     Wayland KDE is chosen only when there is a Wayland display AND no usable
     X11 display - under XWayland (both set) we prefer the mature X11 path.
-    Override with LINUXPOP_BACKEND=x11|wayland_kde.
+    Override with VINOPOP_BACKEND=x11|wayland_kde.
     """
-    forced = (os.environ.get("LINUXPOP_BACKEND") or "").strip().lower()
+    forced = (os.environ.get("VINOPOP_BACKEND") or "").strip().lower()
     if forced in ("x11", "wayland_kde"):
         return forced
     has_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))

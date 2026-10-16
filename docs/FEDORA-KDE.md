@@ -1,7 +1,7 @@
-# LinuxPop on Fedora KDE Plasma (Wayland)
+# vinoPop on Fedora KDE Plasma (Wayland)
 
 Fedora KDE Plasma 6 runs Wayland by default (Fedora 42 dropped the Plasma X11
-session entirely). LinuxPop detects this and uses a native **Wayland/KDE
+session entirely). vinoPop detects this and uses a native **Wayland/KDE
 backend** instead of the X11 one - no Xorg session required.
 
 How it maps each piece of the X11 design onto Wayland/KDE:
@@ -17,7 +17,7 @@ How it maps each piece of the X11 design onto Wayland/KDE:
 | Tray icon | StatusNotifierItem via libappindicator (KDE SNI) |
 
 The backend is chosen automatically from `XDG_SESSION_TYPE`. Force it with
-`LINUXPOP_BACKEND=x11` or `LINUXPOP_BACKEND=wayland_kde`.
+`VINOPOP_BACKEND=x11` or `VINOPOP_BACKEND=wayland_kde`.
 
 ## Install dependencies
 
@@ -36,12 +36,12 @@ only an alternative on wlroots/Sway compositors; it does not work on KWin.
 ## Run
 
 ```sh
-git clone https://github.com/GaimsDevSoftware/linuxpop.git ~/linuxpop
-cd ~/linuxpop
+git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
+cd ~/vinopop
 python3 main.py            # auto-detects the Wayland/KDE backend
 ```
 
-Logs: `~/.cache/linuxpop/linuxpop.log`.
+Logs: `~/.cache/vinopop/vinopop.log`.
 
 ## Known rough edges on Wayland/KDE
 
@@ -58,4 +58,4 @@ Logs: `~/.cache/linuxpop/linuxpop.log`.
 - First popup after a selection has ~100-150 ms extra latency (one cursor-
   position round-trip to KWin). A resident helper to remove this is planned.
 
-Please report other issues in the [GitHub issue tracker](https://github.com/GaimsDevSoftware/linuxpop/issues).
+Please report other issues in the [GitHub issue tracker](https://github.com/karanshukla/vinoPop/issues).

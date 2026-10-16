@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LinuxPop entry point: tray icon + selection watcher + hotkey + popup."""
+"""vinoPop entry point: tray icon + selection watcher + hotkey + popup."""
 
 from __future__ import annotations
 
@@ -64,11 +64,11 @@ def _choose_gdk_backend() -> str:
     # X11 display or the session says it is Wayland.
     if not wayland or (x11 and session != "wayland"):
         return "X11 session - GDK on X11"
-    forced = (os.environ.get("LINUXPOP_BACKEND") or "").strip().lower()
+    forced = (os.environ.get("VINOPOP_BACKEND") or "").strip().lower()
     desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
     mutter = any(d in desktop for d in _MUTTER_DESKTOPS)
     if forced == "x11":
-        reason = "LINUXPOP_BACKEND=x11"
+        reason = "VINOPOP_BACKEND=x11"
     elif mutter:
         reason = f"{desktop or 'this desktop'} has no wlr-layer-shell"
     elif not _load_layer_shell():
@@ -81,7 +81,7 @@ def _choose_gdk_backend() -> str:
     if mutter and not forced:
         # KWin-only paths (cursorPos script, KGlobalAccel) can't work on
         # mutter; the X11 backend's xclip/Xlib/xdotool path does on XWayland.
-        os.environ["LINUXPOP_BACKEND"] = "x11"
+        os.environ["VINOPOP_BACKEND"] = "x11"
     return f"Wayland session, {reason} - running on XWayland (GDK_BACKEND=x11)"
 
 
@@ -119,8 +119,8 @@ from xdg_paths import CACHE_DIR, CONFIG_DIR  # noqa: E402
 if TYPE_CHECKING:
     from watcher import SelectionWatcher
 
-LOG_FILE = CACHE_DIR / "linuxpop.log"
-LOCK_FILE = CACHE_DIR / "linuxpop.lock"
+LOG_FILE = CACHE_DIR / "vinopop.log"
+LOCK_FILE = CACHE_DIR / "vinopop.lock"
 FIRST_RUN_MARKER = CONFIG_DIR / ".first-run-done"
 
 # Held for the lifetime of the process; the kernel releases the flock when
@@ -147,11 +147,11 @@ def _acquire_single_instance_lock() -> None:
         except OSError:
             existing_pid = "unknown"
         message = (
-            f"LinuxPop is already running (PID {existing_pid}). "
+            f"vinoPop is already running (PID {existing_pid}). "
             "Open the tray icon to use it. To force-restart, kill the "
-            "existing process first: pkill -f 'python3.*linuxpop/main.py'"
+            "existing process first: pkill -f 'python3.*vinopop/main.py'"
         )
-        print(f"[linuxpop] {message}", file=sys.stderr)
+        print(f"[vinopop] {message}", file=sys.stderr)
         try:
             subprocess.run(
                 [
@@ -162,8 +162,8 @@ def _acquire_single_instance_lock() -> None:
                     "-u",
                     "normal",
                     "-i",
-                    "linuxpop",
-                    "LinuxPop is already running",
+                    "vinopop",
+                    "vinoPop is already running",
                     message,
                 ],
                 check=False,
@@ -177,7 +177,7 @@ def _acquire_single_instance_lock() -> None:
     _lock_fd = fd
 
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 
 def _setup_logging(debug: bool) -> None:
@@ -326,7 +326,7 @@ class App:
 
     def show_popup_now(self) -> None:
         # Stamped so a "had to press the hotkey 3 times" report comes
-        # with breadcrumbs in linuxpop.log: did the trigger reach us at
+        # with breadcrumbs in vinopop.log: did the trigger reach us at
         # all? did xclip return empty? did the popup get suppressed by
         # the min-length / blocklist filters?
         import time as _t
@@ -386,8 +386,8 @@ class App:
                 import importlib
 
                 ea = (
-                    importlib.import_module("linuxpop_user_editing_actions")
-                    if "linuxpop_user_editing_actions" in sys.modules
+                    importlib.import_module("vinopop_user_editing_actions")
+                    if "vinopop_user_editing_actions" in sys.modules
                     else importlib.import_module("editing_actions")
                 )
                 submit_key = ea._submit_keystroke_for_focus()
@@ -417,7 +417,7 @@ class App:
         if bool(self.settings.get("clipboard_history_enabled", True)):
             items.append(
                 (
-                    "linuxpop-clipboard-symbolic",
+                    "vinopop-clipboard-symbolic",
                     "Paste from history",
                     self._on_clipboard_hotkey,
                 )
@@ -584,9 +584,9 @@ class App:
         that window so Ctrl+V lands there.
 
         plugin_loader gives every user plugin a sys.modules name of the
-        form 'linuxpop_user_<stem>', so we look up the picker that way.
+        form 'vinopop_user_<stem>', so we look up the picker that way.
         """
-        mod = sys.modules.get("linuxpop_user_clipboard_history")
+        mod = sys.modules.get("vinopop_user_clipboard_history")
         if mod is None or not hasattr(mod, "open_picker"):
             text = _read_selection("clipboard")
             if text:
@@ -604,7 +604,7 @@ class App:
                         "3000",
                         "-i",
                         "dialog-information",
-                        "LinuxPop",
+                        "vinoPop",
                         "Install the Clipboard plugin to get the picker.",
                     ],
                     check=False,
@@ -753,25 +753,25 @@ class App:
         # Adw.AboutDialog (libadwaita 1.5); with no parent window it opens as
         # its own window. Non-modal: no GTK 4 equivalent of dialog.run().
         about = Adw.AboutDialog()
-        about.set_application_name("LinuxPop")
+        about.set_application_name("vinoPop")
         about.set_version(__version__)
         about.set_comments(
             f"A PopClip-inspired floating action popup for Linux ({get_backend().name})."
         )
         about.set_license_type(Gtk.License.MIT_X11)
-        about.set_application_icon("linuxpop")
+        about.set_application_icon("vinopop")
         # Only set the website link if it was overridden via env var, so we
-        # don't ship a 404 placeholder. Set LINUXPOP_PROJECT_URL when forking.
-        project_url = os.environ.get("LINUXPOP_PROJECT_URL")
+        # don't ship a 404 placeholder. Set VINOPOP_PROJECT_URL when forking.
+        project_url = os.environ.get("VINOPOP_PROJECT_URL")
         if project_url:
             about.set_website(project_url)
         # A "Support" link so the donation flow is one click away from the
         # canonical "About" surface. AboutDialog only takes links, so a
         # private URI is intercepted in activate-link and opens our picker.
-        about.add_link("Support LinuxPop…", "linuxpop:support")
+        about.add_link("Support vinoPop…", "vinopop:support")
 
         def _on_link(_dlg, uri):
-            if uri == "linuxpop:support":
+            if uri == "vinopop:support":
                 self.open_support()
                 return True
             return False
@@ -816,10 +816,10 @@ class App:
                             "notify-send",
                             "--hint=byte:transient:1",
                             "-i",
-                            "linuxpop",
+                            "vinopop",
                             "-t",
                             "8000",
-                            "LinuxPop is running",
+                            "vinoPop is running",
                             "Select text anywhere to see actions. Tray icon "
                             "has settings & plugins.",
                         ],
@@ -850,10 +850,10 @@ class App:
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="linuxpop",
+        prog="vinopop",
         description="PopClip-inspired floating action popup for Linux (X11 + KDE Wayland).",
     )
-    p.add_argument("--version", action="version", version=f"LinuxPop {__version__}")
+    p.add_argument("--version", action="version", version=f"vinoPop {__version__}")
     p.add_argument(
         "--no-tray", action="store_true", help="Run without the tray icon (selection + hotkey only)"
     )
@@ -912,13 +912,13 @@ def main(argv: list[str] | None = None) -> int:
     # GLib-level SIGINT handler: fires reliably while the main loop sits in C.
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *_: (app.quit(), True)[1])
     log.info(
-        "LinuxPop %s running (tray=%s, hotkey=%s, watcher=%s)",
+        "vinoPop %s running (tray=%s, hotkey=%s, watcher=%s)",
         __version__,
         "on" if app.tray else "off",
         app.settings.get("hotkey") or "disabled",
         "on" if app.watcher else "off",
     )
-    print("[linuxpop] running - Ctrl+C to quit. Logs at " + str(LOG_FILE))
+    print("[vinopop] running - Ctrl+C to quit. Logs at " + str(LOG_FILE))
 
     # Freeze the startup object graph so the GC never re-scans it. Cheap one-line
     # win for a long-running daemon - recommended by Python gc docs.

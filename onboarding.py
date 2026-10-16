@@ -1,7 +1,7 @@
-"""Animated onboarding for LinuxPop.
+"""Animated onboarding for vinoPop.
 
 A multi-page first-run walkthrough with hand-drawn, choreographed Cairo
-animations. A friendly little guide ("Pip", the LinuxPop blob) walks new users
+animations. A friendly little guide ("Pip", the vinoPop blob) walks new users
 through: select text -> actions popup, how to summon it, how to add ready-made
 plugins, and how to build their own with the recipe builder. Fully skippable,
 with a "don't show this again" checkbox that flips the `show_welcome_dialog`
@@ -825,7 +825,7 @@ def _build_pages(settings):
         dict(
             title="Select text, get instant actions",
             body="Highlight anything in any app - a link, an error, a "
-            "paragraph - and LinuxPop pops up a little bar of actions "
+            "paragraph - and vinoPop pops up a little bar of actions "
             "made for what you picked.",
             draw=_draw_how,
         ),
@@ -891,7 +891,7 @@ def _install_css() -> None:
 
 class OnboardingWindow(Adw.Window):
     def __init__(self, settings, on_open_plugins=None):
-        super().__init__(title="Welcome to LinuxPop")
+        super().__init__(title="Welcome to vinoPop")
         self._settings = settings
         self._on_open_plugins = on_open_plugins
         self._pages = _build_pages(settings)
@@ -902,7 +902,7 @@ class OnboardingWindow(Adw.Window):
         self.set_default_size(700, 600)
         self.set_resizable(False)
         try:
-            self.set_icon_name("linuxpop")
+            self.set_icon_name("vinopop")
         except Exception:
             pass
 

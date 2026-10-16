@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=vinoPop
+Comment=PopClip-inspired floating action popup
+Exec=sh -c 'exec /usr/bin/python3 "$HOME/vinopop/main.py"'
+Icon=vinopop
+Terminal=false
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+StartupNotify=false

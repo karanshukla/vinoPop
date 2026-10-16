@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Latent Charge - a single-plate expression of LinuxPop's visual system.
+"""Latent Charge - a single-plate expression of vinoPop's visual system.
 Rendered at 2x and downsampled (LANCZOS) for crisp edges + type."""
 import math
 from pathlib import Path
@@ -8,13 +8,13 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 FONTS = Path("/home/robert/.config/Claude/local-agent-mode-sessions/skills-plugin/"
              "023ffcbe-b5e5-44cf-b821-e3d9dce9aefb/7062840c-29fc-4380-a5c5-8934961e3bd6/"
              "skills/canvas-design/canvas-fonts")
-OUT = Path("/home/robert/linuxpop-wl/docs/design/latent-charge-plate.png")
+OUT = Path(__file__).with_name("latent-charge-plate.png")
 
 S = 2                      # supersample
 W, H = 2000, 2800
 def px(v): return int(round(v * S))
 
-# ---- palette (LinuxPop real tokens) -------------------------------------
+# ---- palette (vinoPop real tokens) -------------------------------------
 PAPER  = (240, 243, 250)
 PAPER2 = (233, 237, 246)
 INK    = (26, 31, 46)      # near-black ink
@@ -108,8 +108,8 @@ while x <= field_r:
         caret(x, sel_row, 18, G1 + (150,))
     x += step
 
-# ---- 2. THE SPECIMEN: the LinuxPop mark in the charge gradient ----------
-# pill + downward tail + three punched dots, from linuxpop-tray-symbolic.svg
+# ---- 2. THE SPECIMEN: the vinoPop mark in the charge gradient ----------
+# pill + downward tail + three punched dots, from vinopop-tray-symbolic.svg
 # (viewBox 16). Rendered large, gradient-filled, paper showing through dots.
 MARK_W = 560
 sx = MARK_W / 16.0                       # unit scale
@@ -177,7 +177,7 @@ tracked((0, 1232), "FIG. 01   THE MARK   ·   CAPSULE · TAIL · TRIAD", F_MONO(
         INK, 6, center_x=mcx)
 
 # ---- header -------------------------------------------------------------
-tracked((200, 196), "LINUXPOP", F_GEOM(17), INK, 9)
+tracked((200, 196), "VINOPOP", F_GEOM(17), INK, 9)
 tracked((200, 224), "VISUAL  SYSTEM", F_MONO(13.5), INK2, 7)
 tracked((1800, 196), "PLATE  I  /  IV", F_MONO(15), INK2, 6, anchor_left=False)
 tracked((1800, 224), "EST. 0.9.0", F_MONO(13.5), INK2, 6, anchor_left=False)

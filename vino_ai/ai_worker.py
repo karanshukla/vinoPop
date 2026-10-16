@@ -8,7 +8,7 @@ from typing import Protocol
 
 from . import available
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 
 class Sink(Protocol):

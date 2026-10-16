@@ -1,6 +1,6 @@
-"""Toggle whether LinuxPop launches at login.
+"""Toggle whether vinoPop launches at login.
 
-Writes / removes ~/.config/autostart/linuxpop.desktop. Honoured by every
+Writes / removes ~/.config/autostart/vinopop.desktop. Honoured by every
 freedesktop-spec desktop environment (Cinnamon, GNOME, KDE Plasma, XFCE,
 MATE, Budgie, etc.).
 
@@ -15,17 +15,19 @@ import sys
 from pathlib import Path
 
 AUTOSTART_DIR = Path(os.path.expanduser("~/.config/autostart"))
-AUTOSTART_FILE = AUTOSTART_DIR / "linuxpop.desktop"
+AUTOSTART_FILE = AUTOSTART_DIR / "vinopop.desktop"
+# Written by releases from before the rename to vinoPop.
+LEGACY_AUTOSTART_FILE = AUTOSTART_DIR / "linuxpop.desktop"
 
 
 def _desktop_file_contents(exec_path: str) -> str:
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=LinuxPop\n"
+        "Name=vinoPop\n"
         "Comment=PopClip-inspired floating action popup\n"
         f"Exec={exec_path}\n"
-        "Icon=linuxpop\n"
+        "Icon=vinopop\n"
         "Terminal=false\n"
         "Categories=Utility;\n"
         "X-GNOME-Autostart-enabled=true\n"
@@ -35,14 +37,14 @@ def _desktop_file_contents(exec_path: str) -> str:
 
 def is_enabled() -> bool:
     """True if the autostart .desktop file exists."""
-    return AUTOSTART_FILE.is_file()
+    return AUTOSTART_FILE.is_file() or LEGACY_AUTOSTART_FILE.is_file()
 
 
 def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
     """Create or remove the autostart .desktop file. Returns True on
     success. `main_py` defaults to the currently-running main.py path
-    so a user who runs LinuxPop from a non-standard checkout still gets
-    their copy on autostart, not /usr/bin/linuxpop."""
+    so a user who runs vinoPop from a non-standard checkout still gets
+    their copy on autostart, not /usr/bin/vinopop."""
     try:
         if enabled:
             AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
@@ -52,7 +54,7 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
                 if main_py.name != "main.py":
                     main_py = Path(__file__).resolve().parent / "main.py"
             # Quote the path so checkouts in directories with spaces
-            # (e.g. ~/My Code/linuxpop/) don't produce a broken Exec line
+            # (e.g. ~/My Code/vinopop/) don't produce a broken Exec line
             # that the DE silently fails to launch.
             from shlex import quote as _q
 
@@ -63,9 +65,12 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
             )
             # Make it executable so older DEs that check x-bit honour it
             AUTOSTART_FILE.chmod(0o755)
+            if LEGACY_AUTOSTART_FILE.is_file():
+                LEGACY_AUTOSTART_FILE.unlink()
         else:
-            if AUTOSTART_FILE.is_file():
-                AUTOSTART_FILE.unlink()
+            for f in (AUTOSTART_FILE, LEGACY_AUTOSTART_FILE):
+                if f.is_file():
+                    f.unlink()
         return True
     except OSError:
         return False

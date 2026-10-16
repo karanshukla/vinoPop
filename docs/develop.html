@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Build your own plugin - LinuxPop</title>
-  <meta name="description" content="Two ways to extend LinuxPop: a no-code wizard for URL/command/notify actions, or a 20-line Python plugin for anything more. Full API reference inside.">
-  <link rel="icon" href="assets/icons/linuxpop.svg" type="image/svg+xml">
+  <title>Build your own plugin - vinoPop</title>
+  <meta name="description" content="Two ways to extend vinoPop: a no-code wizard for URL/command/notify actions, or a 20-line Python plugin for anything more. Full API reference inside.">
+  <link rel="icon" href="assets/icons/vinopop.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -13,13 +13,13 @@
 <nav class="nav">
   <div class="nav-inner">
     <a class="brand" href="index.html">
-      <img src="assets/icons/linuxpop.svg" alt="LinuxPop">
-      LinuxPop
+      <img src="assets/icons/vinopop.svg" alt="vinoPop">
+      vinoPop
     </a>
     <div class="nav-links">
       <a href="plugins.html">Plugins</a>
       <a class="active" href="develop.html">Build your own</a>
-      <a class="nav-cta" href="https://github.com/GaimsDevSoftware/linuxpop">GitHub</a>
+      <a class="nav-cta" href="https://github.com/karanshukla/vinoPop">GitHub</a>
     </div>
   </div>
 </nav>
@@ -67,7 +67,7 @@
 
   <p><strong>Icon</strong> - type a name from your icon theme, or click <em>Browse…</em> to pick from
   3,800+ symbolic icons with live search. Want your own brand mark? Drop an
-  <code>.svg</code> or <code>.png</code> in <code>~/.config/linuxpop/icons/</code> - it's searchable
+  <code>.svg</code> or <code>.png</code> in <code>~/.config/vinopop/icons/</code> - it's searchable
   the next time you open the picker.</p>
 
   <p><strong>When clicked</strong> - pick one of the four action types.</p>
@@ -119,14 +119,14 @@ Template:  ```
 Show on:   Plain text</code></pre>
 
   <h3>Where it's saved</h3>
-  <p>Each recipe is one JSON file in <code>~/.config/linuxpop/recipes/&lt;name&gt;.json</code>.
+  <p>Each recipe is one JSON file in <code>~/.config/vinopop/recipes/&lt;name&gt;.json</code>.
   Share a recipe by sending the JSON - the recipient drops it in their recipes folder
   and it shows up next reload.</p>
 
   <h2 id="python">Path 2 · Python plugin</h2>
 
   <p>For anything the wizard can't express - HTTP calls, multi-step workflows, GUI dialogs,
-  reading files - write a Python file in <code>~/.config/linuxpop/plugins/</code>.</p>
+  reading files - write a Python file in <code>~/.config/vinopop/plugins/</code>.</p>
 
   <h3>Minimal example</h3>
 
@@ -154,7 +154,7 @@ def register(register_plugin) -&gt; None:
         priority=50,
     ))</code></pre>
 
-  <p>Save as <code>~/.config/linuxpop/plugins/shout.py</code>, right-click tray → <em>Plugins…</em>
+  <p>Save as <code>~/.config/vinopop/plugins/shout.py</code>, right-click tray → <em>Plugins…</em>
   → it's loaded. Select text → click the new button → notification.</p>
 
   <h3>The Plugin dataclass</h3>
@@ -180,13 +180,13 @@ def register(register_plugin) -&gt; None:
   <h3>Tips</h3>
   <ul>
     <li><strong>Run long work on a thread.</strong> Your handler is called on the GTK main loop, but
-        LinuxPop wraps it in a worker thread for you already. Heavy HTTP calls are fine.</li>
+        vinoPop wraps it in a worker thread for you already. Heavy HTTP calls are fine.</li>
     <li><strong>Copy results to the clipboard</strong> with
         <code>subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode())</code>
         so the user can paste them.</li>
-    <li><strong>Use <code>notify-send</code></strong> for any user feedback. LinuxPop's popup closes
+    <li><strong>Use <code>notify-send</code></strong> for any user feedback. vinoPop's popup closes
         when the handler returns; notifications are the natural way to confirm.</li>
-    <li><strong>Don't <code>sys.path.insert</code></strong> - <code>plugin_loader</code> puts the LinuxPop
+    <li><strong>Don't <code>sys.path.insert</code></strong> - <code>plugin_loader</code> puts the vinoPop
         directory on <code>sys.path</code> already.</li>
   </ul>
 
@@ -198,7 +198,7 @@ def register(register_plugin) -&gt; None:
 config = get_settings()
 my_value = config.get("my_plugin_key", "default")</code></pre>
 
-  <p>To make a setting visible in the LinuxPop Settings dialog, add a default to
+  <p>To make a setting visible in the vinoPop Settings dialog, add a default to
   <code>settings.py</code>'s <code>DEFAULTS</code> dict and a row in <code>settings_gui.py</code>.
   (Drop your file in the catalogue with a PR - we'll wire it up.)</p>
 
@@ -208,14 +208,14 @@ my_value = config.get("my_plugin_key", "default")</code></pre>
 
   <ol>
     <li><strong>Recipe (.json):</strong> if it's a wizard recipe, just share the file.
-        Anyone drops it in their <code>~/.config/linuxpop/recipes/</code>.</li>
-    <li><strong>Python (.py):</strong> open a PR against <code>plugins_repo/</code> in the LinuxPop
+        Anyone drops it in their <code>~/.config/vinopop/recipes/</code>.</li>
+    <li><strong>Python (.py):</strong> open a PR against <code>plugins_repo/</code> in the vinoPop
         repo with your file and an entry in <code>manifest.json</code>. We curate the catalogue.</li>
   </ol>
 
   <div class="callout">
     <strong>Coming in v0.2:</strong> a community catalogue. PR your recipe or plugin to the
-    LinuxPop repo and we'll feature it. Eventually a hosted <em>Community</em> tab in
+    vinoPop repo and we'll feature it. Eventually a hosted <em>Community</em> tab in
     Plugin Manager will let users browse without git.
   </div>
 
@@ -223,9 +223,9 @@ my_value = config.get("my_plugin_key", "default")</code></pre>
 
 <footer>
   <div class="container">
-    LinuxPop is MIT-licensed. No telemetry. No accounts. <br>
-    <a href="https://github.com/GaimsDevSoftware/linuxpop">Source on GitHub</a> ·
-    <a href="https://github.com/GaimsDevSoftware/linuxpop/issues">Issues</a> ·
+    vinoPop is MIT-licensed. No telemetry. No accounts. <br>
+    <a href="https://github.com/karanshukla/vinoPop">Source on GitHub</a> ·
+    <a href="https://github.com/karanshukla/vinoPop/issues">Issues</a> ·
     <a href="plugins.html">Plugin Store</a>
   </div>
 </footer>

@@ -1,4 +1,4 @@
-# LinuxPop runtime dependencies (Python)
+# vinoPop runtime dependencies (Python)
 python-xlib>=0.33
 
 # System packages required (install via your distro's package manager):

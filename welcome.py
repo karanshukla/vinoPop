@@ -1,6 +1,6 @@
 """First-run welcome dialog.
 
-Shown exactly once, on the first time LinuxPop starts. The goal is to:
+Shown exactly once, on the first time vinoPop starts. The goal is to:
 
   1. Explain in 10 seconds how to use the app (select text, get popup).
   2. Point at the tray icon so the user knows where to find settings.
@@ -43,7 +43,7 @@ def _dialog_window(title: str, parent: Gtk.Window | None, width: int) -> Adw.Win
     if parent is not None:
         dlg.set_transient_for(parent)
     dlg.set_default_size(width, -1)
-    dlg.set_icon_name("linuxpop")
+    dlg.set_icon_name("vinopop")
     return dlg
 
 
@@ -68,7 +68,7 @@ def show_welcome_dialog(
     if not bool(settings.get("show_welcome_dialog")):
         return None
 
-    dlg = _dialog_window("Welcome to LinuxPop", parent, 560)
+    dlg = _dialog_window("Welcome to vinoPop", parent, 560)
     dlg.set_default_size(560, 640)
 
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
@@ -77,8 +77,8 @@ def show_welcome_dialog(
     # StatusPage gives the big icon + title + description treatment; the
     # rest of the dialog lives in its child.
     hero = Adw.StatusPage(
-        icon_name="linuxpop",
-        title="Welcome to LinuxPop",
+        icon_name="vinopop",
+        title="Welcome to vinoPop",
         description="A floating popup of context-aware actions for any text you select.",
     )
     hero.add_css_class("compact")
@@ -99,7 +99,7 @@ def show_welcome_dialog(
         (
             2,
             "Click the popup button",
-            "LinuxPop shows a small floating bar of actions tailored to what you selected.",
+            "vinoPop shows a small floating bar of actions tailored to what you selected.",
         ),
         (
             3,
@@ -135,7 +135,7 @@ def show_welcome_dialog(
 
         support_blurb = Gtk.Label(
             xalign=0,
-            label="LinuxPop is free and open source. If it saves you time, a "
+            label="vinoPop is free and open source. If it saves you time, a "
             "small tip keeps the project moving. No pressure -- the link "
             "is also in the tray menu under About.",
         )
@@ -187,14 +187,14 @@ def _open_url(url: str) -> None:
         pass
 
 
-# Reused by the tray "Support LinuxPop..." entry and the About dialog.
+# Reused by the tray "Support vinoPop..." entry and the About dialog.
 def open_support_picker(settings, parent: Gtk.Window | None = None) -> Adw.Window:
     """Standalone dialog listing the configured support options. Same
     look as the welcome's support row, but reachable at any time."""
     urls = [(settings.get(key) or "").strip() for key, *_ in _SUPPORT_BUTTONS]
     configured = [(spec, url) for spec, url in zip(_SUPPORT_BUTTONS, urls, strict=True) if url]
 
-    dlg = _dialog_window("Support LinuxPop", parent, 440)
+    dlg = _dialog_window("Support vinoPop", parent, 440)
 
     box = Gtk.Box(
         orientation=Gtk.Orientation.VERTICAL,

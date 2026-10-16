@@ -50,5 +50,5 @@ body:
     id: log
     attributes:
       label: Log
-      description: The relevant part of ~/.cache/linuxpop/linuxpop.log
+      description: The relevant part of ~/.cache/vinopop/vinopop.log
       render: text

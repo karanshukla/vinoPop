@@ -11,7 +11,7 @@ picker was summoned (via xdotool windowactivate + ctrl+v).
 Activated either from the popup ("Clipboard…" plugin button) or from
 the global clipboard_hotkey (default Super+V).
 
-Settings (~/.config/linuxpop/settings.json):
+Settings (~/.config/vinopop/settings.json):
   "clipboard_history_size":   25
   "clipboard_history_images": true
   "clipboard_hotkey":         "super+v"   (handled by main.py)
@@ -101,7 +101,7 @@ def _force_to_front(window) -> None:
     Settings / Plugin Manager dialog already open. Cinnamon's WM ranks
     windows by focus-history first, keep_above second; without an
     explicit X11 raise the picker can be marked keep_above yet still
-    appear behind a more-recently-focused LinuxPop dialog.
+    appear behind a more-recently-focused vinoPop dialog.
 
     The fix is present() plus an explicit toplevel focus request with
     the X server time, after the keep-above hint is in place, which
@@ -482,7 +482,7 @@ class _TriggerWatcher:
         self._thread = threading.Thread(
             target=self._run,
             daemon=True,
-            name="linuxpop-triggers",
+            name="vinopop-triggers",
         )
         self._thread.start()
 
@@ -1394,7 +1394,7 @@ def _start_watcher_once() -> None:
     _watcher_thread = threading.Thread(
         target=_watcher_loop,
         daemon=True,
-        name="linuxpop-clipboard",
+        name="vinopop-clipboard",
     )
     _watcher_thread.start()
     _rebuild_trigger_index()
@@ -1510,7 +1510,7 @@ def _paste_to_window(
 
     import logging
 
-    _log = logging.getLogger("linuxpop")
+    _log = logging.getLogger("vinopop")
     _log.info(
         "[clipboard.paste] target_window=%s kind=%s cursor_left=%d",
         target_window,
@@ -2031,11 +2031,11 @@ class _PickerDialog:
 
     def show(self, target_window: str | None = None) -> None:
         # Stamp each phase via the real logger (not print) so a UI freeze
-        # leaves breadcrumbs in ~/.cache/linuxpop/linuxpop.log. Times
+        # leaves breadcrumbs in ~/.cache/vinopop/vinopop.log. Times
         # > 100 ms at any phase would explain a perceived freeze.
         import logging
 
-        _log = logging.getLogger("linuxpop")
+        _log = logging.getLogger("vinopop")
         t0 = time.monotonic()
 
         def _stamp(label):
@@ -2060,9 +2060,9 @@ class _PickerDialog:
         # GTK paints over ListBox content. Without an explicit class
         # the row area kept a dark cast in the light theme.
         win.add_css_class("lp-picker")
-        win.set_title("LinuxPop - Clipboard & Snippets")
+        win.set_title("vinoPop - Clipboard & Snippets")
         win.set_default_size(_PICKER_W, _PICKER_H)
-        win.set_icon_name("linuxpop")
+        win.set_icon_name("vinopop")
         # Borderless, ephemeral picker on X11 - moved via the brand-row drag
         # handle. On Wayland a client can't self-position an undecorated
         # window, so keep the picker a normal resizable toplevel there: the
@@ -2109,7 +2109,7 @@ class _PickerDialog:
         outer.set_margin_start(8)
         outer.set_margin_end(8)
 
-        # Branding header - keeps the picker recognisably "LinuxPop"
+        # Branding header - keeps the picker recognisably "vinoPop"
         # without a window decoration to lean on (this is a borderless
         # popup). The icon is the full-colour app logo so it reads on
         # both the dark and the light theme.
@@ -2123,14 +2123,14 @@ class _PickerDialog:
         header_click.set_button(Gdk.BUTTON_PRIMARY)
         header_click.connect("pressed", self._on_header_pressed)
         brand_row.add_controller(header_click)
-        brand_icon = Gtk.Image.new_from_icon_name("linuxpop")
+        brand_icon = Gtk.Image.new_from_icon_name("vinopop")
         brand_icon.set_pixel_size(24)
         brand_row.append(brand_icon)
         brand_text_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         brand_text_box.set_valign(Gtk.Align.CENTER)
         brand_text_box.set_hexpand(True)
         brand_name = Gtk.Label(xalign=0)
-        brand_name.set_markup("<b>LinuxPop</b>")
+        brand_name.set_markup("<b>vinoPop</b>")
         brand_text_box.append(brand_name)
         brand_sub = Gtk.Label(label="Clipboard & snippets", xalign=0)
         brand_sub.add_css_class("dim-label")
@@ -2303,7 +2303,7 @@ class _PickerDialog:
             return
         import logging
 
-        logging.getLogger("linuxpop").info("[clipboard.show] window destroyed -- state cleared")
+        logging.getLogger("vinopop").info("[clipboard.show] window destroyed -- state cleared")
         self.dialog = None
         self.search_entry = None
         self.notebook = None
@@ -2869,7 +2869,7 @@ class _PickerDialog:
                     "Type a trigger",
                     "If you give a snippet a shortcut like <tt>;email</tt>, "
                     "you can type <tt>;email</tt> followed by a space "
-                    "anywhere on your computer and LinuxPop replaces it "
+                    "anywhere on your computer and vinoPop replaces it "
                     "with the full text. Starting your triggers with a "
                     "non-letter character (<tt>;</tt>, <tt>:</tt>, "
                     "<tt>!</tt>, <tt>@</tt>) is the usual convention - it "
@@ -3655,7 +3655,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="clipboard-history",
-            icon="linuxpop-clipboard-symbolic",
+            icon="vinopop-clipboard-symbolic",
             tooltip="Clipboard & snippets",
             handler=_open_from_popup,
             content_types=(),  # always available

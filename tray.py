@@ -1,4 +1,4 @@
-"""System tray icon (KStatusNotifierItem via separate Qt process) for LinuxPop.
+"""System tray icon (KStatusNotifierItem via separate Qt process) for vinoPop.
 
 Spawns a lean Qt process that uses KStatusNotifierItem - native KDE/Wayland
 protocol, no XWayland dependency, no GTK thread conflicts.
@@ -28,7 +28,7 @@ def _tray_preexec() -> None:
     1. PR_SET_PDEATHSIG: ask the kernel to SIGTERM this process the instant
        its parent (the main daemon) dies. Without this, killing or crashing
        the daemon left the Qt tray subprocess orphaned (reparented to systemd)
-       and its tray icon lingered forever -- which is how two LinuxPop icons
+       and its tray icon lingered forever -- which is how two vinoPop icons
        could end up side by side after a few restarts.
     2. setsid(): give the tray its own session so a Ctrl-C in the daemon's
        terminal doesn't also tear it down (the original intent of the

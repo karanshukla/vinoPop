@@ -54,7 +54,7 @@ def _icon_theme() -> Gtk.IconTheme | None:
 
 
 def _sync_user_icons() -> None:
-    """Make sure user-supplied icons in ~/.config/linuxpop/icons/ are
+    """Make sure user-supplied icons in ~/.config/vinopop/icons/ are
     visible to the GTK icon theme. Mirror them into hicolor so they show
     up by basename in the picker and in plugin button references.
     """
@@ -116,7 +116,7 @@ class IconPicker:
         if isinstance(self._parent, Gtk.Window):
             dlg.set_transient_for(self._parent)
         dlg.set_default_size(640, 520)
-        dlg.set_icon_name("linuxpop")
+        dlg.set_icon_name("vinopop")
         self._dialog = dlg
 
         # Header: Cancel on the left, the search entry as the title widget
@@ -234,8 +234,8 @@ class IconPicker:
                 f"<i>No icons match “{esc_query}”. Standard themes don't ship "
                 f"brand-specific icons (Wikipedia, GitHub etc.).</i>\n"
                 f"<small>Drop your own <tt>.svg</tt> or <tt>.png</tt> files in "
-                f'<a href="linuxpop://open-user-icons">'
-                f"~/.config/linuxpop/icons/</a>.{symbolic_hint} "
+                f'<a href="vinopop://open-user-icons">'
+                f"~/.config/vinopop/icons/</a>.{symbolic_hint} "
                 f"Or pick a generic one:</small>"
             )
             self._filtered = _FALLBACK_SUGGESTIONS
@@ -243,7 +243,7 @@ class IconPicker:
             self._count_label.set_markup(
                 f"{len(self._filtered)} matching icons "
                 f"({len(self._all_icons)} total in your theme) - "
-                f'<a href="linuxpop://open-user-icons">add your own</a>'
+                f'<a href="vinopop://open-user-icons">add your own</a>'
             )
 
         self._render_next_page()
@@ -299,8 +299,8 @@ class IconPicker:
         return False  # let the window close
 
     def _on_link_clicked(self, _label, uri: str) -> bool:
-        """Handle the custom linuxpop:// link in the empty-state message."""
-        if uri == "linuxpop://open-user-icons":
+        """Handle the custom vinopop:// link in the empty-state message."""
+        if uri == "vinopop://open-user-icons":
             USER_ICONS_DIR.mkdir(parents=True, exist_ok=True)
             try:
                 subprocess.Popen(["xdg-open", str(USER_ICONS_DIR)], start_new_session=True)

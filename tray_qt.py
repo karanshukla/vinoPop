@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""LinuxPop tray icon - Qt QSystemTrayIcon (StatusNotifierItem + DBusMenu).
+"""vinoPop tray icon - Qt QSystemTrayIcon (StatusNotifierItem + DBusMenu).
 
 Uses QSystemTrayIcon, NOT the KF6 KStatusNotifierItem (which had a Fedora 44
 D-Bus registration bug). Qt's tray registers the SNI *and* exports the context
 menu as a com.canonical.dbusmenu object that plasmashell renders itself - the
 only thing that actually shows a menu on KWin/Wayland (a parentless QMenu.popup
-never maps). Talks to the main LinuxPop process over a small length-prefixed
+never maps). Talks to the main vinoPop process over a small length-prefixed
 JSON socket, unchanged from the previous implementation.
 """
 
@@ -79,8 +79,8 @@ class TrayQt:
     def __init__(self) -> None:
         self._app = QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
-        self._app.setApplicationName("linuxpop-tray")
-        self._app.setDesktopFileName("linuxpop")
+        self._app.setApplicationName("vinopop-tray")
+        self._app.setDesktopFileName("vinopop")
 
         self._install_icon()
 
@@ -92,7 +92,7 @@ class TrayQt:
         # positioned) when the user activates the item - no client-side popup.
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(self._load_icon())
-        self._tray.setToolTip("LinuxPop - clipboard popup assistant")
+        self._tray.setToolTip("vinoPop - clipboard popup assistant")
         self._tray.setContextMenu(self._menu)
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
@@ -139,19 +139,19 @@ class TrayQt:
             if ic is not None and not ic.isNull():
                 return ic
             # fall through to the coloured badge if rendering failed
-        for name in ("linuxpop", "linuxpop-tray-symbolic"):
+        for name in ("vinopop", "vinopop-tray-symbolic"):
             p = Path(ICON_DIR) / f"{name}.svg"
             if p.is_file():
                 ic = QIcon(str(p))
                 if not ic.isNull():
                     return ic
-        return QIcon.fromTheme("linuxpop") or QIcon.fromTheme("applications-internet")
+        return QIcon.fromTheme("vinopop") or QIcon.fromTheme("applications-internet")
 
     def _render_symbolic(self, color: str) -> QIcon | None:
         """Render the monochrome symbolic tray SVG (fill="currentColor") in
         `color`, as a multi-size QIcon. Used for the light/dark styles so the
         glyph is a fixed, panel-appropriate colour the user chose."""
-        p = Path(ICON_DIR) / "linuxpop-tray-symbolic.svg"
+        p = Path(ICON_DIR) / "vinopop-tray-symbolic.svg"
         if not p.is_file():
             return None
         try:
@@ -179,7 +179,7 @@ class TrayQt:
 
         user_dir = Path.home() / ".local/share/icons/hicolor/scalable/apps"
         user_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("linuxpop-tray-symbolic", "linuxpop"):
+        for name in ("vinopop-tray-symbolic", "vinopop"):
             src = Path(ICON_DIR) / f"{name}.svg"
             dst = user_dir / f"{name}.svg"
             if src.is_file():
@@ -200,7 +200,7 @@ class TrayQt:
 
     # ─── menu ───
     def _setup_menu(self) -> None:
-        h = self._menu.addAction("LinuxPop")
+        h = self._menu.addAction("vinoPop")
         h.setEnabled(False)
         self._menu.addSeparator()
         self._toggle_action = self._menu.addAction("Auto-popup on selection")
@@ -214,12 +214,12 @@ class TrayQt:
         a.triggered.connect(lambda: self._emit("settings", None))
         a = self._menu.addAction("Plugins…")
         a.triggered.connect(lambda: self._emit("plugins", None))
-        a = self._menu.addAction("About LinuxPop")
+        a = self._menu.addAction("About vinoPop")
         a.triggered.connect(lambda: self._emit("about", None))
-        a = self._menu.addAction("Support LinuxPop…")
+        a = self._menu.addAction("Support vinoPop…")
         a.triggered.connect(lambda: self._emit("support", None))
         self._menu.addSeparator()
-        a = self._menu.addAction("Quit LinuxPop")
+        a = self._menu.addAction("Quit vinoPop")
         a.triggered.connect(lambda: self._emit("quit", None))
 
     def _emit(self, event: str, value: object) -> None:

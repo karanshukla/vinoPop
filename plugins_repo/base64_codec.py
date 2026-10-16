@@ -93,7 +93,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="base64-encode",
-            icon="linuxpop-base64-encode-symbolic",
+            icon="vinopop-base64-encode-symbolic",
             tooltip="Base64 encode",
             handler=_encode,
             content_types=(ContentType.PLAIN_TEXT,),
@@ -104,7 +104,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="base64-decode",
-            icon="linuxpop-base64-decode-symbolic",
+            icon="vinopop-base64-decode-symbolic",
             tooltip="Base64 decode",
             handler=_decode,
             content_types=(ContentType.PLAIN_TEXT,),

@@ -1,6 +1,6 @@
 """Generate a QR code for the selected text and show it.
 
-Uses a rolling cache directory under ~/.cache/linuxpop/qr/ - keeps the
+Uses a rolling cache directory under ~/.cache/vinopop/qr/ - keeps the
 last 20 QR images and trims older ones, so /tmp doesn't accumulate forever.
 """
 
@@ -74,7 +74,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="qr-code",
-            icon="linuxpop-qr-symbolic",
+            icon="vinopop-qr-symbolic",
             tooltip="Make QR code",
             handler=_qr,
             content_types=(ContentType.URL, ContentType.PLAIN_TEXT),

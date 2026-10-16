@@ -1,14 +1,14 @@
-# LinuxPop
+# vinoPop
 
 > Like PopClip on the Mac, but for Linux.
 
-![LinuxPop in action: select text, a popup of context actions appears, here translating the selection](docs/linuxpop-demo.gif)
+![vinoPop in action: select text, a popup of context actions appears, here translating the selection](docs/vinopop-demo.gif)
 
 Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
 
 It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and natively on KDE Plasma 6 / Wayland. Free, open source, and nothing phones home.
 
-> **X11 desktop users:** LinuxPop supports X11, but recent testing has focused on KDE Plasma 6 / Wayland. If you hit a rough spot on Cinnamon, GNOME-on-X11, XFCE, or MATE, please [open an issue](https://github.com/GaimsDevSoftware/linuxpop/issues).
+> **X11 desktop users:** vinoPop supports X11, but recent testing has focused on KDE Plasma 6 / Wayland. If you hit a rough spot on Cinnamon, GNOME-on-X11, XFCE, or MATE, please [open an issue](https://github.com/karanshukla/vinoPop/issues).
 
 ---
 
@@ -17,7 +17,7 @@ It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and nat
 - **Reads what you selected** and shows the buttons that fit: links, shell commands, file paths, emails, or just plain text.
 - **Global hotkey** to pop the bar on your current selection from any app.
 - **Tray icon** for settings, the plugin manager, and a quick on/off toggle.
-- **Plugins are just `.py` files.** Drop one in `~/.config/linuxpop/plugins/`, or grab one from the built-in list.
+- **Plugins are just `.py` files.** Drop one in `~/.config/vinopop/plugins/`, or grab one from the built-in list.
 - **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, offline translate / summarize / rewrite / explain, and run-in-terminal for things that look like commands.
 - **Double-click a word** (while holding a modifier) to pop the bar. Works on real Wayland, not just XWayland.
 - **Your text stays on your machine** unless you click something that obviously goes online, like web search or opening a link.
@@ -80,24 +80,24 @@ whether the pinned OpenVINO is inside the range Intel records for your NPU
 driver. Like vinoWhisper's doctor this is diagnosis only: the NPU is still
 tried, and falls back to GPU/CPU if it won't compile.
 
-### Install LinuxPop
+### Install vinoPop
 
 ```sh
-git clone https://github.com/GaimsDevSoftware/linuxpop.git ~/linuxpop
-cd ~/linuxpop
+git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
+cd ~/vinopop
 bash install.sh
 ```
 
 `install.sh` sets up autostart and checks your dependencies. To start it right away without logging out:
 
 ```sh
-python3 ~/linuxpop/main.py
+python3 ~/vinopop/main.py
 ```
 
 To uninstall:
 
 ```sh
-bash ~/linuxpop/install.sh --uninstall
+bash ~/vinopop/install.sh --uninstall
 ```
 
 ---
@@ -112,7 +112,7 @@ bash ~/linuxpop/install.sh --uninstall
 ### Settings
 
 Right-click the tray icon and pick **Settings**, or edit
-`~/.config/linuxpop/settings.json` by hand.
+`~/.config/vinopop/settings.json` by hand.
 
 | Key | Default | Description |
 |---|---|---|
@@ -134,7 +134,7 @@ Right-click the tray icon and pick **Settings**, or edit
 ### Plugins
 
 Open **Plugins…** from the tray menu to add or remove the built-in ones, or
-drop your own `.py` file into `~/.config/linuxpop/plugins/`.
+drop your own `.py` file into `~/.config/vinopop/plugins/`.
 
 A plugin file just needs a top-level `register(register_plugin)` function:
 
@@ -167,7 +167,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
 ## Known rough edges
 
 - **X11 support has had less recent testing.** The X11 backend (Cinnamon, GNOME-on-X11, XFCE, MATE) still runs, but recent testing has focused on KDE Plasma 6 / Wayland. Please file issues if you hit a glitch.
-- **Wayland support means KDE Plasma for now.** LinuxPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API. Other compositors (GNOME, wlroots) drop back to the X11 path under XWayland; GNOME's mutter has no layer-shell, so there it always runs on XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), paste goes through `ydotool`, and the active-window blocklist isn't wired up yet. Popup placement, hover persistence, and click-outside dismissal all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
+- **Wayland support means KDE Plasma for now.** vinoPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API. Other compositors (GNOME, wlroots) drop back to the X11 path under XWayland; GNOME's mutter has no layer-shell, so there it always runs on XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), paste goes through `ydotool`, and the active-window blocklist isn't wired up yet. Popup placement, hover persistence, and click-outside dismissal all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
 - **HiDPI** works, but I've mostly tested it at 2× scaling. File an issue if the popup lands in the wrong spot on your setup.
 - **The odd input grab.** If another app is holding an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.
 

@@ -32,7 +32,7 @@ class SelectionWatcher:
         self._debounce_s: float = max(0.0, debounce_ms / 1000.0)
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True, name="linuxpop-watcher")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-watcher")
         self._thread.start()
 
     def stop(self) -> None:

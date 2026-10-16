@@ -75,7 +75,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="upper-case",
-            icon="linuxpop-case-upper-symbolic",
+            icon="vinopop-case-upper-symbolic",
             tooltip="UPPERCASE",
             handler=_upper,
             content_types=(ContentType.PLAIN_TEXT,),
@@ -86,7 +86,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="lower-case",
-            icon="linuxpop-case-lower-symbolic",
+            icon="vinopop-case-lower-symbolic",
             tooltip="lowercase",
             handler=_lower,
             content_types=(ContentType.PLAIN_TEXT,),
@@ -97,7 +97,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="title-case",
-            icon="linuxpop-case-title-symbolic",
+            icon="vinopop-case-title-symbolic",
             tooltip="Title Case",
             handler=_title,
             content_types=(ContentType.PLAIN_TEXT,),
@@ -108,7 +108,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="slugify",
-            icon="linuxpop-slugify-symbolic",
+            icon="vinopop-slugify-symbolic",
             tooltip="Slugify (URL-friendly)",
             handler=_slugify,
             content_types=(ContentType.PLAIN_TEXT,),

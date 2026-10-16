@@ -145,7 +145,7 @@ class WaylandSelectionWatcher:
             print("[wayland] wl-paste missing - selection watch disabled")
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="linuxpop-wl-watch")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-wl-watch")
         self._thread.start()
 
     def stop(self) -> None:
@@ -220,7 +220,7 @@ class WaylandSelectionWatcher:
             if self._stop.is_set():
                 break
             # The very first settled value is whatever was already selected
-            # when LinuxPop started - don't pop up for it.
+            # when vinoPop started - don't pop up for it.
             if first:
                 first = False
                 continue
@@ -310,8 +310,8 @@ class WaylandKdeHotkey:
         self._hotkey_str = hotkey_str
         self._on_trigger = on_trigger
         WaylandKdeHotkey._counter += 1
-        self._action = f"linuxpop-action-{WaylandKdeHotkey._counter}"
-        self._component = "linuxpop"
+        self._action = f"vinopop-action-{WaylandKdeHotkey._counter}"
+        self._component = "vinopop"
         self._registered = False
 
     def start(self) -> None:
@@ -337,7 +337,7 @@ class WaylandKdeHotkey:
             "org.kde.KGlobalAccel",
         )
         action_id = dbus.Array(
-            [self._component, self._action, "LinuxPop", self._hotkey_str],
+            [self._component, self._action, "vinoPop", self._hotkey_str],
             signature="s",
         )
         kga.doRegister(action_id)
@@ -352,7 +352,7 @@ class WaylandKdeHotkey:
         # QKeySequence operator that ABORTS the whole process on the slightest
         # framing mismatch. Hand-marshalling that nested type from dbus-python
         # made kwin_wayland SIGABRT inside libdbus ("type invalid 0 not a basic
-        # type") on every LinuxPop startup, taking the entire Plasma session down
+        # type") on every vinoPop startup, taking the entire Plasma session down
         # with it. Plain `ai` is type-trivial and cannot trigger that abort.
         # flags = SetPresent(2) | NoAutoloading(4) = 6. SetPresent is ESSENTIAL
         # on Plasma 6 Wayland: without it the key is recorded but the component
@@ -417,7 +417,7 @@ class WaylandKdeHotkey:
                 "org.kde.KGlobalAccel",
             )
             action_id = dbus.Array(
-                [self._component, self._action, "LinuxPop", self._hotkey_str],
+                [self._component, self._action, "vinoPop", self._hotkey_str],
                 signature="s",
             )
             kga.unRegister(action_id)
@@ -598,7 +598,7 @@ class WaylandDoubleClickWatcher:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="linuxpop-dblclick-wl")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-dblclick-wl")
         self._thread.start()
 
     def stop(self) -> None:
@@ -1019,7 +1019,7 @@ class WaylandKdeBackend(PlatformBackend):
             import dbus
 
             bus = dbus.SessionBus()
-            fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-raise-")
+            fd, path = tempfile.mkstemp(suffix=".js", prefix="vinopop-raise-")
             os.write(fd, js.encode("utf-8"))
             os.close(fd)
             scripting = dbus.Interface(

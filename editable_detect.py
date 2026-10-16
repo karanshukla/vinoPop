@@ -1,6 +1,6 @@
 """Is the currently-focused widget editable?
 
-LinuxPop uses this to hide actions like Cut / Paste / Backspace / Bold
+vinoPop uses this to hide actions like Cut / Paste / Backspace / Bold
 when the user has selected text in a read-only context. Showing them
 there would just be a tease.
 
@@ -27,7 +27,7 @@ import subprocess
 import threading
 import time as _time
 
-_log = logging.getLogger("linuxpop")
+_log = logging.getLogger("vinopop")
 
 # Cache of the latest focus event from the AT-SPI listener. Updated
 # asynchronously every time any accessible reports gaining STATE_FOCUSED.
@@ -184,7 +184,7 @@ def _start_focus_listener() -> None:
 
     Gated on the 'editable_atspi_listener_enabled' setting, which
     defaults off. Registration was correlated with a Cinnamon panel
-    segfault on 2026-05-25 - see knowledge/linuxpop.md. Falling back
+    segfault on 2026-05-25 - see knowledge/vinopop.md. Falling back
     to the synchronous tree-walk + WM_CLASS path is safe; users who
     want the Electron-specific smartness can opt in.
     """
@@ -228,7 +228,7 @@ def _start_focus_listener() -> None:
         except Exception as exc:
             _log.info("[editable] AT-SPI listener init failed: %s", exc)
 
-    threading.Thread(target=runner, daemon=True, name="linuxpop-atspi-listener").start()
+    threading.Thread(target=runner, daemon=True, name="vinopop-atspi-listener").start()
 
 
 def _cached_focus_editable(max_age_s: float = 30.0) -> bool | None:
@@ -384,7 +384,7 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
         except Exception as exc:
             diag.append(f"atspi error: {exc}")
 
-    t = threading.Thread(target=worker, daemon=True, name="linuxpop-atspi-probe")
+    t = threading.Thread(target=worker, daemon=True, name="vinopop-atspi-probe")
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
@@ -498,7 +498,7 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
         except Exception:
             return
 
-    t = threading.Thread(target=worker, daemon=True, name="linuxpop-atspi-selrect")
+    t = threading.Thread(target=worker, daemon=True, name="vinopop-atspi-selrect")
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
@@ -556,7 +556,7 @@ def is_focus_editable(extra_readonly_classes: tuple[str, ...] = ()) -> bool:
       4. Permissive default (True) - better to show a button that does
          nothing than to hide one the user wanted.
 
-    Logs every decision so a tail of linuxpop.log shows which path fired.
+    Logs every decision so a tail of vinopop.log shows which path fired.
     """
     # Make sure the async listener is up; first call kicks it off.
     _start_focus_listener()

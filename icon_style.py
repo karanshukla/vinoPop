@@ -1,7 +1,7 @@
 """Colour vs glyph icon style.
 
-Every concept ships two icons: a colour tile ``linuxpop-<concept>`` and a
-mono glyph ``linuxpop-<concept>-symbolic`` (the same mark, GTK-recolourable).
+Every concept ships two icons: a colour tile ``vinopop-<concept>`` and a
+mono glyph ``vinopop-<concept>-symbolic`` (the same mark, GTK-recolourable).
 The user picks between them in Settings via the ``icon_style`` setting:
 
   * ``color`` (default) - vibrant gradient tiles for branded/destination
@@ -18,8 +18,8 @@ from __future__ import annotations
 
 # plugin-declared icon name -> concept that has colour + mono variants
 _CONCEPT_BY_ICON = {
-    "linuxpop-youtube": "youtube",
-    "linuxpop-wikipedia": "wikipedia",
+    "vinopop-youtube": "youtube",
+    "vinopop-wikipedia": "wikipedia",
     "mark-location-symbolic": "maps",
     "applications-development-symbolic": "github",
     "help-faq-symbolic": "stackoverflow",
@@ -27,14 +27,14 @@ _CONCEPT_BY_ICON = {
     "preferences-desktop-locale-symbolic": "translate",
     "accessories-dictionary-symbolic": "dictionary",
     "package-x-generic-symbolic": "package",
-    "linuxpop-calculator-symbolic": "calculator",
-    "linuxpop-clipboard-symbolic": "clipboard",
-    "linuxpop-json-symbolic": "json",
-    "linuxpop-qr-symbolic": "qr",
-    "linuxpop-base64-encode-symbolic": "base64",
-    "linuxpop-case-upper-symbolic": "case",
-    "linuxpop-url-encode-symbolic": "url",
-    "linuxpop-wordcount-symbolic": "wordcount",
+    "vinopop-calculator-symbolic": "calculator",
+    "vinopop-clipboard-symbolic": "clipboard",
+    "vinopop-json-symbolic": "json",
+    "vinopop-qr-symbolic": "qr",
+    "vinopop-base64-encode-symbolic": "base64",
+    "vinopop-case-upper-symbolic": "case",
+    "vinopop-url-encode-symbolic": "url",
+    "vinopop-wordcount-symbolic": "wordcount",
 }
 
 # Concept ordering for the Settings preview (most recognisable first).
@@ -69,13 +69,13 @@ def resolve(icon_name: str, style: str | None = None) -> str:
     concept = _CONCEPT_BY_ICON.get(icon_name)
     if concept is None:
         # Already a concept colour name? (e.g. a future plugin sets
-        # icon="linuxpop-maps" directly.)
-        if icon_name.startswith("linuxpop-") and icon_name[9:] in set(_CONCEPT_BY_ICON.values()):
+        # icon="vinopop-maps" directly.)
+        if icon_name.startswith("vinopop-") and icon_name[9:] in set(_CONCEPT_BY_ICON.values()):
             concept = icon_name[9:]
         else:
             return icon_name
     if style is None:
         style = current_style()
     if style == "glyph":
-        return f"linuxpop-{concept}-symbolic"
-    return f"linuxpop-{concept}"
+        return f"vinopop-{concept}-symbolic"
+    return f"vinopop-{concept}"

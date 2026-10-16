@@ -148,7 +148,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="calculator",
-            icon="linuxpop-calculator-symbolic",
+            icon="vinopop-calculator-symbolic",
             tooltip="Calculate",
             handler=_calc,
             content_types=(ContentType.PLAIN_TEXT,),

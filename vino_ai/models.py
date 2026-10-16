@@ -6,7 +6,7 @@ symmetric channel-wise INT4 ("-cw-"), the weight layout OpenVINO
 recommends for the NPU. The lighter Qwen option suits a box with little
 RAM or no NPU.
 
-Models land in $XDG_DATA_HOME/linuxpop/models/<name>/ and are reused from
+Models land in $XDG_DATA_HOME/vinopop/models/<name>/ and are reused from
 there; nothing is fetched again once a model's folder is complete.
 """
 
@@ -19,7 +19,7 @@ from pathlib import Path
 
 from xdg_paths import DATA_DIR
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 MODELS_DIR = DATA_DIR / "models"
 

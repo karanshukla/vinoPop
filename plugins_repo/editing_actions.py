@@ -9,7 +9,7 @@ shortcut via xdotool:
   Backspace   → BackSpace     (delete selection)
   Select All  → Ctrl+A        (expand selection to the whole field)
 
-LinuxPop's popup has set_accept_focus(False), so the source app keeps
+vinoPop's popup has set_accept_focus(False), so the source app keeps
 keyboard focus the whole time the popup is up - xdotool's key event
 lands there, not on the popup window. Will only have a visible effect
 in an editable field; clicking 'Cut' on a read-only web page does

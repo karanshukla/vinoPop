@@ -1,4 +1,4 @@
-"""Base class for LinuxPop plugins.
+"""Base class for vinoPop plugins.
 
 A plugin exposes one action: a button in the popup. It declares which
 content types it cares about, which icon and label to render, and what

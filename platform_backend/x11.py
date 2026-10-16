@@ -1,9 +1,9 @@
-"""X11 platform backend - the original LinuxPop behaviour.
+"""X11 platform backend - the original vinoPop behaviour.
 
 Wraps xclip (selection/clipboard), Xlib (pointer, popup placement), xdotool
 (keystrokes / active window) and the existing X11 watcher / hotkey /
 double-click modules.
-Behaviour here must stay byte-for-byte what LinuxPop did before the
+Behaviour here must stay byte-for-byte what vinoPop did before the
 platform_backend refactor, so X11 users see no change.
 """
 
@@ -41,9 +41,9 @@ class X11Backend(PlatformBackend):
                 "fire for legacy X11 apps. The global hotkey still works "
                 "everywhere the X11 grab is honoured. For full functionality, "
                 "use an Xorg session - or a KDE Plasma Wayland session, which "
-                "LinuxPop now supports natively."
+                "vinoPop now supports natively."
             )
-            print(f"[linuxpop] WARNING: {warning}", file=sys.stderr)
+            print(f"[vinopop] WARNING: {warning}", file=sys.stderr)
             try:
                 subprocess.run(
                     [
@@ -54,8 +54,8 @@ class X11Backend(PlatformBackend):
                         "-u",
                         "normal",
                         "-i",
-                        "linuxpop",
-                        "LinuxPop: limited under XWayland",
+                        "vinopop",
+                        "vinoPop: limited under XWayland",
                         warning,
                     ],
                     check=False,

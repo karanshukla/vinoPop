@@ -14,7 +14,7 @@ from __future__ import annotations
 import functools
 import logging
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 LLM_ORDER = ("NPU", "GPU", "CPU")
 OCR_ORDER = ("GPU", "CPU")
@@ -38,7 +38,7 @@ def _log_npu_notes() -> None:
     from . import ovfetch
 
     for warning in ovfetch.warnings(ov.__version__):
-        log.warning("[vino_ai] %s (see `linuxpop --doctor`)", warning)
+        log.warning("[vino_ai] %s (see `vinopop --doctor`)", warning)
 
 
 def _setting() -> str:

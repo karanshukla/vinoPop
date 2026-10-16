@@ -19,7 +19,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 BINARY = "ovfetch"
 INSTALL_HINT = "https://github.com/karanshukla/ovfetch/releases"

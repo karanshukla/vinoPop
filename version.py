@@ -1,4 +1,4 @@
-"""Resolve LinuxPop's version from its git tag when running from a checkout."""
+"""Resolve vinoPop's version from its git tag when running from a checkout."""
 
 from __future__ import annotations
 

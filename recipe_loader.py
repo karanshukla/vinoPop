@@ -1,4 +1,4 @@
-"""Load JSON "recipes" from ~/.config/linuxpop/recipes/ as Plugin objects.
+"""Load JSON "recipes" from ~/.config/vinopop/recipes/ as Plugin objects.
 
 A recipe is a no-code plugin definition: name, icon, content types, and an
 action declaration. Four action types cover ~90% of real plugin ideas:
@@ -83,7 +83,7 @@ def _apply_snippet_placeholders(text: str) -> str:
     try:
         import sys
 
-        ch = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get(
+        ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get(
             "clipboard_history"
         )
         if ch is None or not hasattr(ch, "render_placeholders"):
@@ -179,7 +179,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
     action = recipe.get("action") or {}
     atype = action.get("type", "")
     template = action.get("template", "")
-    title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "LinuxPop")
+    title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "vinoPop")
     icon = recipe.get("icon") or "applications-other"
 
     if atype == "open_url":
@@ -225,8 +225,8 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                         "critical",
                         "-i",
                         "dialog-warning",
-                        "LinuxPop recipe disabled",
-                        f"{name}: unsafe template - see ~/.cache/linuxpop/linuxpop.log",
+                        "vinoPop recipe disabled",
+                        f"{name}: unsafe template - see ~/.cache/vinopop/vinopop.log",
                     ],
                     check=False,
                 )
@@ -319,7 +319,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                         "3000",
                         "-i",
                         "dialog-warning",
-                        "LinuxPop chain",
+                        "vinoPop chain",
                         f"{recipe.get('name', 'chain')}: no steps defined",
                     ],
                     check=False,
@@ -331,7 +331,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
             current = text
             import logging as _logging
 
-            log = _logging.getLogger("linuxpop")
+            log = _logging.getLogger("vinopop")
             for i, step in enumerate(steps):
                 stype = (step.get("type") or "transform").strip()
                 stemplate = step.get("template", "{text}")

@@ -75,7 +75,7 @@ class DoubleClickWatcher:
         self._thread = threading.Thread(
             target=self._run,
             daemon=True,
-            name="linuxpop-dblclick",
+            name="vinopop-dblclick",
         )
         self._thread.start()
 
