@@ -82,33 +82,15 @@ def _install_all_icons() -> None:
         return
 
     HICOLOR_APPS.mkdir(parents=True, exist_ok=True)
-    copied_any = False
     for src in ICONS_DIR.glob("*.svg"):
         dst = HICOLOR_APPS / src.name
         if not dst.is_file() or src.stat().st_mtime > dst.stat().st_mtime:
             try:
                 shutil.copy2(src, dst)
-                copied_any = True
             except OSError as exc:
                 print(f"[plugin_loader] icon copy failed for {src.name}: {exc}")
 
-    # Ensure hicolor has an index.theme so GTK actually scans it
-    hicolor_root = HICOLOR_APPS.parent.parent
-    index_file = hicolor_root / "index.theme"
-    if not index_file.is_file():
-        try:
-            index_file.write_text(
-                "[Icon Theme]\nName=hicolor\nComment=Default icon theme\n"
-                "Directories=scalable/apps\n\n"
-                "[scalable/apps]\nSize=48\nMinSize=8\nMaxSize=512\n"
-                "Type=Scalable\nContext=Applications\n",
-                encoding="utf-8",
-            )
-            copied_any = True
-        except OSError:
-            pass
-
-    # Tell the running GTK process about our icon dir AND refresh the cache.
+    # Tell the running GTK process about our icon dir.
     # Without this, GTK has already scanned its theme dirs before we copied,
     # and falls back to the "image-missing" icon for our vinopop-* names.
     # (GTK 4 re-checks its theme directories on its own; adding the search
@@ -119,34 +101,6 @@ def _install_all_icons() -> None:
             theme.add_search_path(str(ICONS_DIR))
     except Exception as exc:  # noqa: BLE001
         print(f"[plugin_loader] could not refresh icon theme: {exc}")
-
-    if copied_any:
-        # Rebuild on-disk cache so future GTK processes pick them up faster.
-        # Cold-cache runs of gtk-update-icon-cache have been seen to take
-        # 3-6 seconds on machines with large icon dirs - blocking the GTK
-        # main thread during startup. Detach to a daemon thread; the
-        # in-process icon theme has already been refreshed via the
-        # search-path update above, so the daemon doesn't need this
-        # to finish to function.
-        import subprocess
-        import threading as _threading
-
-        def _bg_rebuild_cache() -> None:
-            try:
-                subprocess.run(
-                    ["gtk-update-icon-cache", "-f", str(hicolor_root)],
-                    check=False,
-                    capture_output=True,
-                    timeout=30,
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
-
-        _threading.Thread(
-            target=_bg_rebuild_cache,
-            daemon=True,
-            name="vinopop-icon-cache",
-        ).start()
 
     # Mirror any user-supplied icons from ~/.config/vinopop/icons/ into
     # hicolor so they're searchable in the picker and usable by recipes.
