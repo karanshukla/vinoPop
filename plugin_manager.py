@@ -1,15 +1,15 @@
 """Plugin manager window using libhandy boxed-list rows."""
+
 from __future__ import annotations
 
 import json
-import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
-from xdg_paths import CONFIG_DIR
 
 import gi
+
+from xdg_paths import CONFIG_DIR
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Handy", "1")
@@ -28,6 +28,7 @@ def _unwrap_subtitle_labels(root: Gtk.Widget) -> None:
     """Same treatment as settings_gui - let HdyActionRow subtitles wrap
     to multiple lines so plugin descriptions stay fully visible instead
     of being cropped to a single ellipsis-tailed line."""
+
     def visit(widget: Gtk.Widget) -> None:
         if isinstance(widget, Gtk.Label):
             try:
@@ -52,10 +53,13 @@ def _unwrap_subtitle_labels(root: Gtk.Widget) -> None:
                 children = widget.get_children()
             for c in children:
                 visit(c)
+
     visit(root)
+
     def _again() -> bool:
         visit(root)
         return False
+
     GLib.idle_add(_again)
     GLib.timeout_add(150, _again)
 
@@ -112,6 +116,7 @@ def _unellipsize_tab_labels(root: Gtk.Widget) -> None:
                 children = widget.get_children()
             for child in children:
                 visit(child)
+
     visit(root)
 
     # Also queue a re-run on the next idle cycle. HdyViewSwitcherTitle
@@ -122,6 +127,7 @@ def _unellipsize_tab_labels(root: Gtk.Widget) -> None:
     def _again():
         visit(root)
         return False
+
     GLib.idle_add(_again)
     GLib.timeout_add(150, _again)
 
@@ -154,6 +160,7 @@ def _force_to_front(window: Gtk.Window) -> None:
             window.present()
         except Exception:
             pass
+
 
 REPO_DIR = Path(__file__).resolve().parent / "plugins_repo"
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
@@ -314,17 +321,19 @@ class PluginManagerDialog:
     # Display order for category sections. Categories present in the
     # manifest but missing here are appended in first-seen order.
     _CATEGORY_ORDER = [
-        "Snippets & Clipboard", "Productivity", "Web shortcuts",
-        "AI", "Developer",
+        "Snippets & Clipboard",
+        "Productivity",
+        "Web shortcuts",
+        "AI",
+        "Developer",
     ]
     _CATEGORY_DESCRIPTIONS = {
-        "Snippets & Clipboard":
-            "The picker that remembers what you've copied and the snippets "
-            "you save for reuse. The core of what LinuxPop is for.",
-        "Productivity":  "Everyday actions - math, counts, speech, formatting.",
+        "Snippets & Clipboard": "The picker that remembers what you've copied and the snippets "
+        "you save for reuse. The core of what LinuxPop is for.",
+        "Productivity": "Everyday actions - math, counts, speech, formatting.",
         "Web shortcuts": "Open the selection in a search engine or web service.",
-        "AI":            "Send the selection to a chat AI or run one locally.",
-        "Developer":     "Encoders, hashes and converters for technical text.",
+        "AI": "Send the selection to a chat AI or run one locally.",
+        "Developer": "Encoders, hashes and converters for technical text.",
     }
 
     def _build_catalog_groups(self) -> list[Handy.PreferencesGroup]:
@@ -383,6 +392,7 @@ class PluginManagerDialog:
         to a coloured initial only when there's no usable icon."""
         try:
             import icon_style
+
             icon_name = icon_style.resolve(icon_name)
         except Exception:
             pass
@@ -495,6 +505,7 @@ class PluginManagerDialog:
         # so the user can keep what they want and silence the rest.
         try:
             import plugin_loader as _pl
+
             by_source = _pl.plugins_by_source()
             all_plugins = {p.name: p for p in _pl.all_plugins()}
         except Exception:
@@ -502,6 +513,7 @@ class PluginManagerDialog:
             all_plugins = {}
         try:
             from settings import get_settings as _gs
+
             settings_obj = _gs()
             disabled_names = set(settings_obj.get("disabled_plugins") or [])
         except Exception:
@@ -526,7 +538,7 @@ class PluginManagerDialog:
             else:
                 row.set_title(path.stem.replace("_", " ").title())
                 row.set_subtitle("Installed by hand (not in the catalogue)")
-            _icon = (entry.get("icon") if entry else None)
+            _icon = entry.get("icon") if entry else None
             if not _icon and sub_names:
                 _p0 = all_plugins.get(sub_names[0])
                 _icon = getattr(_p0, "icon", None) if _p0 else None
@@ -542,15 +554,15 @@ class PluginManagerDialog:
                 for sub_name in sub_names:
                     sub_plugin = all_plugins.get(sub_name)
                     sub_row = Handy.ActionRow()
-                    sub_row.set_title(
-                        (sub_plugin.tooltip if sub_plugin else sub_name) or sub_name)
+                    sub_row.set_title((sub_plugin.tooltip if sub_plugin else sub_name) or sub_name)
                     sub_row.set_subtitle(f"action: {sub_name}")
                     sw = Gtk.Switch()
                     sw.set_valign(Gtk.Align.CENTER)
                     sw.set_active(sub_name not in disabled_names)
                     sw.connect(
                         "notify::active",
-                        self._on_subplugin_toggle, sub_name,
+                        self._on_subplugin_toggle,
+                        sub_name,
                     )
                     sub_row.add(sw)
                     sub_row.set_activatable_widget(sw)
@@ -560,6 +572,7 @@ class PluginManagerDialog:
     def _on_subplugin_toggle(self, switch: Gtk.Switch, _param, sub_name: str) -> None:
         try:
             from settings import get_settings as _gs
+
             settings_obj = _gs()
             disabled = list(settings_obj.get("disabled_plugins") or [])
         except Exception:
@@ -632,12 +645,13 @@ class PluginManagerDialog:
 
     def _fill_custom_group(self, group: Handy.PreferencesGroup) -> None:
         import recipe_loader
+
         # Translate the internal action-type slug into something a person
         # who didn't write the JSON would recognise.
         atype_labels = {
-            "open_url":         "Opens a web page",
-            "run_command":      "Runs a command",
-            "notify":           "Shows a notification",
+            "open_url": "Opens a web page",
+            "run_command": "Runs a command",
+            "notify": "Shows a notification",
             "copy_transformed": "Transforms text and copies it",
         }
         for path, recipe in recipe_loader.list_recipes():
@@ -656,8 +670,7 @@ class PluginManagerDialog:
             enabled_switch.set_valign(Gtk.Align.CENTER)
             enabled_switch.set_tooltip_text("Show this button in the popup")
             enabled_switch.set_active(bool(recipe.get("enabled", True)))
-            enabled_switch.connect("notify::active",
-                                   self._on_toggle_recipe, path)
+            enabled_switch.connect("notify::active", self._on_toggle_recipe, path)
             row.add(enabled_switch)
 
             edit_btn = Gtk.Button.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
@@ -698,15 +711,18 @@ class PluginManagerDialog:
         group.add(new_row)
         self._fill_custom_group(group)
 
-    def _open_recipe_wizard(self, existing: dict | None = None,
-                            existing_path: Path | None = None) -> None:
+    def _open_recipe_wizard(
+        self, existing: dict | None = None, existing_path: Path | None = None
+    ) -> None:
         from recipe_wizard import RecipeWizard
+
         parent = self._window
         wizard = RecipeWizard(parent=parent, recipe=existing, source_path=existing_path)
         new_recipe = wizard.run_and_get()
         if new_recipe is None:
             return
         import recipe_loader
+
         try:
             saved_path = recipe_loader.save_recipe(new_recipe, target_path=existing_path)
             print(f"[plugin_manager] saved recipe to {saved_path}")
@@ -722,6 +738,7 @@ class PluginManagerDialog:
 
     def _on_delete_recipe(self, _btn, path: Path) -> None:
         import recipe_loader
+
         recipe_loader.delete_recipe(path)
         self._refresh_custom_group()
         if self._on_changed:
@@ -731,6 +748,7 @@ class PluginManagerDialog:
         """Flip the recipe's 'enabled' field and reload the plugin layer
         so the popup picks up the change without a restart."""
         import recipe_loader
+
         recipe_loader.set_recipe_enabled(path, switch.get_active())
         # Don't repaint the whole group -- that would rebuild every row
         # and lose the switch animation feedback. Just trigger the
@@ -753,8 +771,10 @@ class PluginManagerDialog:
 
     def _fill_order_group(self, group: Handy.PreferencesGroup) -> None:
         import plugin_loader
+
         try:
             from settings import get_settings
+
             settings = get_settings()
         except Exception:
             settings = None
@@ -771,10 +791,7 @@ class PluginManagerDialog:
         order_idx = {n: i for i, n in enumerate(order)}
         sorted_plugins = sorted(
             all_plugins,
-            key=lambda p: (
-                (0, order_idx[p.name]) if p.name in order_idx
-                else (1, p.priority),
-            ),
+            key=lambda p: ((0, order_idx[p.name]) if p.name in order_idx else (1, p.priority),),
         )
 
         for index, plugin in enumerate(sorted_plugins):
@@ -821,10 +838,12 @@ class PluginManagerDialog:
             return
         ordered_names = [p.name for p in sorted_plugins]
         ordered_names[index], ordered_names[new_idx] = (
-            ordered_names[new_idx], ordered_names[index],
+            ordered_names[new_idx],
+            ordered_names[index],
         )
         try:
             from settings import get_settings
+
             s = get_settings()
             s.set("plugin_order", ordered_names)
             s.save()

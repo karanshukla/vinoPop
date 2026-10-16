@@ -1,4 +1,5 @@
 """Built-in actions used by the default plugins."""
+
 from __future__ import annotations
 
 import os
@@ -7,10 +8,8 @@ import shutil
 import subprocess
 import threading
 import urllib.parse
-from typing import Optional
 
 from classifier import _normalize as _strip_invisible
-
 
 # Thread-local 'force copy only' flag. When set, replace_selection
 # writes to the clipboard but skips the Ctrl+V step - the popup uses
@@ -45,25 +44,32 @@ def pin_as_snippet(text: str) -> None:
     directly). Falls back to a notification if the plugin isn't
     loaded."""
     import sys
+
     import gi
+
     gi.require_version("Gtk", "3.0")
     from gi.repository import GLib, Gtk
 
-    ch = (sys.modules.get("linuxpop_user_clipboard_history")
-          or sys.modules.get("clipboard_history"))
+    ch = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get("clipboard_history")
     if ch is None or not hasattr(ch, "_create_snippet"):
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "3000",
-             "-i", "dialog-warning", "LinuxPop",
-             "Snippets need the Clipboard history plugin enabled."],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "3000",
+                "-i",
+                "dialog-warning",
+                "LinuxPop",
+                "Snippets need the Clipboard history plugin enabled.",
+            ],
             check=False,
         )
         return
 
     def _open():
         dlg = Gtk.Dialog(title="Pin as snippet", flags=0)
-        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL,
-                        "Save", Gtk.ResponseType.OK)
+        dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
         dlg.set_default_response(Gtk.ResponseType.OK)
         dlg.set_default_size(440, 0)
         dlg.set_icon_name("linuxpop")
@@ -80,8 +86,7 @@ def pin_as_snippet(text: str) -> None:
         if len(text) > 160:
             preview += "..."
         prev_lbl = Gtk.Label(xalign=0)
-        prev_lbl.set_markup(
-            f"<small>Saving: <i>{GLib.markup_escape_text(preview)}</i></small>")
+        prev_lbl.set_markup(f"<small>Saving: <i>{GLib.markup_escape_text(preview)}</i></small>")
         prev_lbl.set_line_wrap(True)
         prev_lbl.get_style_context().add_class("dim-label")
         content.add(prev_lbl)
@@ -95,8 +100,7 @@ def pin_as_snippet(text: str) -> None:
         content.add(name_entry)
 
         trig_lbl = Gtk.Label(xalign=0, margin_top=4)
-        trig_lbl.set_markup(
-            "<b>Trigger</b>  <small>(optional)</small>")
+        trig_lbl.set_markup("<b>Trigger</b>  <small>(optional)</small>")
         content.add(trig_lbl)
         trig_entry = Gtk.Entry()
         trig_entry.set_placeholder_text("e.g. ;mysnippet")
@@ -104,8 +108,7 @@ def pin_as_snippet(text: str) -> None:
         content.add(trig_entry)
 
         cat_lbl = Gtk.Label(xalign=0, margin_top=4)
-        cat_lbl.set_markup(
-            "<b>Category</b>  <small>(optional)</small>")
+        cat_lbl.set_markup("<b>Category</b>  <small>(optional)</small>")
         content.add(cat_lbl)
         cat_entry = Gtk.Entry()
         cat_entry.set_placeholder_text("e.g. Email, Code, Personal")
@@ -122,12 +125,18 @@ def pin_as_snippet(text: str) -> None:
         if response != Gtk.ResponseType.OK:
             return
         try:
-            ch._create_snippet(
-                name=name, text=text, trigger=trig, category=category)
+            ch._create_snippet(name=name, text=text, trigger=trig, category=category)
             subprocess.run(
-                ["notify-send", "--hint=byte:transient:1", "-t", "2000",
-                 "-i", "linuxpop", "LinuxPop",
-                 f"Saved snippet: {name or text[:40]}"],
+                [
+                    "notify-send",
+                    "--hint=byte:transient:1",
+                    "-t",
+                    "2000",
+                    "-i",
+                    "linuxpop",
+                    "LinuxPop",
+                    f"Saved snippet: {name or text[:40]}",
+                ],
                 check=False,
             )
         except Exception as exc:
@@ -140,6 +149,7 @@ def copy_to_clipboard(text: str) -> None:
     """Copy text to the system clipboard (backend: xclip on X11, wl-copy on
     Wayland/KDE)."""
     from platform_backend import get_backend
+
     get_backend().set_clipboard(text)
     print(f"[actions] copied {len(text)} chars to clipboard")
 
@@ -159,6 +169,7 @@ def replace_selection(new_text: str) -> None:
     elsewhere - same fallback as a manual Copy.
     """
     from platform_backend import get_backend
+
     backend = get_backend()
     backend.set_clipboard(new_text)
     if force_copy_active():
@@ -168,6 +179,7 @@ def replace_selection(new_text: str) -> None:
         print("[actions] force-copy mode - clipboard only, no paste")
         return
     import time as _t
+
     _t.sleep(0.05)
     backend.paste()
     if not backend.can_paste():
@@ -175,9 +187,16 @@ def replace_selection(new_text: str) -> None:
         # ydotool/wtype): the result is on the clipboard but wasn't pasted in
         # place. Tell the user so they aren't left wondering why nothing changed.
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "3000",
-             "-i", "edit-paste", "Copied to clipboard",
-             "Auto-paste isn't available here - press Ctrl+V to paste."],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "3000",
+                "-i",
+                "edit-paste",
+                "Copied to clipboard",
+                "Auto-paste isn't available here - press Ctrl+V to paste.",
+            ],
             check=False,
         )
 
@@ -210,6 +229,7 @@ def open_url(text: str) -> None:
     if not url.lower().startswith(("http://", "https://", "ftp://", "file://", "mailto:")):
         url = "https://" + url
     from platform_backend import get_backend
+
     get_backend().open_url(url)
     print(f"[actions] opened URL: {url}")
 
@@ -222,15 +242,15 @@ def open_url(text: str) -> None:
 # plugins_repo/recipes/. Keep this dict scoped to "general search".
 SEARCH_ENGINES: dict[str, tuple[str, str]] = {
     # key:            (display name,     URL template)
-    "google":         ("Google",         "https://www.google.com/search?q={q}"),
-    "duckduckgo":     ("DuckDuckGo",     "https://duckduckgo.com/?q={q}"),
-    "bing":           ("Bing",           "https://www.bing.com/search?q={q}"),
-    "brave":          ("Brave Search",   "https://search.brave.com/search?q={q}"),
-    "startpage":      ("Startpage",      "https://www.startpage.com/do/search?q={q}"),
-    "ecosia":         ("Ecosia",         "https://www.ecosia.org/search?q={q}"),
-    "kagi":           ("Kagi",           "https://kagi.com/search?q={q}"),
-    "qwant":          ("Qwant",          "https://www.qwant.com/?q={q}"),
-    "yandex":         ("Yandex",         "https://yandex.com/search/?text={q}"),
+    "google": ("Google", "https://www.google.com/search?q={q}"),
+    "duckduckgo": ("DuckDuckGo", "https://duckduckgo.com/?q={q}"),
+    "bing": ("Bing", "https://www.bing.com/search?q={q}"),
+    "brave": ("Brave Search", "https://search.brave.com/search?q={q}"),
+    "startpage": ("Startpage", "https://www.startpage.com/do/search?q={q}"),
+    "ecosia": ("Ecosia", "https://www.ecosia.org/search?q={q}"),
+    "kagi": ("Kagi", "https://kagi.com/search?q={q}"),
+    "qwant": ("Qwant", "https://www.qwant.com/?q={q}"),
+    "yandex": ("Yandex", "https://yandex.com/search/?text={q}"),
 }
 
 
@@ -239,6 +259,7 @@ def _search_template() -> str:
     Falls back to Google if the configured engine is unknown."""
     try:
         from settings import get_settings
+
         s = get_settings()
         engine = (s.get("search_engine") or "google").strip().lower()
         if engine == "custom":
@@ -257,6 +278,7 @@ def search_web(text: str) -> None:
     query = urllib.parse.quote_plus(_strip_invisible(text))
     url = _search_template().replace("{q}", query)
     from platform_backend import get_backend
+
     get_backend().open_url(url)
 
 
@@ -280,16 +302,16 @@ def _host_has(binary: str) -> bool:
     works from inside the sandbox."""
     try:
         r = subprocess.run(
-            ["flatpak-spawn", "--host", "sh", "-c",
-             "command -v %s" % shlex.quote(binary)],
-            capture_output=True, timeout=5,
+            ["flatpak-spawn", "--host", "sh", "-c", f"command -v {shlex.quote(binary)}"],
+            capture_output=True,
+            timeout=5,
         )
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _find_terminal() -> Optional[tuple[str, list[str]]]:
+def _find_terminal() -> tuple[str, list[str]] | None:
     """Return (binary, argv-prefix) for the first available terminal emulator.
     Inside Flatpak the command has to run on the host (running it in the
     sandbox would hit the wrong filesystem and tools), so we look for the
@@ -308,6 +330,7 @@ def _find_terminal() -> Optional[tuple[str, list[str]]]:
 def _terminal_keep_open() -> bool:
     try:
         from settings import get_settings
+
         return bool(get_settings().get("terminal_keep_open", True))
     except Exception:
         return True
@@ -316,6 +339,7 @@ def _terminal_keep_open() -> bool:
 def _should_confirm_terminal() -> bool:
     try:
         from settings import get_settings
+
         return bool(get_settings().get("terminal_confirm_run", True))
     except Exception:
         return True
@@ -360,6 +384,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     Cancel / Edit / Run. Clicking Edit unlocks the command field for
     in-place tweaking. Returns False so GLib.idle_add doesn't re-fire."""
     import gi
+
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gdk, Gtk
 
@@ -370,9 +395,14 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     dlg.set_position(Gtk.WindowPosition.CENTER)
 
     content = dlg.get_content_area()
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
-                  margin_top=14, margin_bottom=12,
-                  margin_start=18, margin_end=18)
+    box = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=10,
+        margin_top=14,
+        margin_bottom=12,
+        margin_start=18,
+        margin_end=18,
+    )
 
     head = Gtk.Label(xalign=0)
     head.set_markup("<span size='large' weight='bold'>Run this command?</span>")
@@ -382,7 +412,8 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     explain.set_markup(
         "<span foreground='#8a92a8' size='small'>"
         "Press <b>Run</b> to launch it as-is, <b>Edit</b> to tweak it first."
-        "</span>")
+        "</span>"
+    )
     explain.set_line_wrap(True)
     box.pack_start(explain, False, False, 0)
 
@@ -416,8 +447,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     box.pack_start(scroll, True, True, 0)
 
     # Button row: Cancel · Edit · Run
-    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8,
-                     margin_top=4)
+    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4)
     btn_box.pack_start(Gtk.Label(), True, True, 0)
 
     cancel = Gtk.Button(label="Cancel")
@@ -439,8 +469,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
         text_view.grab_focus()
         # Select all so the user can just start typing to replace, or
         # press End/Arrow to position the caret to tweak.
-        text_buf.select_range(text_buf.get_start_iter(),
-                              text_buf.get_end_iter())
+        text_buf.select_range(text_buf.get_start_iter(), text_buf.get_end_iter())
         # The button has done its job - disable so it visually confirms
         # "you're in edit mode now".
         edit_btn.set_sensitive(False)
@@ -448,7 +477,9 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
         explain.set_markup(
             "<span foreground='#8a92a8' size='small'>"
             "<b>Editing</b> -- Ctrl+Enter to run, Esc to cancel."
-            "</span>")
+            "</span>"
+        )
+
     edit_btn.connect("clicked", _enter_edit_mode)
     btn_box.pack_start(edit_btn, False, False, 0)
 
@@ -471,6 +502,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
             dlg.response(Gtk.ResponseType.OK)
             return True  # consume, don't insert a newline
         return False  # let TextView handle plain Enter etc. normally
+
     text_view.connect("key-press-event", _on_textview_key)
 
     def _on_dialog_key(_w, event):
@@ -483,6 +515,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
             dlg.response(Gtk.ResponseType.OK)
             return True
         return False
+
     dlg.connect("key-press-event", _on_dialog_key)
 
     content.add(box)
@@ -493,6 +526,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
 
     response = dlg.run()
     import logging
+
     log = logging.getLogger("linuxpop")
 
     if response == Gtk.ResponseType.OK:
@@ -526,10 +560,12 @@ def run_in_terminal(text: str) -> None:
         # terminal_confirm_run=false in settings.json skips this prompt.
         # The dialog rebuilds the wrapped command after the user edits.
         from gi.repository import GLib
+
         GLib.idle_add(_confirm_run_then_launch, cmd, binary, prefix)
         return
 
     import logging
+
     log = logging.getLogger("linuxpop")
     wrapped = _wrap_for_terminal(cmd)
     try:
@@ -545,9 +581,15 @@ def open_path(text: str) -> None:
         # Open on the host: the sandbox can't open an arbitrary host path
         # (the OpenURI portal needs a readable fd we don't have). Expand a
         # leading ~ against the HOST's $HOME, then run the host's xdg-open.
-        argv = ["flatpak-spawn", "--host", "sh", "-c",
-                'p="$1"; case "$p" in "~"*) p="$HOME${p#\\~}";; esac; '
-                'exec xdg-open "$p"', "sh", raw]
+        argv = [
+            "flatpak-spawn",
+            "--host",
+            "sh",
+            "-c",
+            'p="$1"; case "$p" in "~"*) p="$HOME${p#\\~}";; esac; exec xdg-open "$p"',
+            "sh",
+            raw,
+        ]
         try:
             subprocess.Popen(argv, start_new_session=True)
             print(f"[actions] opened path on host: {raw}")

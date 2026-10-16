@@ -5,6 +5,7 @@ WaylandKdeBackend.active_window_haystacks for the popup blocklist. Only spawned
 when the user actually has blocklist patterns, so its cost never hits the
 default no-blocklist path.
 """
+
 from __future__ import annotations
 
 import os
@@ -14,11 +15,10 @@ import tempfile
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib  # noqa: E402
-
 import dbus  # noqa: E402
 import dbus.service  # noqa: E402
 from dbus.mainloop.glib import DBusGMainLoop  # noqa: E402
+from gi.repository import GLib  # noqa: E402
 
 # App-id-prefixed so a Flatpak sandbox auto-allows owning it (see the note in
 # _kwin_cursor.py). Harmless outside Flatpak. _JS uses the constant to stay
@@ -27,7 +27,7 @@ BUS_NAME = "io.github.GaimsDevSoftware.LinuxPop.ActiveWin"
 OBJ_PATH = "/win"
 # KWin 6 renamed activeClient -> activeWindow; fall back for older builds.
 _JS = (
-    'var c = workspace.activeWindow || workspace.activeClient;'
+    "var c = workspace.activeWindow || workspace.activeClient;"
     f'callDBus("{BUS_NAME}", "{OBJ_PATH}", "{BUS_NAME}", '
     '"Report", c ? String(c.resourceClass) : "", c ? String(c.caption) : "");'
 )

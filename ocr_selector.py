@@ -12,6 +12,7 @@ explicit Accept. This module replaces that with a PopClip-style flow:
 `select_and_capture(callback)` MUST run on the GTK main thread. It calls
 `callback(png_path_or_None)` exactly once (None = cancelled / failed).
 """
+
 from __future__ import annotations
 
 import os
@@ -24,7 +25,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
 
 def _in_flatpak() -> bool:
@@ -37,13 +38,16 @@ def _host_has(binary: str) -> bool:
     try:
         r = subprocess.run(
             ["flatpak-spawn", "--host", "sh", "-c", f"command -v {binary}"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         return r.returncode == 0 and bool(r.stdout.strip())
     except (OSError, subprocess.SubprocessError):
         return False
 
 
-def _grabber() -> "str | None":
+def _grabber() -> str | None:
     """Name of the first available full-screen grabber, or None. Checks the
     host's PATH inside Flatpak, the sandbox's PATH otherwise."""
     probe = _host_has if _in_flatpak() else shutil.which
@@ -53,7 +57,7 @@ def _grabber() -> "str | None":
     return None
 
 
-def _capture_fullscreen() -> "str | None":
+def _capture_fullscreen() -> str | None:
     """Grab the whole screen to a temp PNG with no UI. spectacle -f -b is the
     KWin-native path; grim covers wlroots; maim covers X11.
 
@@ -79,8 +83,8 @@ def _capture_fullscreen() -> "str | None":
         prefix = []
     argv = {
         "spectacle": [*prefix, "spectacle", "-f", "-b", "-n", "-o", path],
-        "grim":      [*prefix, "grim", path],
-        "maim":      [*prefix, "maim", path],
+        "grim": [*prefix, "grim", path],
+        "maim": [*prefix, "maim", path],
     }[tool]
     try:
         subprocess.run(argv, capture_output=True, timeout=15)
@@ -118,7 +122,8 @@ class _Selector(Gtk.Window):
             Gdk.EventMask.BUTTON_PRESS_MASK
             | Gdk.EventMask.BUTTON_RELEASE_MASK
             | Gdk.EventMask.POINTER_MOTION_MASK
-            | Gdk.EventMask.KEY_PRESS_MASK)
+            | Gdk.EventMask.KEY_PRESS_MASK
+        )
         area.connect("draw", self._on_draw)
         self.add(area)
         self._area = area
@@ -129,8 +134,7 @@ class _Selector(Gtk.Window):
         self.connect("key-press-event", self._on_key)
         try:
             crosshair = Gdk.Cursor.new_from_name(self.get_display(), "crosshair")
-            self.connect("realize",
-                         lambda w: w.get_window().set_cursor(crosshair))
+            self.connect("realize", lambda w: w.get_window().set_cursor(crosshair))
         except Exception:
             pass
 
@@ -225,8 +229,7 @@ class _Selector(Gtk.Window):
                     ph = min(self._pb.get_height() - py, int(rh * sy))
                     if pw > 0 and ph > 0:
                         sub = self._pb.new_subpixbuf(px, py, pw, ph)
-                        fd, crop_path = tempfile.mkstemp(
-                            suffix=".png", prefix="lp-ocr-crop-")
+                        fd, crop_path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-crop-")
                         os.close(fd)
                         sub.savev(crop_path, "png", [], [])
         except Exception as exc:  # noqa: BLE001
@@ -263,8 +266,8 @@ def available() -> bool:
     try:
         gi.require_version("GtkLayerShell", "0.1")
         from gi.repository import GtkLayerShell  # noqa: F401
+
         return True
     except Exception:
         # No layer-shell: only safe to overlay on X11.
-        return bool(os.environ.get("DISPLAY")) and not os.environ.get(
-            "WAYLAND_DISPLAY")
+        return bool(os.environ.get("DISPLAY")) and not os.environ.get("WAYLAND_DISPLAY")

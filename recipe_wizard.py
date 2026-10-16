@@ -8,6 +8,7 @@ text" instead of "{text_url}").
 Same external interface as before - plugin_manager calls run_and_get()
 and gets a recipe dict back (or None if cancelled).
 """
+
 from __future__ import annotations
 
 import gi
@@ -17,7 +18,6 @@ from gi.repository import GLib, Gtk, Pango  # noqa: E402
 
 import recipe_loader
 from icon_picker import IconPicker
-
 
 # --------------------------------------------------------------------------
 # Action catalog -- the four building blocks of any custom button.
@@ -38,15 +38,15 @@ _ACTIONS = [
         # at the end - instantly shows where the selection will land.
         detail_placeholder="https://www.google.com/search?q={text_url}",
         insert_label="Insert the selected text here",
-        insert_token="{text_url}",   # URL-safe encoded
-        preview_label="If you select \"hello world\" and click your button:",
+        insert_token="{text_url}",  # URL-safe encoded
+        preview_label='If you select "hello world" and click your button:',
         preview_verb="Opens this address in your browser:",
         examples=[
-            ("Google",     "https://www.google.com/search?q={text_url}"),
-            ("Wikipedia",  "https://en.wikipedia.org/wiki/Special:Search?search={text_url}"),
-            ("YouTube",    "https://www.youtube.com/results?search_query={text_url}"),
-            ("Translate",  "https://translate.google.com/?op=translate&text={text_url}"),
-            ("Maps",       "https://www.google.com/maps/search/{text_url}"),
+            ("Google", "https://www.google.com/search?q={text_url}"),
+            ("Wikipedia", "https://en.wikipedia.org/wiki/Special:Search?search={text_url}"),
+            ("YouTube", "https://www.youtube.com/results?search_query={text_url}"),
+            ("Translate", "https://translate.google.com/?op=translate&text={text_url}"),
+            ("Maps", "https://www.google.com/maps/search/{text_url}"),
             ("Dictionary", "https://www.google.com/search?q=define+{text_url}"),
         ],
     ),
@@ -62,17 +62,20 @@ _ACTIONS = [
         # user can see how to use it.
         detail_placeholder="notify-send 'You selected:' {text_shell}",
         insert_label="Insert the selected text here",
-        insert_token="{text_shell}", # shell-quoted
-        preview_label="If you select \"hello world\" and click your button:",
+        insert_token="{text_shell}",  # shell-quoted
+        preview_label='If you select "hello world" and click your button:',
         preview_verb="Runs this command in the background:",
         warning="Commands can change or delete files. Test with something harmless first.",
         examples=[
             ("Open in default app", "xdg-open {text_shell}"),
-            ("Show notification",   "notify-send 'You selected' {text_shell}"),
-            ("Open in VS Code",     "code {text_shell}"),
-            ("Open folder in Files", "xdg-open \"$(dirname {text_shell})\""),
-            ("Speak aloud",         "spd-say {text_shell}"),
-            ("Count characters",    "echo -n {text_shell} | wc -c | xargs -I N notify-send 'Length' 'N characters'"),
+            ("Show notification", "notify-send 'You selected' {text_shell}"),
+            ("Open in VS Code", "code {text_shell}"),
+            ("Open folder in Files", 'xdg-open "$(dirname {text_shell})"'),
+            ("Speak aloud", "spd-say {text_shell}"),
+            (
+                "Count characters",
+                "echo -n {text_shell} | wc -c | xargs -I N notify-send 'Length' 'N characters'",
+            ),
         ],
     ),
     dict(
@@ -86,13 +89,13 @@ _ACTIONS = [
         detail_placeholder="Selected: {text}",
         insert_label="Insert the selected text",
         insert_token="{text}",
-        preview_label="If you select \"hello world\" and click your button:",
+        preview_label='If you select "hello world" and click your button:',
         preview_verb="Shows this notification:",
         examples=[
-            ("Plain",       "Selected: {text}"),
-            ("Trimmed",     "Trimmed: {text_strip}"),
-            ("Uppercase",   "{text_upper}"),
-            ("Lowercase",   "{text_lower}"),
+            ("Plain", "Selected: {text}"),
+            ("Trimmed", "Trimmed: {text_strip}"),
+            ("Uppercase", "{text_upper}"),
+            ("Lowercase", "{text_lower}"),
             ("URL-encoded", "URL-safe form: {text_url}"),
         ],
     ),
@@ -109,18 +112,18 @@ _ACTIONS = [
         detail_placeholder="=={text}==",
         insert_label="Insert the selected text",
         insert_token="{text}",
-        preview_label="If you select \"hello world\" and click your button:",
+        preview_label='If you select "hello world" and click your button:',
         preview_verb="Copies this to your clipboard:",
         examples=[
             ("Markdown highlight", "=={text}=="),
-            ("Markdown bold",      "**{text}**"),
-            ("Markdown quote",     "> {text}"),
-            ("Markdown code",      "`{text}`"),
-            ("Markdown link",      "[{text}]()"),
-            ("UPPERCASE",          "{text_upper}"),
-            ("lowercase",          "{text_lower}"),
-            ("In quotes",          "\"{text}\""),
-            ("mOcKiNg cAsE",       "{text_mock}"),
+            ("Markdown bold", "**{text}**"),
+            ("Markdown quote", "> {text}"),
+            ("Markdown code", "`{text}`"),
+            ("Markdown link", "[{text}]()"),
+            ("UPPERCASE", "{text_upper}"),
+            ("lowercase", "{text_lower}"),
+            ("In quotes", '"{text}"'),
+            ("mOcKiNg cAsE", "{text_mock}"),
         ],
     ),
 ]
@@ -130,29 +133,38 @@ _ACTION_BY_KEY = {a["key"]: a for a in _ACTIONS}
 # Extra inserter buttons offered for copy_transformed (this is the one
 # action where a casual user might genuinely want a transform pipeline).
 _TRANSFORM_INSERTERS = [
-    ("Selected text",       "{text}"),
-    ("UPPERCASE",           "{text_upper}"),
-    ("lowercase",           "{text_lower}"),
-    ("URL-safe",            "{text_url}"),
-    ("Trimmed",             "{text_strip}"),
-    ("mOcKiNg cAsE",        "{text_mock}"),
+    ("Selected text", "{text}"),
+    ("UPPERCASE", "{text_upper}"),
+    ("lowercase", "{text_lower}"),
+    ("URL-safe", "{text_url}"),
+    ("Trimmed", "{text_strip}"),
+    ("mOcKiNg cAsE", "{text_mock}"),
 ]
 
 _CONTENT_TYPES = [
-    ("url",        "Web addresses"),
-    ("email",      "Email addresses"),
-    ("path",       "File paths"),
-    ("command",    "Shell commands"),
+    ("url", "Web addresses"),
+    ("email", "Email addresses"),
+    ("path", "File paths"),
+    ("command", "Shell commands"),
     ("plain_text", "Plain text"),
 ]
 
 _COMMON_ICONS = [
-    "applications-internet", "web-browser-symbolic", "system-search-symbolic",
-    "mail-send-symbolic", "utilities-terminal-symbolic", "folder-open-symbolic",
-    "accessories-text-editor-symbolic", "accessories-calculator-symbolic",
-    "starred-symbolic", "emblem-favorite-symbolic", "emoji-people-symbolic",
-    "view-list-symbolic", "format-text-bold-symbolic",
-    "edit-copy-symbolic", "document-edit-symbolic",
+    "applications-internet",
+    "web-browser-symbolic",
+    "system-search-symbolic",
+    "mail-send-symbolic",
+    "utilities-terminal-symbolic",
+    "folder-open-symbolic",
+    "accessories-text-editor-symbolic",
+    "accessories-calculator-symbolic",
+    "starred-symbolic",
+    "emblem-favorite-symbolic",
+    "emoji-people-symbolic",
+    "view-list-symbolic",
+    "format-text-bold-symbolic",
+    "edit-copy-symbolic",
+    "document-edit-symbolic",
 ]
 
 _SAMPLE_SELECTION = "hello world"
@@ -249,13 +261,15 @@ def _install_mock_css() -> None:
         return
     try:
         from gi.repository import Gdk
+
         screen = Gdk.Screen.get_default()
         if screen is None:
             return
         provider = Gtk.CssProvider()
         provider.load_from_data(_MOCK_CSS)
         Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
         _css_installed = True
     except Exception:
         pass
@@ -265,11 +279,11 @@ def _install_mock_css() -> None:
 # RecipeWizard
 # --------------------------------------------------------------------------
 
+
 class RecipeWizard:
     """Multi-step assistant. Same public API as the legacy wizard."""
 
-    def __init__(self, parent=None, recipe: dict | None = None,
-                 source_path=None) -> None:
+    def __init__(self, parent=None, recipe: dict | None = None, source_path=None) -> None:
         self._parent = parent
         self._source_path = source_path
         existing = recipe or {}
@@ -312,7 +326,7 @@ class RecipeWizard:
 
         a.connect("apply", self._on_apply)
         a.connect("cancel", lambda *_: a.destroy())
-        a.connect("close",  lambda *_: a.destroy())
+        a.connect("close", lambda *_: a.destroy())
         a.connect("destroy", lambda *_: Gtk.main_quit())
 
         a.show_all()
@@ -322,14 +336,17 @@ class RecipeWizard:
     # ---- page 1: intro ------------------------------------------------------
 
     def _add_intro_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
-                       margin_top=24, margin_bottom=24,
-                       margin_start=32, margin_end=32)
+        page = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=18,
+            margin_top=24,
+            margin_bottom=24,
+            margin_start=32,
+            margin_end=32,
+        )
 
         title = Gtk.Label(xalign=0)
-        title.set_markup(
-            "<span size='xx-large' weight='bold'>Make your own LinuxPop button</span>"
-        )
+        title.set_markup("<span size='xx-large' weight='bold'>Make your own LinuxPop button</span>")
         page.pack_start(title, False, False, 0)
 
         subtitle = Gtk.Label(xalign=0)
@@ -342,15 +359,21 @@ class RecipeWizard:
         page.pack_start(subtitle, False, False, 0)
 
         # 3-step visual flow
-        flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14,
-                       margin_top=18)
+        flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14, margin_top=18)
         for n, icon, head, body in [
-            (1, "edit-select-all-symbolic", "Select",
-             "Highlight any text\nin any app."),
-            (2, "input-mouse-symbolic", "Click",
-             "The LinuxPop popup\nshows up. Pick your\nnew button."),
-            (3, "starred-symbolic", "Done",
-             "Whatever you set up\nhappens. Open a URL,\nrun a command -- you choose."),
+            (1, "edit-select-all-symbolic", "Select", "Highlight any text\nin any app."),
+            (
+                2,
+                "input-mouse-symbolic",
+                "Click",
+                "The LinuxPop popup\nshows up. Pick your\nnew button.",
+            ),
+            (
+                3,
+                "starred-symbolic",
+                "Done",
+                "Whatever you set up\nhappens. Open a URL,\nrun a command -- you choose.",
+            ),
         ]:
             tile = self._build_step_tile(n, icon, head, body)
             flow.pack_start(tile, True, True, 0)
@@ -364,7 +387,7 @@ class RecipeWizard:
         hint.set_margin_top(10)
         page.pack_start(hint, False, False, 0)
 
-        idx = a.append_page(page)
+        a.append_page(page)
         a.set_page_type(page, Gtk.AssistantPageType.INTRO)
         a.set_page_title(page, "Welcome")
         a.set_page_complete(page, True)
@@ -396,9 +419,14 @@ class RecipeWizard:
     # ---- page 2: choose action type -----------------------------------------
 
     def _add_action_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
-                       margin_top=20, margin_bottom=20,
-                       margin_start=28, margin_end=28)
+        page = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=14,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=28,
+            margin_end=28,
+        )
 
         title = Gtk.Label(xalign=0)
         title.set_markup("<span size='x-large' weight='bold'>What should your button do?</span>")
@@ -424,7 +452,7 @@ class RecipeWizard:
         page.pack_start(grid, True, True, 0)
         self._reflect_action_selection()
 
-        idx = a.append_page(page)
+        a.append_page(page)
         a.set_page_title(page, "Pick action")
         a.set_page_complete(page, bool(self._state["action_type"]))
 
@@ -432,9 +460,14 @@ class RecipeWizard:
         # An EventBox-wrapped tile that becomes "selected" when clicked.
         ev = Gtk.EventBox()
         ev.set_above_child(False)
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
-                      margin_top=14, margin_bottom=14,
-                      margin_start=16, margin_end=16)
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=6,
+            margin_top=14,
+            margin_bottom=14,
+            margin_start=16,
+            margin_end=16,
+        )
         box.get_style_context().add_class("lp-step-tile")
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -450,8 +483,7 @@ class RecipeWizard:
         box.pack_start(blurb, False, False, 0)
 
         eg = Gtk.Label(xalign=0)
-        eg.set_markup(f"<span foreground='#9aa3b8' size='small'>"
-                      f"Example: {spec['example']}</span>")
+        eg.set_markup(f"<span foreground='#9aa3b8' size='small'>Example: {spec['example']}</span>")
         eg.set_line_wrap(True)
         box.pack_start(eg, False, False, 0)
 
@@ -464,10 +496,10 @@ class RecipeWizard:
             self._refresh_detail_page()
             self._refresh_confirm_page()
             if self._assistant is not None:
-                current_page = self._assistant.get_nth_page(
-                    self._assistant.get_current_page())
+                current_page = self._assistant.get_nth_page(self._assistant.get_current_page())
                 self._assistant.set_page_complete(current_page, True)
             return False
+
         ev.connect("button-press-event", on_click)
         # Keyboard activation too
         ev.set_can_focus(True)
@@ -486,9 +518,14 @@ class RecipeWizard:
     # ---- page 3: name & icon ------------------------------------------------
 
     def _add_label_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16,
-                       margin_top=20, margin_bottom=20,
-                       margin_start=24, margin_end=24)
+        page = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=16,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=24,
+            margin_end=24,
+        )
 
         # ---- LEFT column: inputs ----
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -616,8 +653,9 @@ class RecipeWizard:
         self._refresh_confirm_page()
 
     def _on_browse_icons(self, _btn) -> None:
-        picker = IconPicker(parent=self._assistant,
-                            initial=self._state.get("icon") or "applications-other")
+        picker = IconPicker(
+            parent=self._assistant, initial=self._state.get("icon") or "applications-other"
+        )
         chosen = picker.run()
         if chosen:
             self._state["icon"] = chosen
@@ -630,10 +668,8 @@ class RecipeWizard:
         for ch in self._mock_button.get_children():
             self._mock_button.remove(ch)
         icon_name = self._state.get("icon") or "applications-other"
-        self._mock_button.add(Gtk.Image.new_from_icon_name(
-            icon_name, Gtk.IconSize.LARGE_TOOLBAR))
-        self._mock_button.set_tooltip_text(
-            self._state.get("tooltip") or "Your button")
+        self._mock_button.add(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR))
+        self._mock_button.set_tooltip_text(self._state.get("tooltip") or "Your button")
         self._mock_button.show_all()
 
     def _refresh_mock_label(self) -> None:
@@ -651,10 +687,14 @@ class RecipeWizard:
     def _add_detail_page(self, a: Gtk.Assistant) -> None:
         # We hold a reference to the outer container so we can wipe and
         # rebuild it when the user changes action type on page 2.
-        self._detail_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                         spacing=12,
-                                         margin_top=20, margin_bottom=20,
-                                         margin_start=28, margin_end=28)
+        self._detail_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=12,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=28,
+            margin_end=28,
+        )
         self._refresh_detail_page()
         a.append_page(self._detail_container)
         a.set_page_title(self._detail_container, "Details")
@@ -692,8 +732,7 @@ class RecipeWizard:
         tmpl_scroll.set_shadow_type(Gtk.ShadowType.IN)
         self._template_view = Gtk.TextView()
         self._template_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self._template_view.override_font(
-            Pango.FontDescription("monospace 11"))
+        self._template_view.override_font(Pango.FontDescription("monospace 11"))
         # Visible input-field background so the user can see it's editable.
         self._template_view.get_style_context().add_class("lp-cmd-edit")
         self._template_buffer = self._template_view.get_buffer()
@@ -703,7 +742,7 @@ class RecipeWizard:
         # rebuild the whole detail container when action type changes.
         self._placeholder_tag = self._template_buffer.create_tag(
             "lp-placeholder",
-            foreground="#6b7080",     # muted grey vs the normal #e8ecf4
+            foreground="#6b7080",  # muted grey vs the normal #e8ecf4
             style=Pango.Style.ITALIC,
         )
 
@@ -719,8 +758,7 @@ class RecipeWizard:
             if placeholder_text:
                 self._template_buffer.set_text(placeholder_text)
                 start, end = self._template_buffer.get_bounds()
-                self._template_buffer.apply_tag(
-                    self._placeholder_tag, start, end)
+                self._template_buffer.apply_tag(self._placeholder_tag, start, end)
                 self._placeholder_active = True
             else:
                 self._placeholder_active = False
@@ -731,8 +769,7 @@ class RecipeWizard:
         # Wipe the dim sample as soon as the user clicks into the field -
         # avoids the weird state where their typing lands next to greyed
         # placeholder content.
-        self._template_view.connect(
-            "focus-in-event", self._on_template_focus_in)
+        self._template_view.connect("focus-in-event", self._on_template_focus_in)
         tmpl_scroll.add(self._template_view)
         self._detail_container.pack_start(tmpl_scroll, False, False, 0)
 
@@ -742,8 +779,7 @@ class RecipeWizard:
             # Several flavor options
             for label, token in _TRANSFORM_INSERTERS:
                 btn = Gtk.Button(label=f"Insert {label}")
-                btn.set_tooltip_text(
-                    "Click to drop this into your template at the cursor.")
+                btn.set_tooltip_text("Click to drop this into your template at the cursor.")
                 btn.connect("clicked", self._on_insert, token)
                 inserter_row.pack_start(btn, False, False, 0)
         else:
@@ -751,10 +787,15 @@ class RecipeWizard:
             btn.get_style_context().add_class("suggested-action")
             btn.set_tooltip_text(
                 "Click to drop the selected text into your "
-                + ("URL" if spec["key"] == "open_url"
-                   else "command" if spec["key"] == "run_command"
-                   else "message")
-                + " at the cursor.")
+                + (
+                    "URL"
+                    if spec["key"] == "open_url"
+                    else "command"
+                    if spec["key"] == "run_command"
+                    else "message"
+                )
+                + " at the cursor."
+            )
             btn.connect("clicked", self._on_insert, spec["insert_token"])
             inserter_row.pack_start(btn, False, False, 0)
         self._detail_container.pack_start(inserter_row, False, False, 0)
@@ -766,7 +807,8 @@ class RecipeWizard:
         extra_label = Gtk.Label(xalign=0)
         extra_label.set_markup(
             "<span foreground='#9aa3b8' size='small'>"
-            "Or insert a dynamic value (filled in when the button runs):</span>")
+            "Or insert a dynamic value (filled in when the button runs):</span>"
+        )
         extra_label.set_margin_top(6)
         self._detail_container.pack_start(extra_label, False, False, 0)
         extra_flow = Gtk.FlowBox()
@@ -775,18 +817,17 @@ class RecipeWizard:
         extra_flow.set_column_spacing(4)
         extra_flow.set_row_spacing(4)
         for chip_label, chip_token, chip_tip in [
-            ("{date}",       "{date}",       "Today's date, e.g. 2026-05-27"),
-            ("{time}",       "{time}",       "Current time, e.g. 14:30"),
-            ("{weekday}",    "{weekday}",    "Name of the day"),
-            ("{date:+7d}",   "{date:+7d}",   "Date math: +7d, -1w, +3m, +2y"),
-            ("{name}",       "{name}",       "Your full name (from your user account)"),
-            ("{clipboard}",  "{clipboard}",  "Whatever's on your clipboard when the button runs"),
-            ("{selection}",  "{selection}",  "Whatever text is highlighted on screen"),
+            ("{date}", "{date}", "Today's date, e.g. 2026-05-27"),
+            ("{time}", "{time}", "Current time, e.g. 14:30"),
+            ("{weekday}", "{weekday}", "Name of the day"),
+            ("{date:+7d}", "{date:+7d}", "Date math: +7d, -1w, +3m, +2y"),
+            ("{name}", "{name}", "Your full name (from your user account)"),
+            ("{clipboard}", "{clipboard}", "Whatever's on your clipboard when the button runs"),
+            ("{selection}", "{selection}", "Whatever text is highlighted on screen"),
         ]:
             chip = Gtk.Button(label=chip_label)
             chip.set_tooltip_text(chip_tip)
-            chip.connect("clicked",
-                          lambda _b, t=chip_token: self._on_insert(None, t))
+            chip.connect("clicked", lambda _b, t=chip_token: self._on_insert(None, t))
             extra_flow.add(chip)
         self._detail_container.pack_start(extra_flow, False, False, 0)
 
@@ -798,7 +839,8 @@ class RecipeWizard:
             ex_label = Gtk.Label(xalign=0)
             ex_label.set_markup(
                 "<span foreground='#9aa3b8' size='small'>"
-                "Try one of these - click to fill the box above:</span>")
+                "Try one of these - click to fill the box above:</span>"
+            )
             ex_label.set_margin_top(4)
             self._detail_container.pack_start(ex_label, False, False, 0)
 
@@ -819,8 +861,7 @@ class RecipeWizard:
         # Warning (run_command)
         if spec.get("warning"):
             warn = Gtk.Label(xalign=0)
-            warn.set_markup(
-                "<b>Heads up:</b> " + GLib.markup_escape_text(spec["warning"]))
+            warn.set_markup("<b>Heads up:</b> " + GLib.markup_escape_text(spec["warning"]))
             warn.set_line_wrap(True)
             warn.get_style_context().add_class("lp-warning")
             self._detail_container.pack_start(warn, False, False, 0)
@@ -832,8 +873,7 @@ class RecipeWizard:
         p_head.set_markup(f"<b>{spec['preview_label']}</b>")
         prev_card.pack_start(p_head, False, False, 0)
         p_verb = Gtk.Label(xalign=0)
-        p_verb.set_markup(
-            f"<span foreground='#9aa3b8' size='small'>{spec['preview_verb']}</span>")
+        p_verb.set_markup(f"<span foreground='#9aa3b8' size='small'>{spec['preview_verb']}</span>")
         prev_card.pack_start(p_verb, False, False, 0)
         self._preview_result = Gtk.Label(xalign=0)
         self._preview_result.set_line_wrap(True)
@@ -893,16 +933,17 @@ class RecipeWizard:
     def _refresh_preview_result(self) -> None:
         if not hasattr(self, "_preview_result"):
             return
-        rendered = recipe_loader._render(
-            self._state.get("template") or "", _SAMPLE_SELECTION)
+        rendered = recipe_loader._render(self._state.get("template") or "", _SAMPLE_SELECTION)
         if not rendered.strip():
             # When the placeholder is showing, the box isn't empty but
             # state.template is - explain that explicitly so the user
             # doesn't wonder why the preview is blank.
-            hint = ("(the grey text above is just an example - type "
-                    "your own or click one of the chips to set it)"
-                    if getattr(self, "_placeholder_active", False)
-                    else "(nothing yet - pick a template above)")
+            hint = (
+                "(the grey text above is just an example - type "
+                "your own or click one of the chips to set it)"
+                if getattr(self, "_placeholder_active", False)
+                else "(nothing yet - pick a template above)"
+            )
             self._preview_result.set_text(hint)
             return
         spec = _ACTION_BY_KEY[self._state["action_type"]]
@@ -918,9 +959,14 @@ class RecipeWizard:
     # ---- page 5: when to show -----------------------------------------------
 
     def _add_filter_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
-                       margin_top=20, margin_bottom=20,
-                       margin_start=28, margin_end=28)
+        page = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=12,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=28,
+            margin_end=28,
+        )
 
         title = Gtk.Label(xalign=0)
         title.set_markup("<span size='x-large' weight='bold'>When should it show up?</span>")
@@ -928,24 +974,24 @@ class RecipeWizard:
 
         subtitle = Gtk.Label(xalign=0)
         subtitle.set_markup(
-            "<span foreground='#9aa3b8'>You can leave this as 'always' -- "
-            "most people do.</span>"
+            "<span foreground='#9aa3b8'>You can leave this as 'always' -- most people do.</span>"
         )
         page.pack_start(subtitle, False, False, 0)
 
         self._always_radio = Gtk.RadioButton.new_with_label_from_widget(
-            None, "Always -- show on any selected text")
+            None, "Always -- show on any selected text"
+        )
         self._always_radio.set_active(not self._state["content_types"])
         page.pack_start(self._always_radio, False, False, 0)
 
         self._only_radio = Gtk.RadioButton.new_with_label_from_widget(
-            self._always_radio, "Only when I've selected one of these:")
+            self._always_radio, "Only when I've selected one of these:"
+        )
         self._only_radio.set_active(bool(self._state["content_types"]))
         page.pack_start(self._only_radio, False, False, 0)
 
         # Indented checkboxes
-        cb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
-                        margin_start=28)
+        cb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_start=28)
         self._type_checks: dict[str, Gtk.CheckButton] = {}
         for key, label in _CONTENT_TYPES:
             cb = Gtk.CheckButton(label=label)
@@ -960,6 +1006,7 @@ class RecipeWizard:
             only = self._only_radio.get_active()
             cb_box.set_sensitive(only)
             self._on_filter_changed()
+
         self._always_radio.connect("toggled", sync)
         self._only_radio.connect("toggled", sync)
         sync()
@@ -980,10 +1027,14 @@ class RecipeWizard:
     # ---- page 6: confirm ----------------------------------------------------
 
     def _add_confirm_page(self, a: Gtk.Assistant) -> None:
-        self._confirm_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL,
-                                          spacing=14,
-                                          margin_top=20, margin_bottom=20,
-                                          margin_start=28, margin_end=28)
+        self._confirm_container = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=14,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=28,
+            margin_end=28,
+        )
         self._refresh_confirm_page()
         a.append_page(self._confirm_container)
         a.set_page_type(self._confirm_container, Gtk.AssistantPageType.CONFIRM)
@@ -1015,29 +1066,30 @@ class RecipeWizard:
         card.get_style_context().add_class("lp-preview-card")
 
         icon_img = Gtk.Image.new_from_icon_name(
-            self._state.get("icon") or "applications-other", Gtk.IconSize.DIALOG)
+            self._state.get("icon") or "applications-other", Gtk.IconSize.DIALOG
+        )
         card.pack_start(icon_img, False, False, 0)
 
         info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         name = (self._state.get("tooltip") or "").strip() or "(unnamed)"
         nlbl = Gtk.Label(xalign=0)
-        nlbl.set_markup(f"<span size='large' weight='bold'>"
-                        f"{GLib.markup_escape_text(name)}</span>")
+        nlbl.set_markup(f"<span size='large' weight='bold'>{GLib.markup_escape_text(name)}</span>")
         info.pack_start(nlbl, False, False, 0)
 
         action_descr = Gtk.Label(xalign=0)
         action_descr.set_markup(
-            f"<span foreground='#9aa3b8'>{GLib.markup_escape_text(spec['blurb'])}</span>")
+            f"<span foreground='#9aa3b8'>{GLib.markup_escape_text(spec['blurb'])}</span>"
+        )
         action_descr.set_line_wrap(True)
         info.pack_start(action_descr, False, False, 0)
 
         # Render the actual outcome for the sample selection
-        rendered = recipe_loader._render(
-            self._state.get("template") or "", _SAMPLE_SELECTION)
+        rendered = recipe_loader._render(self._state.get("template") or "", _SAMPLE_SELECTION)
         verb_lbl = Gtk.Label(xalign=0)
         verb_lbl.set_markup(
             f"<span size='small'>When you select "
-            f"<b>\"{_SAMPLE_SELECTION}\"</b> and click it:</span>")
+            f'<b>"{_SAMPLE_SELECTION}"</b> and click it:</span>'
+        )
         info.pack_start(verb_lbl, False, False, 0)
 
         result_lbl = Gtk.Label(xalign=0)
@@ -1051,14 +1103,15 @@ class RecipeWizard:
         info.pack_start(result_lbl, False, False, 0)
 
         # When to show
-        when = ", ".join(
-            label for k, label in _CONTENT_TYPES
-            if k in self._state["content_types"]
-        ) or "any selected text"
+        when = (
+            ", ".join(label for k, label in _CONTENT_TYPES if k in self._state["content_types"])
+            or "any selected text"
+        )
         when_lbl = Gtk.Label(xalign=0)
         when_lbl.set_markup(
             f"<span size='small' foreground='#9aa3b8'>"
-            f"Shows on: {GLib.markup_escape_text(when)}</span>")
+            f"Shows on: {GLib.markup_escape_text(when)}</span>"
+        )
         info.pack_start(when_lbl, False, False, 0)
 
         card.pack_start(info, True, True, 0)
@@ -1069,8 +1122,7 @@ class RecipeWizard:
         errors = recipe_loader.validate(provisional)
         if errors:
             warn = Gtk.Label(xalign=0)
-            warn.set_markup("<b>One more thing:</b> " +
-                            GLib.markup_escape_text(errors[0]))
+            warn.set_markup("<b>One more thing:</b> " + GLib.markup_escape_text(errors[0]))
             warn.set_line_wrap(True)
             warn.get_style_context().add_class("lp-warning")
             self._confirm_container.pack_start(warn, False, False, 0)
@@ -1081,8 +1133,7 @@ class RecipeWizard:
     def _build_recipe_dict(self) -> dict:
         # Derive an internal name from the user's button label if they're
         # creating fresh -- they shouldn't have to invent a filename.
-        name = self._state.get("name") or _slugify(
-            self._state.get("tooltip") or "custom-button")
+        name = self._state.get("name") or _slugify(self._state.get("tooltip") or "custom-button")
         return dict(
             name=name,
             tooltip=(self._state.get("tooltip") or "").strip(),
@@ -1099,7 +1150,8 @@ class RecipeWizard:
         errors = recipe_loader.validate(recipe)
         if errors:
             msg = Gtk.MessageDialog(
-                transient_for=a, modal=True,
+                transient_for=a,
+                modal=True,
                 message_type=Gtk.MessageType.WARNING,
                 buttons=Gtk.ButtonsType.OK,
                 text="Couldn't save just yet",

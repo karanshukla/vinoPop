@@ -13,6 +13,7 @@ startup (and after install via the Plugin Manager).
 
 ```python
 """Example plugin: shout the selected text into a notification."""
+
 import subprocess
 
 from classifier import ContentType
@@ -27,14 +28,16 @@ def _shout(text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="shout",
-        icon="face-surprise-symbolic",
-        tooltip="SHOUT IT",
-        handler=_shout,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=50,
-    ))
+    register_plugin(
+        Plugin(
+            name="shout",
+            icon="face-surprise-symbolic",
+            tooltip="SHOUT IT",
+            handler=_shout,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=50,
+        )
+    )
 ```
 
 Save as `~/.config/linuxpop/plugins/shout.py` and restart LinuxPop. Select
@@ -97,9 +100,29 @@ Please file an issue. Include:
 - Output of `python3 main.py --debug`
 - Steps to reproduce
 
+## Development setup
+
+The app runs on your distro's PyGObject/GTK, so run it with the system
+Python (see README). The checks don't need GTK or OpenVINO; this is what
+CI does:
+
+```bash
+uv venv
+uv pip install --group dev
+uv run poe check    # ruff, ruff format --check, mypy, pytest
+```
+
+`uv run poe fix` applies ruff's fixes and formatting, and
+`uv run poe security` runs the same Bandit scan as CI.
+
 ## Pull requests
 
 - Keep PRs focused - one concern per PR
-- Match the existing code style (PEP 8, type hints where possible)
+- `uv run poe check` passes before you push
+- Tests cover what runs without a display. If a change can only be
+  verified on a desktop or on the NPU, say so in the PR instead of faking
+  a test
+- Commits are conventional (`feat:`, `fix:`, `docs:`, ...); the changelog
+  is generated from them with git-cliff (`cliff.toml`)
 - Don't add user-facing strings in languages other than English
 - For new top-level features, update README.md

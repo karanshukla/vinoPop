@@ -6,13 +6,12 @@ without migrating to GTK4.
 
 Apply-on-change semantics: edits save immediately, no Save/Cancel buttons.
 """
+
 from __future__ import annotations
 
-import shlex
-import shutil
 import subprocess
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import gi
 
@@ -48,6 +47,7 @@ def _unwrap_subtitle_labels(root: Gtk.Widget) -> None:
     rows during its own first allocation pass, which would replace the
     labels we just patched.
     """
+
     def visit(widget: Gtk.Widget) -> None:
         if isinstance(widget, Gtk.Label):
             try:
@@ -73,10 +73,13 @@ def _unwrap_subtitle_labels(root: Gtk.Widget) -> None:
                 children = widget.get_children()
             for c in children:
                 visit(c)
+
     visit(root)
+
     def _again() -> bool:
         visit(root)
         return False
+
     GLib.idle_add(_again)
     GLib.timeout_add(150, _again)
 
@@ -95,8 +98,7 @@ def _open_text_editor_modal(
     dlg = Gtk.Dialog(title=title, transient_for=parent, flags=0)
     dlg.set_default_size(580, 420)
     dlg.set_icon_name("linuxpop")
-    dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL,
-                    "Save", Gtk.ResponseType.OK)
+    dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
     dlg.set_default_response(Gtk.ResponseType.OK)
 
     content = dlg.get_content_area()
@@ -241,12 +243,18 @@ def _force_to_front(window: Gtk.Window) -> None:
 
 
 _MODIFIER_KEYVALS = {
-    Gdk.KEY_Control_L, Gdk.KEY_Control_R,
-    Gdk.KEY_Shift_L, Gdk.KEY_Shift_R,
-    Gdk.KEY_Alt_L, Gdk.KEY_Alt_R,
-    Gdk.KEY_Super_L, Gdk.KEY_Super_R,
-    Gdk.KEY_Meta_L, Gdk.KEY_Meta_R,
-    Gdk.KEY_Hyper_L, Gdk.KEY_Hyper_R,
+    Gdk.KEY_Control_L,
+    Gdk.KEY_Control_R,
+    Gdk.KEY_Shift_L,
+    Gdk.KEY_Shift_R,
+    Gdk.KEY_Alt_L,
+    Gdk.KEY_Alt_R,
+    Gdk.KEY_Super_L,
+    Gdk.KEY_Super_R,
+    Gdk.KEY_Meta_L,
+    Gdk.KEY_Meta_R,
+    Gdk.KEY_Hyper_L,
+    Gdk.KEY_Hyper_R,
 }
 
 
@@ -307,13 +315,13 @@ class HotkeyRecorder(Gtk.Button):
     def _on_key_press(self, _widget, event):
         if not self._recording:
             return False
-        plain_esc = (
-            event.keyval == Gdk.KEY_Escape
-            and not (event.state & (
+        plain_esc = event.keyval == Gdk.KEY_Escape and not (
+            event.state
+            & (
                 Gdk.ModifierType.CONTROL_MASK
                 | Gdk.ModifierType.MOD1_MASK
                 | Gdk.ModifierType.MOD4_MASK
-            ))
+            )
         )
         if plain_esc:
             self._recording = False
@@ -417,8 +425,7 @@ class SettingsDialog:
         ctx.add_class("lp-badge")
         ctx.add_class(f"lp-badge-{color_index % 4}")
         it = Gtk.IconTheme.get_default()
-        name = icon_name if (icon_name and it.has_icon(icon_name)) \
-            else "emblem-system-symbolic"
+        name = icon_name if (icon_name and it.has_icon(icon_name)) else "emblem-system-symbolic"
         img = Gtk.Image.new_from_icon_name(name, Gtk.IconSize.BUTTON)
         img.set_pixel_size(17)
         img.get_style_context().add_class("lp-badge-glyph")
@@ -458,12 +465,13 @@ class SettingsDialog:
         theme_row.set_subtitle(
             "Dark uses the cobalt + violet palette. Light gives you the "
             "same layout on a clean off-white. 'Follow system' picks one "
-            "based on your desktop theme.")
+            "based on your desktop theme."
+        )
         theme_combo = Gtk.ComboBoxText()
         theme_combo.set_valign(Gtk.Align.CENTER)
         theme_options = [
-            ("dark",   "Dark"),
-            ("light",  "Light"),
+            ("dark", "Dark"),
+            ("light", "Light"),
             ("system", "Follow system"),
         ]
         for key, label in theme_options:
@@ -476,6 +484,7 @@ class SettingsDialog:
             self._save_key("theme", mode)
             try:
                 import theme as _theme
+
                 _theme.install_premium_theme(mode)
             except Exception as exc:
                 print(f"[settings] theme reload failed: {exc}")
@@ -483,9 +492,11 @@ class SettingsDialog:
             # selection popup picks up the new palette too.
             try:
                 import popup as _popup
+
                 _popup.reinstall_popup_css()
             except Exception as exc:
                 print(f"[settings] popup theme reload failed: {exc}")
+
         theme_combo.connect("changed", _on_theme_changed)
         theme_row.add(theme_combo)
         theme_row.set_activatable_widget(theme_combo)
@@ -503,10 +514,14 @@ class SettingsDialog:
             "16 is small and dense; 32 is roomy and easy to click. "
             "Tip: smaller buttons also fit more actions on a single row "
             "before the popup has to wrap or expand (see ‘When actions "
-            "overflow’ below).")
+            "overflow’ below)."
+        )
         size_adj = Gtk.Adjustment(
             value=int(self._settings.get("popup_button_size", 22) or 22),
-            lower=16, upper=32, step_increment=1, page_increment=4,
+            lower=16,
+            upper=32,
+            step_increment=1,
+            page_increment=4,
         )
         size_spin = Gtk.SpinButton()
         size_spin.set_valign(Gtk.Align.CENTER)
@@ -519,9 +534,11 @@ class SettingsDialog:
             # show_for() renders at the new size.
             try:
                 import popup as _popup
+
                 _popup.reinstall_popup_css()
             except Exception as exc:
                 print(f"[settings] popup css reload failed: {exc}")
+
         size_spin.connect("value-changed", _on_size_changed)
         size_row.add(size_spin)
         size_row.set_activatable_widget(size_spin)
@@ -532,11 +549,12 @@ class SettingsDialog:
         icon_row.set_title("Plugin icon style")
         icon_row.set_subtitle(
             "Colourful tiles, or uniform mono glyphs that match the plain "
-            "edit icons. Applies to the popup and Plugin Manager.")
+            "edit icons. Applies to the popup and Plugin Manager."
+        )
         icon_combo = Gtk.ComboBoxText()
         icon_combo.append("color", "Colourful tiles")
         icon_combo.append("glyph", "Simple glyphs")
-        _cur_style = (self._settings.get("icon_style") or "color")
+        _cur_style = self._settings.get("icon_style") or "color"
         if _cur_style not in ("color", "glyph"):
             _cur_style = "color"
         icon_combo.set_active_id(_cur_style)
@@ -546,8 +564,7 @@ class SettingsDialog:
         group.add(icon_row)
 
         # Live preview strip: sample icons rendered in the chosen style.
-        icon_preview = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                               spacing=12)
+        icon_preview = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         icon_preview.set_halign(Gtk.Align.CENTER)
         icon_preview.set_margin_top(8)
         icon_preview.set_margin_bottom(12)
@@ -557,12 +574,12 @@ class SettingsDialog:
                 ch.destroy()
             try:
                 import icon_style as _ist
+
                 concepts = _ist.PREVIEW_CONCEPTS
             except Exception:
                 concepts = []
             for concept in concepts:
-                nm = (f"linuxpop-{concept}-symbolic" if style == "glyph"
-                      else f"linuxpop-{concept}")
+                nm = f"linuxpop-{concept}-symbolic" if style == "glyph" else f"linuxpop-{concept}"
                 im = Gtk.Image.new_from_icon_name(nm, Gtk.IconSize.DND)
                 im.set_pixel_size(30)
                 icon_preview.pack_start(im, False, False, 0)
@@ -575,6 +592,7 @@ class SettingsDialog:
             style = combo.get_active_id() or "color"
             self._save_key("icon_style", style)
             _rebuild_icon_preview(style)
+
         icon_combo.connect("changed", _on_icon_style_changed)
 
         # ----- Tray icon: coloured badge vs mono glyph for light/dark panels -----
@@ -583,12 +601,13 @@ class SettingsDialog:
         tray_row.set_subtitle(
             "The colour badge is visible on any panel. The mono styles let you "
             "match your panel manually (KDE won't recolour it automatically): "
-            "Light for a dark panel, Dark for a light panel.")
+            "Light for a dark panel, Dark for a light panel."
+        )
         tray_combo = Gtk.ComboBoxText()
         tray_combo.append("color", "Colour (any panel)")
         tray_combo.append("light", "Light mono (dark panels)")
         tray_combo.append("dark", "Dark mono (light panels)")
-        _cur_tray = (self._settings.get("tray_icon_style") or "color")
+        _cur_tray = self._settings.get("tray_icon_style") or "color"
         if _cur_tray not in ("color", "light", "dark"):
             _cur_tray = "color"
         tray_combo.set_active_id(_cur_tray)
@@ -601,6 +620,7 @@ class SettingsDialog:
             # _save_key fires the on_changed chain -> main.py tells the tray
             # subprocess to re-render its icon live (no restart needed).
             self._save_key("tray_icon_style", combo.get_active_id() or "color")
+
         tray_combo.connect("changed", _on_tray_icon_changed)
 
         # Max buttons per popup: how many actions can show before the
@@ -615,18 +635,22 @@ class SettingsDialog:
             "Cap on how many actions the popup shows. Extras wrap to "
             "a second row first; beyond that, a '+N' chip lets you open "
             "Plugin Manager to reorder. Raise this if you have lots of "
-            "plugins enabled and want them all visible.")
+            "plugins enabled and want them all visible."
+        )
         count_adj = Gtk.Adjustment(
             value=int(self._settings.get("max_popup_buttons", 24) or 24),
-            lower=4, upper=40, step_increment=1, page_increment=4,
+            lower=4,
+            upper=40,
+            step_increment=1,
+            page_increment=4,
         )
         count_spin = Gtk.SpinButton()
         count_spin.set_valign(Gtk.Align.CENTER)
         count_spin.set_adjustment(count_adj)
         count_spin.set_numeric(True)
         count_spin.connect(
-            "value-changed",
-            lambda spin: self._save_key("max_popup_buttons", int(spin.get_value())))
+            "value-changed", lambda spin: self._save_key("max_popup_buttons", int(spin.get_value()))
+        )
         count_row.add(count_spin)
         count_row.set_activatable_widget(count_spin)
         group.add(count_row)
@@ -639,7 +663,8 @@ class SettingsDialog:
             "How the popup handles more actions than fit on one line. "
             "‘One row + expand arrow’ stays compact and reveals the rest on "
             "click; ‘Wrap’ uses two rows; ‘One row only’ hides extras behind "
-            "a +N chip.")
+            "a +N chip."
+        )
         ov_combo = Gtk.ComboBoxText()
         ov_combo.set_valign(Gtk.Align.CENTER)
         for _key, _label in (
@@ -648,12 +673,11 @@ class SettingsDialog:
             ("cap", "One row only (+N chip)"),
         ):
             ov_combo.append(_key, _label)
-        ov_combo.set_active_id(
-            (self._settings.get("popup_overflow_mode") or "expand"))
+        ov_combo.set_active_id(self._settings.get("popup_overflow_mode") or "expand")
         ov_combo.connect(
             "changed",
-            lambda c: self._save_key(
-                "popup_overflow_mode", c.get_active_id() or "expand"))
+            lambda c: self._save_key("popup_overflow_mode", c.get_active_id() or "expand"),
+        )
         ov_row.add(ov_combo)
         ov_row.set_activatable_widget(ov_combo)
         group.add(ov_row)
@@ -674,14 +698,14 @@ class SettingsDialog:
         hk_row.set_subtitle(
             "Press this anywhere to open the popup. If you have text "
             "highlighted, it shows actions for that text. If not, it "
-            "shows a paste menu instead.")
+            "shows a paste menu instead."
+        )
         recorder = HotkeyRecorder(
             self._settings.get("hotkey") or "",
             on_changed=lambda v: self._save_key("hotkey", v),
         )
         hk_row.add(recorder)
-        clear = Gtk.Button.new_from_icon_name(
-            "edit-clear-symbolic", Gtk.IconSize.BUTTON)
+        clear = Gtk.Button.new_from_icon_name("edit-clear-symbolic", Gtk.IconSize.BUTTON)
         clear.set_valign(Gtk.Align.CENTER)
         clear.set_tooltip_text("Disable hotkey")
         clear.connect("clicked", lambda *_: recorder.set_value(""))
@@ -697,12 +721,12 @@ class SettingsDialog:
         ocr_row.set_title("Screen OCR hotkey")
         try:
             from screen_ocr import is_supported as _ocr_supported
+
             ocr_ok, ocr_reason = _ocr_supported()
         except Exception:
             ocr_ok, ocr_reason = False, "screen_ocr module not available"
         if ocr_ok:
-            ocr_row.set_subtitle(
-                "Draw a box anywhere; the text inside is copied as text.")
+            ocr_row.set_subtitle("Draw a box anywhere; the text inside is copied as text.")
         else:
             ocr_row.set_subtitle(f"Setup needed: {ocr_reason}.")
         ocr_recorder = HotkeyRecorder(
@@ -717,6 +741,7 @@ class SettingsDialog:
         if not ocr_ok:
             try:
                 from screen_ocr import install_argv as _ocr_install_argv
+
                 argv = _ocr_install_argv()
             except Exception:
                 argv = None
@@ -724,36 +749,34 @@ class SettingsDialog:
             ocr_install_btn.set_valign(Gtk.Align.CENTER)
             ocr_install_btn.get_style_context().add_class("suggested-action")
             ocr_install_btn.set_tooltip_text(
-                "Installs the OCR tools in the background "
-                "(asks for your password).")
+                "Installs the OCR tools in the background (asks for your password)."
+            )
             if argv is None:
                 ocr_install_btn.set_sensitive(False)
                 ocr_install_btn.set_tooltip_text(
-                    "Couldn't detect your package manager - please "
-                    "install tesseract manually.")
+                    "Couldn't detect your package manager - please install tesseract manually."
+                )
 
             def _on_ocr_install(btn, argv=argv, row=ocr_row):
                 if not argv:
                     return
                 btn.set_sensitive(False)
                 btn.set_label("Installing...")
-                row.set_subtitle(
-                    "Installing - authorise the password prompt...")
+                row.set_subtitle("Installing - authorise the password prompt...")
 
                 def _done(ok, err):
                     try:
                         from screen_ocr import is_supported as _sup
+
                         now_ok, reason = _sup()
                     except Exception:
                         now_ok, reason = ok, ""
                     if now_ok:
-                        row.set_subtitle(
-                            "Ready. Draw a box anywhere to copy its text.")
+                        row.set_subtitle("Ready. Draw a box anywhere to copy its text.")
                         btn.set_label("Installed")
                         btn.set_sensitive(False)
                         try:
-                            btn.get_style_context().remove_class(
-                                "suggested-action")
+                            btn.get_style_context().remove_class("suggested-action")
                         except Exception:
                             pass
                         # Bind the hotkey now that the backend works.
@@ -763,9 +786,7 @@ class SettingsDialog:
                             except Exception:
                                 pass
                     else:
-                        row.set_subtitle(
-                            f"Install didn't complete: {reason or err}. "
-                            "Try again.")
+                        row.set_subtitle(f"Install didn't complete: {reason or err}. Try again.")
                         btn.set_label("Install")
                         btn.set_sensitive(True)
                     return False
@@ -773,24 +794,20 @@ class SettingsDialog:
                 def _worker():
                     ok, err = False, ""
                     try:
-                        res = subprocess.run(
-                            argv, capture_output=True, timeout=600)
+                        res = subprocess.run(argv, capture_output=True, timeout=600)
                         ok = res.returncode == 0
                         if not ok:
-                            err = (res.stderr or b"").decode(
-                                "utf-8", "replace").strip()[-160:]
+                            err = (res.stderr or b"").decode("utf-8", "replace").strip()[-160:]
                     except Exception as exc:  # noqa: BLE001
                         err = str(exc)
                     GLib.idle_add(_done, ok, err)
 
-                threading.Thread(target=_worker, daemon=True,
-                                 name="ocr-install").start()
+                threading.Thread(target=_worker, daemon=True, name="ocr-install").start()
 
             ocr_install_btn.connect("clicked", _on_ocr_install)
             ocr_row.add(ocr_install_btn)
         ocr_row.add(ocr_recorder)
-        ocr_clear = Gtk.Button.new_from_icon_name(
-            "edit-clear-symbolic", Gtk.IconSize.BUTTON)
+        ocr_clear = Gtk.Button.new_from_icon_name("edit-clear-symbolic", Gtk.IconSize.BUTTON)
         ocr_clear.set_valign(Gtk.Align.CENTER)
         ocr_clear.set_tooltip_text("Disable hotkey")
         ocr_clear.connect("clicked", lambda *_: ocr_recorder.set_value(""))
@@ -800,8 +817,7 @@ class SettingsDialog:
         # Auto-popup on selection (switch row)
         sel_row = Handy.ActionRow()
         sel_row.set_title("Auto-popup on selection")
-        sel_row.set_subtitle(
-            "Show the popup automatically whenever you highlight text in any app.")
+        sel_row.set_subtitle("Show the popup automatically whenever you highlight text in any app.")
         sel_switch = Gtk.Switch()
         sel_switch.set_valign(Gtk.Align.CENTER)
         sel_switch.set_active(bool(self._settings.get("show_on_selection")))
@@ -822,13 +838,12 @@ class SettingsDialog:
             "Requires watching mouse clicks globally (nothing is logged or "
             "sent). On Wayland this reaches XWayland windows only - for "
             "native Wayland apps, press the popup hotkey instead; it shows "
-            "the same menu when nothing is selected.")
+            "the same menu when nothing is selected."
+        )
         dbl_switch = Gtk.Switch()
         dbl_switch.set_valign(Gtk.Align.CENTER)
-        dbl_switch.set_active(
-            bool(self._settings.get("double_click_popup_enabled", False)))
-        dbl_switch.connect(
-            "notify::active", self._on_switch, "double_click_popup_enabled")
+        dbl_switch.set_active(bool(self._settings.get("double_click_popup_enabled", False)))
+        dbl_switch.connect("notify::active", self._on_switch, "double_click_popup_enabled")
         # Live-apply happens through the settings on_changed callback in
         # main.py - no separate plumbing needed here.
         dbl_row.add(dbl_switch)
@@ -840,13 +855,14 @@ class SettingsDialog:
         mod_row.set_subtitle(
             "Which key must be held during the double-click. "
             "Ctrl is the safest default; pick another if Ctrl is "
-            "already mapped to something you do with the mouse.")
+            "already mapped to something you do with the mouse."
+        )
         mod_combo = Gtk.ComboBoxText()
         mod_combo.set_valign(Gtk.Align.CENTER)
         for key, label in [
-            ("ctrl",  "Ctrl"),
+            ("ctrl", "Ctrl"),
             ("shift", "Shift"),
-            ("alt",   "Alt"),
+            ("alt", "Alt"),
             ("super", "Super (Windows key)"),
         ]:
             mod_combo.append(key, label)
@@ -854,17 +870,14 @@ class SettingsDialog:
         mod_combo.set_active_id(current_mod)
         mod_combo.connect(
             "changed",
-            lambda c: self._save_key(
-                "double_click_modifier", c.get_active_id() or "ctrl"))
+            lambda c: self._save_key("double_click_modifier", c.get_active_id() or "ctrl"),
+        )
         mod_row.add(mod_combo)
         mod_row.set_activatable_widget(mod_combo)
         # Sensitive only when the toggle above is on, so it's obvious
         # the picker is doing nothing while the feature itself is off.
-        mod_row.set_sensitive(
-            bool(self._settings.get("double_click_popup_enabled", False)))
-        dbl_switch.connect(
-            "notify::active",
-            lambda s, _p: mod_row.set_sensitive(s.get_active()))
+        mod_row.set_sensitive(bool(self._settings.get("double_click_popup_enabled", False)))
+        dbl_switch.connect("notify::active", lambda s, _p: mod_row.set_sensitive(s.get_active()))
         group.add(mod_row)
 
         # Force-all-plugins modifier. Held while making a selection,
@@ -881,8 +894,9 @@ class SettingsDialog:
             "least. Alt and Super are usually bound to the window-"
             "manager's move gesture (Alt+drag = move window in Cinnamon "
             "by default). Ctrl breaks word-by-word text selection in "
-            "many editors. Shift extends a selection. Pick \"None\" to "
-            "leave the feature off.")
+            'many editors. Shift extends a selection. Pick "None" to '
+            "leave the feature off."
+        )
         force_combo = Gtk.ComboBoxText()
         force_combo.set_valign(Gtk.Align.CENTER)
         # Keep the dropdown labels SHORT - the per-key caveats live in the
@@ -891,22 +905,20 @@ class SettingsDialog:
         # and squeezes it into a tall narrow ribbon (there is no width clamp
         # on the row).
         for key, label in [
-            ("",      "None (off)"),
-            ("ctrl",  "Ctrl"),
-            ("alt",   "Alt"),
+            ("", "None (off)"),
+            ("ctrl", "Ctrl"),
+            ("alt", "Alt"),
             ("super", "Super"),
             ("shift", "Shift"),
         ]:
             force_combo.append(key, label)
-        current_force = (
-            self._settings.get("popup_force_all_modifier") or "").lower()
+        current_force = (self._settings.get("popup_force_all_modifier") or "").lower()
         # ComboBoxText uses empty-string id for "None"; map None/empty
         # back to the literal "" id.
         force_combo.set_active_id(current_force if current_force else "")
         force_combo.connect(
-            "changed",
-            lambda c: self._save_key(
-                "popup_force_all_modifier", c.get_active_id() or ""))
+            "changed", lambda c: self._save_key("popup_force_all_modifier", c.get_active_id() or "")
+        )
         force_row.add(force_combo)
         force_row.set_activatable_widget(force_combo)
         group.add(force_row)
@@ -921,13 +933,17 @@ class SettingsDialog:
         auto_switch.set_valign(Gtk.Align.CENTER)
         try:
             import autostart
+
             auto_switch.set_active(autostart.is_enabled())
+
             def _on_auto_toggle(sw, _p):
                 import autostart as _as
+
                 ok = _as.set_enabled(sw.get_active())
                 if not ok:
                     # Revert the visual if writing failed
                     sw.set_active(not sw.get_active())
+
             auto_switch.connect("notify::active", _on_auto_toggle)
         except Exception:
             auto_switch.set_sensitive(False)
@@ -942,7 +958,8 @@ class SettingsDialog:
         group.set_title("Snippets & Clipboard")
         group.set_description(
             "The picker that remembers what you've copied and the snippets "
-            "you save for reuse. Most of LinuxPop lives here.")
+            "you save for reuse. Most of LinuxPop lives here."
+        )
 
         # Clipboard plugin master toggle. When off, the background
         # selection-watcher thread is not started, the picker hotkey
@@ -951,13 +968,12 @@ class SettingsDialog:
         clip_master_row.set_title("Clipboard history")
         clip_master_row.set_subtitle(
             "Remember things you've recently copied so you can paste them "
-            "later. Turn off to stop LinuxPop from watching the clipboard.")
+            "later. Turn off to stop LinuxPop from watching the clipboard."
+        )
         clip_master_switch = Gtk.Switch()
         clip_master_switch.set_valign(Gtk.Align.CENTER)
-        clip_master_switch.set_active(
-            bool(self._settings.get("clipboard_history_enabled", True)))
-        clip_master_switch.connect(
-            "notify::active", self._on_switch, "clipboard_history_enabled")
+        clip_master_switch.set_active(bool(self._settings.get("clipboard_history_enabled", True)))
+        clip_master_switch.connect("notify::active", self._on_switch, "clipboard_history_enabled")
         clip_master_row.add(clip_master_switch)
         clip_master_row.set_activatable_widget(clip_master_switch)
         group.add(clip_master_row)
@@ -970,7 +986,8 @@ class SettingsDialog:
         clip_row.set_subtitle(
             "A direct shortcut that opens the clipboard picker at the "
             "cursor. You don't have to set one - the popup hotkey above "
-            "already gets you there when nothing is highlighted.")
+            "already gets you there when nothing is highlighted."
+        )
         clip_recorder = HotkeyRecorder(
             self._settings.get("clipboard_hotkey") or "",
             on_changed=lambda v: self._save_key("clipboard_hotkey", v),
@@ -981,12 +998,11 @@ class SettingsDialog:
         clip_clear.set_tooltip_text("Disable")
         clip_clear.connect("clicked", lambda *_: clip_recorder.set_value(""))
         clip_row.add(clip_clear)
-        clip_row.set_sensitive(
-            bool(self._settings.get("clipboard_history_enabled", True)))
+        clip_row.set_sensitive(bool(self._settings.get("clipboard_history_enabled", True)))
         # Re-flow sensitivity when the master toggles
         clip_master_switch.connect(
-            "notify::active",
-            lambda s, _p: clip_row.set_sensitive(s.get_active()))
+            "notify::active", lambda s, _p: clip_row.set_sensitive(s.get_active())
+        )
         group.add(clip_row)
 
         # Snippet triggers (text expansion). Off by default - turning it
@@ -999,22 +1015,19 @@ class SettingsDialog:
             "When ON, typing a snippet's trigger code (e.g. ';email') followed "
             "by space or tab auto-expands it. Requires LinuxPop to watch "
             "global keystrokes locally - keys are matched against your "
-            "snippet triggers only, never logged or sent anywhere.")
+            "snippet triggers only, never logged or sent anywhere."
+        )
         trigger_switch = Gtk.Switch()
         trigger_switch.set_valign(Gtk.Align.CENTER)
-        trigger_switch.set_active(
-            bool(self._settings.get("snippet_triggers_enabled", False)))
-        trigger_switch.connect(
-            "notify::active", self._on_switch, "snippet_triggers_enabled")
-        trigger_switch.connect(
-            "notify::active", lambda *_: self._apply_trigger_toggle())
+        trigger_switch.set_active(bool(self._settings.get("snippet_triggers_enabled", False)))
+        trigger_switch.connect("notify::active", self._on_switch, "snippet_triggers_enabled")
+        trigger_switch.connect("notify::active", lambda *_: self._apply_trigger_toggle())
         trigger_row.add(trigger_switch)
         trigger_row.set_activatable_widget(trigger_switch)
-        trigger_row.set_sensitive(
-            bool(self._settings.get("clipboard_history_enabled", True)))
+        trigger_row.set_sensitive(bool(self._settings.get("clipboard_history_enabled", True)))
         clip_master_switch.connect(
-            "notify::active",
-            lambda s, _p: trigger_row.set_sensitive(s.get_active()))
+            "notify::active", lambda s, _p: trigger_row.set_sensitive(s.get_active())
+        )
         group.add(trigger_row)
 
         # Per-app/site blocklist for trigger expansion - opens a modal
@@ -1029,14 +1042,17 @@ class SettingsDialog:
             if count == 0:
                 tblock_row.set_subtitle(
                     "Useful for password fields, terminals, and "
-                    "security-sensitive sites. Click to add patterns.")
+                    "security-sensitive sites. Click to add patterns."
+                )
             else:
                 examples = ", ".join(patterns[:3])
                 if count > 3:
                     examples += f", +{count - 3} more"
                 tblock_row.set_subtitle(
                     f"{count} pattern{'s' if count != 1 else ''} blocked: "
-                    f"{examples}. Click to edit.")
+                    f"{examples}. Click to edit."
+                )
+
         _refresh_tblock_row()
 
         def _on_tblock_edit(_row, _gesture=None) -> None:
@@ -1049,7 +1065,8 @@ class SettingsDialog:
                     "Apps and sites where snippet triggers should NEVER "
                     "auto-expand. Useful for password managers, terminals, "
                     "and banking sites - places where typing 'rraak' is "
-                    "supposed to stay 'rraak'."),
+                    "supposed to stay 'rraak'."
+                ),
                 initial_text=initial,
                 placeholder_text=(
                     "Type one app or site per line. Each line is matched "
@@ -1062,19 +1079,17 @@ class SettingsDialog:
                     "  bank.no          - matches whatever your bank's\n"
                     "                     site name shows in the title\n"
                     "  1Password\n"
-                    "  Bitwarden"),
+                    "  Bitwarden"
+                ),
             )
             if new_text is None:
                 return
-            new_patterns = [
-                line.strip() for line in new_text.splitlines() if line.strip()
-            ]
+            new_patterns = [line.strip() for line in new_text.splitlines() if line.strip()]
             self._save_key("trigger_blocklist_patterns", new_patterns)
             _refresh_tblock_row()
 
         tblock_row.connect("activated", _on_tblock_edit)
-        edit_arrow = Gtk.Image.new_from_icon_name(
-            "document-edit-symbolic", Gtk.IconSize.BUTTON)
+        edit_arrow = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
         edit_arrow.set_valign(Gtk.Align.CENTER)
         tblock_row.add(edit_arrow)
         group.add(tblock_row)
@@ -1108,7 +1123,8 @@ class SettingsDialog:
             if count == 0:
                 vars_row.set_subtitle(
                     "Define your email, signature, phone, etc. once and "
-                    "use {var:name} across snippets. Click to add.")
+                    "use {var:name} across snippets. Click to add."
+                )
             else:
                 names = sorted(existing.keys())
                 preview = ", ".join(f"{{var:{n}}}" for n in names[:3])
@@ -1116,15 +1132,15 @@ class SettingsDialog:
                     preview += f", +{count - 3} more"
                 vars_row.set_subtitle(
                     f"{count} variable{'s' if count != 1 else ''} defined: "
-                    f"{preview}. Click to edit.")
+                    f"{preview}. Click to edit."
+                )
+
         _refresh_vars_row()
 
         def _on_vars_edit(_row, _gesture=None) -> None:
             existing = self._settings.get("snippet_variables") or {}
             if isinstance(existing, dict):
-                initial = "\n".join(
-                    f"{k} = {v}" for k, v in sorted(existing.items())
-                )
+                initial = "\n".join(f"{k} = {v}" for k, v in sorted(existing.items()))
             else:
                 initial = ""
             new_text = _open_text_editor_modal(
@@ -1135,7 +1151,8 @@ class SettingsDialog:
                     "Define a value once here, then write {var:name} "
                     "in any snippet to drop it in. Change the value "
                     "later and every snippet that uses it updates "
-                    "automatically."),
+                    "automatically."
+                ),
                 initial_text=initial,
                 placeholder_text=(
                     "Type one variable per line in the form\n"
@@ -1148,7 +1165,8 @@ class SettingsDialog:
                     "  company   = Acme AS\n"
                     "  address   = Karl Johans gate 1, 0154 Oslo\n\n"
                     "Names can be anything you'd recognise later -\n"
-                    "letters, digits, underscores, hyphens."),
+                    "letters, digits, underscores, hyphens."
+                ),
             )
             if new_text is None:
                 return
@@ -1156,8 +1174,7 @@ class SettingsDialog:
             _refresh_vars_row()
 
         vars_row.connect("activated", _on_vars_edit)
-        vars_arrow = Gtk.Image.new_from_icon_name(
-            "document-edit-symbolic", Gtk.IconSize.BUTTON)
+        vars_arrow = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
         vars_arrow.set_valign(Gtk.Align.CENTER)
         vars_row.add(vars_arrow)
         group.add(vars_row)
@@ -1171,20 +1188,18 @@ class SettingsDialog:
             "When ON, snippets containing {shell:CMD} run that command "
             "in bash and paste the output. Useful for {shell:git branch} "
             "or {shell:date -u}. Off by default - an imported snippet "
-            "with a hostile command would execute immediately.")
+            "with a hostile command would execute immediately."
+        )
         shell_switch = Gtk.Switch()
         shell_switch.set_valign(Gtk.Align.CENTER)
-        shell_switch.set_active(
-            bool(self._settings.get("snippet_shell_enabled", False)))
-        shell_switch.connect(
-            "notify::active", self._on_switch, "snippet_shell_enabled")
+        shell_switch.set_active(bool(self._settings.get("snippet_shell_enabled", False)))
+        shell_switch.connect("notify::active", self._on_switch, "snippet_shell_enabled")
         shell_row.add(shell_switch)
         shell_row.set_activatable_widget(shell_switch)
-        shell_row.set_sensitive(
-            bool(self._settings.get("clipboard_history_enabled", True)))
+        shell_row.set_sensitive(bool(self._settings.get("clipboard_history_enabled", True)))
         clip_master_switch.connect(
-            "notify::active",
-            lambda s, _p: shell_row.set_sensitive(s.get_active()))
+            "notify::active", lambda s, _p: shell_row.set_sensitive(s.get_active())
+        )
         group.add(shell_row)
 
         return group
@@ -1198,18 +1213,26 @@ class SettingsDialog:
             "Delay before popup appears",
             "Seconds to wait after you finish selecting - keeps the "
             "popup from flashing while you're still dragging.",
-            "selection_debounce_ms", 0.0, 2.0, 0.05,
+            "selection_debounce_ms",
+            0.0,
+            2.0,
+            0.05,
         )
         initial_row = self._seconds_spin_row(
             "Auto-hide before mouse arrives",
             "Seconds the popup waits if you never move the mouse to it.",
-            "auto_hide_initial_ms", 0.5, 30.0, 0.5,
+            "auto_hide_initial_ms",
+            0.5,
+            30.0,
+            0.5,
         )
         leave_row = self._seconds_spin_row(
             "Auto-hide after mouse leaves",
-            "Seconds the popup stays visible after you move the cursor "
-            "away from it.",
-            "auto_hide_leave_ms", 0.2, 20.0, 0.2,
+            "Seconds the popup stays visible after you move the cursor away from it.",
+            "auto_hide_leave_ms",
+            0.2,
+            20.0,
+            0.2,
         )
         group.add(debounce_row)
         group.add(initial_row)
@@ -1231,13 +1254,12 @@ class SettingsDialog:
             "If on, the auto-popup ignores selections shorter than the "
             "number below - useful if you keep getting popups for "
             "single-character misclicks. The hotkey is unaffected and "
-            "always opens the popup, even with no text selected.")
+            "always opens the popup, even with no text selected."
+        )
         min_switch = Gtk.Switch()
         min_switch.set_valign(Gtk.Align.CENTER)
-        min_switch.set_active(
-            bool(self._settings.get("min_selection_length_enabled")))
-        min_switch.connect(
-            "notify::active", self._on_switch, "min_selection_length_enabled")
+        min_switch.set_active(bool(self._settings.get("min_selection_length_enabled")))
+        min_switch.connect("notify::active", self._on_switch, "min_selection_length_enabled")
         min_toggle_row.add(min_switch)
         min_toggle_row.set_activatable_widget(min_switch)
         group.add(min_toggle_row)
@@ -1246,12 +1268,13 @@ class SettingsDialog:
             "Minimum characters",
             "Selections shorter than this are skipped by the "
             "auto-popup (only when the switch above is on).",
-            "min_selection_length", 1, 100, 1,
+            "min_selection_length",
+            1,
+            100,
+            1,
         )
         min_row.set_sensitive(min_switch.get_active())
-        min_switch.connect(
-            "notify::active",
-            lambda s, _p: min_row.set_sensitive(s.get_active()))
+        min_switch.connect("notify::active", lambda s, _p: min_row.set_sensitive(s.get_active()))
         group.add(min_row)
 
         # Blocklist: one substring per line. Matches against the active
@@ -1269,14 +1292,17 @@ class SettingsDialog:
             if count == 0:
                 block_row.set_subtitle(
                     "Hide the popup in password managers, banking sites, "
-                    "and anywhere else you'd rather not see it. Click to add.")
+                    "and anywhere else you'd rather not see it. Click to add."
+                )
             else:
                 examples = ", ".join(patterns[:3])
                 if count > 3:
                     examples += f", +{count - 3} more"
                 block_row.set_subtitle(
                     f"{count} pattern{'s' if count != 1 else ''} blocked: "
-                    f"{examples}. Click to edit.")
+                    f"{examples}. Click to edit."
+                )
+
         _refresh_block_row()
 
         def _on_block_edit(_row, _gesture=None) -> None:
@@ -1289,7 +1315,8 @@ class SettingsDialog:
                     "Apps and pages where the popup should never appear. "
                     "Useful for password managers, banking sites, and any "
                     "other context where a floating menu would be in "
-                    "the way."),
+                    "the way."
+                ),
                 initial_text=initial,
                 placeholder_text=(
                     "Type one app or site per line. Each line is matched "
@@ -1302,19 +1329,17 @@ class SettingsDialog:
                     "  Bitwarden\n"
                     "  Mozilla Firefox - DNB     - just the bank tab\n"
                     "  - kjøp                    - any browser tab whose\n"
-                    "                              title contains this"),
+                    "                              title contains this"
+                ),
             )
             if new_text is None:
                 return
-            new_patterns = [
-                line.strip() for line in new_text.splitlines() if line.strip()
-            ]
+            new_patterns = [line.strip() for line in new_text.splitlines() if line.strip()]
             self._save_key("blocklist_patterns", new_patterns)
             _refresh_block_row()
 
         block_row.connect("activated", _on_block_edit)
-        block_arrow = Gtk.Image.new_from_icon_name(
-            "document-edit-symbolic", Gtk.IconSize.BUTTON)
+        block_arrow = Gtk.Image.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
         block_arrow.set_valign(Gtk.Align.CENTER)
         block_row.add(block_arrow)
         group.add(block_row)
@@ -1324,7 +1349,7 @@ class SettingsDialog:
         group = Handy.PreferencesGroup()
         group.set_title("Web search")
         group.set_description(
-            "Which engine the popup's \"Search the web\" button uses. "
+            'Which engine the popup\'s "Search the web" button uses. '
             "Google also surfaces Gemini answers; DuckDuckGo and Brave "
             "are private; Kagi requires an account."
         )
@@ -1367,6 +1392,7 @@ class SettingsDialog:
         def _sync_custom_visibility(*_):
             active = engine_combo.get_active_id() == "custom"
             custom_row.set_sensitive(active)
+
         _sync_custom_visibility()
 
         def _on_engine_changed(combo: Gtk.ComboBoxText) -> None:
@@ -1385,8 +1411,8 @@ class SettingsDialog:
         group = Handy.PreferencesGroup()
         group.set_title("Advanced")
         group.set_description(
-            "Experimental switches. Leave alone unless you know what "
-            "you're doing.")
+            "Experimental switches. Leave alone unless you know what you're doing."
+        )
 
         poll_row = Handy.ActionRow()
         poll_row.set_title("Trigger hotkey on first press")
@@ -1394,7 +1420,8 @@ class SettingsDialog:
             "Some desktops (especially Cinnamon) swallow the first "
             "hotkey press, so the popup only appears after 2-3 tries. "
             "Turn this on to fix it. Runs a tiny background check - no "
-            "noticeable impact on performance.")
+            "noticeable impact on performance."
+        )
         poll_switch = Gtk.Switch()
         poll_switch.set_valign(Gtk.Align.CENTER)
         poll_switch.set_active(bool(self._settings.get("hotkey_use_polling", False)))
@@ -1423,7 +1450,8 @@ class SettingsDialog:
             "Restores every preference (hotkeys, timing, popup look, "
             "AI services, etc.) to its factory default. Your snippets, "
             "clipboard history, installed plugins, and custom buttons "
-            "are kept - this only resets preferences.")
+            "are kept - this only resets preferences."
+        )
         reset_btn = Gtk.Button(label="Reset…")
         reset_btn.set_valign(Gtk.Align.CENTER)
         reset_btn.get_style_context().add_class("destructive-action")
@@ -1434,6 +1462,7 @@ class SettingsDialog:
 
     def _on_reset_to_defaults(self, _btn: Gtk.Button) -> None:
         from settings import DEFAULTS
+
         confirm = Gtk.MessageDialog(
             transient_for=self._window,
             modal=True,
@@ -1451,8 +1480,10 @@ class SettingsDialog:
             ),
         )
         confirm.add_buttons(
-            "Cancel", Gtk.ResponseType.CANCEL,
-            "Reset", Gtk.ResponseType.OK,
+            "Cancel",
+            Gtk.ResponseType.CANCEL,
+            "Reset",
+            Gtk.ResponseType.OK,
         )
         ok_btn = confirm.get_widget_for_response(Gtk.ResponseType.OK)
         if ok_btn is not None:
@@ -1469,11 +1500,13 @@ class SettingsDialog:
             self._settings.save()
         except Exception as exc:
             err = Gtk.MessageDialog(
-                transient_for=self._window, modal=True,
+                transient_for=self._window,
+                modal=True,
                 message_type=Gtk.MessageType.ERROR,
                 buttons=Gtk.ButtonsType.CLOSE,
                 text="Couldn't reset settings",
-                secondary_text=f"{exc}")
+                secondary_text=f"{exc}",
+            )
             err.run()
             err.destroy()
             return
@@ -1497,7 +1530,8 @@ class SettingsDialog:
         term_row.set_title("Keep terminal open after running")
         term_row.set_subtitle(
             "After running a command, leaves the terminal window open "
-            "so you can read the output. Otherwise it closes right away.")
+            "so you can read the output. Otherwise it closes right away."
+        )
         sw = Gtk.Switch()
         sw.set_valign(Gtk.Align.CENTER)
         sw.set_active(bool(self._settings.get("terminal_keep_open", True)))
@@ -1510,8 +1544,13 @@ class SettingsDialog:
     # ---- helpers -------------------------------------------------------------
 
     def _spin_row(
-        self, title: str, subtitle: str, key: str,
-        lo: int, hi: int, step: int,
+        self,
+        title: str,
+        subtitle: str,
+        key: str,
+        lo: int,
+        hi: int,
+        step: int,
     ) -> Handy.ActionRow:
         row = Handy.ActionRow()
         row.set_title(title)
@@ -1525,8 +1564,13 @@ class SettingsDialog:
         return row
 
     def _seconds_spin_row(
-        self, title: str, subtitle: str, key: str,
-        lo_s: float, hi_s: float, step_s: float,
+        self,
+        title: str,
+        subtitle: str,
+        key: str,
+        lo_s: float,
+        hi_s: float,
+        step_s: float,
     ) -> Handy.ActionRow:
         """Spinner that DISPLAYS seconds but PERSISTS milliseconds, so
         the JSON schema (everything in *_ms) stays unchanged while users
@@ -1569,8 +1613,10 @@ class SettingsDialog:
         watcher lives."""
         try:
             import sys
-            mod = (sys.modules.get("linuxpop_user_clipboard_history")
-                   or sys.modules.get("clipboard_history"))
+
+            mod = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get(
+                "clipboard_history"
+            )
             if mod is not None and hasattr(mod, "_maybe_start_trigger_watcher"):
                 mod._maybe_start_trigger_watcher()
         except Exception as exc:

@@ -18,11 +18,13 @@ Selection watchers and hotkeys are returned as live objects implementing the
 small protocols below - the same shape the original `watcher.SelectionWatcher`
 and `hotkey.Hotkey` already had, so callers barely change.
 """
+
 from __future__ import annotations
 
 import abc
 import subprocess
-from typing import Callable, Optional, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 # One-time notification per session when a key-injection backend is missing.
 # Keeps Cut/Paste/Backspace from failing completely silently.
@@ -36,8 +38,16 @@ def _warn_missing_injector(backend_name: str, message: str) -> None:
     _missing_injector_warned.add(backend_name)
     try:
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "6000",
-             "-i", "dialog-warning", "LinuxPop", message],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "6000",
+                "-i",
+                "dialog-warning",
+                "LinuxPop",
+                message,
+            ],
             check=False,
         )
     except Exception:
@@ -140,14 +150,16 @@ class PlatformBackend(abc.ABC):
 
     @abc.abstractmethod
     def make_hotkey(
-        self, hotkey_str: str, on_trigger: Callable[[], None],
+        self,
+        hotkey_str: str,
+        on_trigger: Callable[[], None],
         use_polling: bool = False,
     ) -> Hotkey: ...
 
     @abc.abstractmethod
     def make_double_click_watcher(
         self, on_double_click: Callable[[int, int], None]
-    ) -> Optional[DoubleClickWatcher]:
+    ) -> DoubleClickWatcher | None:
         """A global Ctrl+double-click watcher, or None if unsupported."""
 
     # ---- popup positioning ----------------------------------------------

@@ -8,6 +8,7 @@ faster than the journalctl route - then print and exit.
 Run as a short-lived subprocess from wayland_kde.WaylandKdeBackend.pointer_position
 so the round-trip's GLib main loop never tangles with the main app's loop.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,11 +18,10 @@ import tempfile
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib  # noqa: E402
-
 import dbus  # noqa: E402
 import dbus.service  # noqa: E402
 from dbus.mainloop.glib import DBusGMainLoop  # noqa: E402
+from gi.repository import GLib  # noqa: E402
 
 # App-id-prefixed so a Flatpak sandbox auto-allows owning it (the bus filter
 # only lets an app own its app-id and sub-names; the old "org.linuxpop.Cursor"

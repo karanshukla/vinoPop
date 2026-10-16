@@ -1,11 +1,10 @@
 """URL-encode and decode selected text."""
+
 from __future__ import annotations
 
 import re
 import subprocess
-import sys
 import urllib.parse
-
 
 from classifier import ContentType  # noqa: E402
 from plugin_base import Plugin  # noqa: E402
@@ -20,9 +19,7 @@ def _looks_percent_encoded(text: str) -> bool:
     return bool(_PERCENT_ESCAPE.search(text))
 
 
-_URL_UNRESERVED = set(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-)
+_URL_UNRESERVED = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 # Characters that strongly suggest the selection is URL-shaped (or
 # is meant to be slotted into a URL): query separators, anchors,
@@ -43,16 +40,24 @@ def _has_chars_needing_url_encode(text: str) -> bool:
     """
     if any(c in _URL_SIGNAL_CHARS for c in text):
         return True
-    if any(ord(c) > 127 for c in text):
-        return True
-    return False
+    return bool(any(ord(c) > 127 for c in text))
 
 
 def _copy_and_notify(label: str, text: str) -> None:
     import actions
+
     actions.replace_selection(text)
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "2500",  "-i", "applications-internet", label, text[:200]],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "2500",
+            "-i",
+            "applications-internet",
+            label,
+            text[:200],
+        ],
         check=False,
     )
 
@@ -66,21 +71,25 @@ def _decode(text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="url-encode",
-        icon="linuxpop-url-encode-symbolic",
-        tooltip="URL-encode",
-        handler=_encode,
-        content_types=(ContentType.PLAIN_TEXT, ContentType.URL),
-        priority=70,
-        predicate=_has_chars_needing_url_encode,
-    ))
-    register_plugin(Plugin(
-        name="url-decode",
-        icon="linuxpop-url-decode-symbolic",
-        tooltip="URL-decode",
-        handler=_decode,
-        content_types=(ContentType.PLAIN_TEXT, ContentType.URL),
-        priority=71,
-        predicate=_looks_percent_encoded,
-    ))
+    register_plugin(
+        Plugin(
+            name="url-encode",
+            icon="linuxpop-url-encode-symbolic",
+            tooltip="URL-encode",
+            handler=_encode,
+            content_types=(ContentType.PLAIN_TEXT, ContentType.URL),
+            priority=70,
+            predicate=_has_chars_needing_url_encode,
+        )
+    )
+    register_plugin(
+        Plugin(
+            name="url-decode",
+            icon="linuxpop-url-decode-symbolic",
+            tooltip="URL-decode",
+            handler=_decode,
+            content_types=(ContentType.PLAIN_TEXT, ContentType.URL),
+            priority=71,
+            predicate=_looks_percent_encoded,
+        )
+    )

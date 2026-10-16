@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """LinuxPop entry point: tray icon + selection watcher + hotkey + popup."""
+
 from __future__ import annotations
 
 import argparse
 import fcntl
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gi
 
@@ -31,16 +32,18 @@ from gi.repository import GLib, Gtk  # noqa: E402
 # up under load, revisit by giving each Xlib-using component its own
 # connection (already mostly the case) rather than re-enabling
 # XInitThreads.
-
 import plugin_loader
 import theme
 from classifier import classify
-from editable_detect import is_focus_editable, focused_selection_rect
+from editable_detect import focused_selection_rect, is_focus_editable
 from platform_backend import get_backend
 from popup import PopupWindow
 from settings import get_settings
-from xdg_paths import CACHE_DIR, CONFIG_DIR
 from version import __version__
+from xdg_paths import CACHE_DIR, CONFIG_DIR
+
+if TYPE_CHECKING:
+    from watcher import SelectionWatcher
 
 LOG_FILE = CACHE_DIR / "linuxpop.log"
 LOCK_FILE = CACHE_DIR / "linuxpop.lock"
@@ -65,7 +68,7 @@ def _acquire_single_instance_lock() -> None:
         os.close(fd)
         # Read the existing PID for the user-facing message
         try:
-            with open(LOCK_FILE, "r", encoding="utf-8") as f:
+            with open(LOCK_FILE, encoding="utf-8") as f:
                 existing_pid = f.read().strip() or "unknown"
         except OSError:
             existing_pid = "unknown"
@@ -77,8 +80,18 @@ def _acquire_single_instance_lock() -> None:
         print(f"[linuxpop] {message}", file=sys.stderr)
         try:
             subprocess.run(
-                ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-u", "normal", "-i", "linuxpop",
-                 "LinuxPop is already running", message],
+                [
+                    "notify-send",
+                    "--hint=byte:transient:1",
+                    "-t",
+                    "3000",
+                    "-u",
+                    "normal",
+                    "-i",
+                    "linuxpop",
+                    "LinuxPop is already running",
+                    message,
+                ],
                 check=False,
             )
         except FileNotFoundError:
@@ -89,13 +102,13 @@ def _acquire_single_instance_lock() -> None:
     os.write(fd, f"{os.getpid()}\n".encode("ascii"))
     _lock_fd = fd
 
+
 log = logging.getLogger("linuxpop")
 
 
 def _setup_logging(debug: bool) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     level = logging.DEBUG if debug else logging.INFO
 
     file_handler = RotatingFileHandler(LOG_FILE, maxBytes=512_000, backupCount=3)
@@ -243,11 +256,16 @@ class App:
         # all? did xclip return empty? did the popup get suppressed by
         # the min-length / blocklist filters?
         import time as _t
+
         t0 = _t.monotonic()
         source = self.settings.get("hotkey_source") or "primary"
         text = _read_selection(source)
-        log.info("[hotkey-fire] read %s: %d chars in %.0f ms",
-                 source, len(text), (_t.monotonic() - t0) * 1000)
+        log.info(
+            "[hotkey-fire] read %s: %d chars in %.0f ms",
+            source,
+            len(text),
+            (_t.monotonic() - t0) * 1000,
+        )
         try:
             x, y = _pointer_position()
         except Exception:
@@ -262,8 +280,7 @@ class App:
             log.info("[hotkey-fire] no selection - showing paste menu")
             self._show_no_selection_popup(x, y)
             return
-        log.info("[hotkey-fire] showing popup at (%d, %d) for %d-char selection",
-                 x, y, len(text))
+        log.info("[hotkey-fire] showing popup at (%d, %d) for %d-char selection", x, y, len(text))
         self._show_for_text(text, x, y)
 
     def _show_no_selection_popup(self, x: int, y: int) -> None:
@@ -279,9 +296,10 @@ class App:
             log.info("[blocked] suppressed no-selection popup -- active window blocked")
             return
 
-        def _send_keys(combo: str) -> "Callable[[], None]":
+        def _send_keys(combo: str) -> Callable[[], None]:
             def _fire() -> None:
                 get_backend().send_key(combo)
+
             return _fire
 
         def _paste_then_enter() -> None:
@@ -292,10 +310,12 @@ class App:
             # Thunderbird where Return inserts a newline.
             try:
                 import importlib
-                ea = (importlib.import_module(
-                          "linuxpop_user_editing_actions")
-                      if "linuxpop_user_editing_actions" in sys.modules
-                      else importlib.import_module("editing_actions"))
+
+                ea = (
+                    importlib.import_module("linuxpop_user_editing_actions")
+                    if "linuxpop_user_editing_actions" in sys.modules
+                    else importlib.import_module("editing_actions")
+                )
                 submit_key = ea._submit_keystroke_for_focus()
             except Exception:
                 submit_key = "Return"
@@ -305,25 +325,43 @@ class App:
             time.sleep(0.08)
             get_backend().send_key(submit_key)
 
-        items: list[tuple[str, str, "Callable[[], None]"]] = []
-        items.append((
-            "edit-paste-symbolic", "Paste", _send_keys("ctrl+v"),
-        ))
-        items.append((
-            "mail-send-symbolic", "Paste & Enter", _paste_then_enter,
-        ))
+        items: list[tuple[str, str, Callable[[], None]]] = []
+        items.append(
+            (
+                "edit-paste-symbolic",
+                "Paste",
+                _send_keys("ctrl+v"),
+            )
+        )
+        items.append(
+            (
+                "mail-send-symbolic",
+                "Paste & Enter",
+                _paste_then_enter,
+            )
+        )
         if bool(self.settings.get("clipboard_history_enabled", True)):
-            items.append((
-                "linuxpop-clipboard-symbolic",
-                "Paste from history",
-                self._on_clipboard_hotkey,
-            ))
-        items.append((
-            "edit-select-all-symbolic", "Select all", _send_keys("ctrl+a"),
-        ))
-        items.append((
-            "edit-clear-symbolic", "Backspace", _send_keys("BackSpace"),
-        ))
+            items.append(
+                (
+                    "linuxpop-clipboard-symbolic",
+                    "Paste from history",
+                    self._on_clipboard_hotkey,
+                )
+            )
+        items.append(
+            (
+                "edit-select-all-symbolic",
+                "Select all",
+                _send_keys("ctrl+a"),
+            )
+        )
+        items.append(
+            (
+                "edit-clear-symbolic",
+                "Backspace",
+                _send_keys("BackSpace"),
+            )
+        )
         self.popup.show_actions(items, x, y)
 
     def _maybe_start_dblclick_watcher(self) -> None:
@@ -333,7 +371,8 @@ class App:
         if enabled:
             if self.dblclick_watcher is None:
                 self.dblclick_watcher = get_backend().make_double_click_watcher(
-                    self._on_global_double_click)
+                    self._on_global_double_click
+                )
             if self.dblclick_watcher is not None:
                 self.dblclick_watcher.start()
         elif self.dblclick_watcher is not None:
@@ -369,10 +408,8 @@ class App:
             # _show_for_text's docstring.
             if not text:
                 return
-            if bool(self.settings.get("min_selection_length_enabled")) \
-                    and len(text) < self.min_len:
-                log.info("[watcher] skipping short selection (%d < %d)",
-                         len(text), self.min_len)
+            if bool(self.settings.get("min_selection_length_enabled")) and len(text) < self.min_len:
+                log.info("[watcher] skipping short selection (%d < %d)", len(text), self.min_len)
                 return
             GLib.idle_add(self._show_for_text, text, x, y)
 
@@ -411,8 +448,9 @@ class App:
             self._bound_hotkey = ""
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
-        self.hotkey = get_backend().make_hotkey(hotkey_str, self.show_popup_now,
-                                                use_polling=use_polling)
+        self.hotkey = get_backend().make_hotkey(
+            hotkey_str, self.show_popup_now, use_polling=use_polling
+        )
         self.hotkey.start()
         self._bound_hotkey = hotkey_str
         self._bound_use_polling = use_polling
@@ -423,6 +461,7 @@ class App:
             return
         try:
             from screen_ocr import is_supported
+
             ok, reason = is_supported()
             if not ok:
                 log.info("ocr hotkey not bound: %s", reason)
@@ -431,19 +470,21 @@ class App:
             log.exception("ocr support probe failed")
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
-        self.ocr_hotkey = get_backend().make_hotkey(hotkey_str, self._on_ocr_hotkey,
-                                                    use_polling=use_polling)
+        self.ocr_hotkey = get_backend().make_hotkey(
+            hotkey_str, self._on_ocr_hotkey, use_polling=use_polling
+        )
         self.ocr_hotkey.start()
-        log.info("[ocr] hotkey '%s' bound (polling=%s)",
-                 hotkey_str, use_polling)
+        log.info("[ocr] hotkey '%s' bound (polling=%s)", hotkey_str, use_polling)
 
     def _on_ocr_hotkey(self) -> None:
         from screen_ocr import run_ocr_to_clipboard
+
         # Capture runs on a worker thread - the daemon's main loop must
         # stay responsive while the user is dragging the region.
         threading.Thread(
             target=run_ocr_to_clipboard,
-            daemon=True, name="ocr-capture",
+            daemon=True,
+            name="ocr-capture",
         ).start()
 
     def _start_clipboard_hotkey(self) -> None:
@@ -458,7 +499,8 @@ class App:
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
         self.clipboard_hotkey = get_backend().make_hotkey(
-            hotkey_str, self._on_clipboard_hotkey, use_polling=use_polling)
+            hotkey_str, self._on_clipboard_hotkey, use_polling=use_polling
+        )
         self.clipboard_hotkey.start()
         self._bound_clipboard_hotkey = hotkey_str
 
@@ -481,8 +523,16 @@ class App:
                 self._show_for_text(text, x, y)
             else:
                 subprocess.run(
-                    ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "dialog-information", "LinuxPop",
-                     "Install the Clipboard plugin to get the picker."],
+                    [
+                        "notify-send",
+                        "--hint=byte:transient:1",
+                        "-t",
+                        "3000",
+                        "-i",
+                        "dialog-information",
+                        "LinuxPop",
+                        "Install the Clipboard plugin to get the picker.",
+                    ],
                     check=False,
                 )
             return
@@ -498,6 +548,7 @@ class App:
 
     def _start_tray(self) -> None:
         from tray import Tray
+
         self.tray = Tray(
             on_toggle_watcher=self.toggle_watcher,
             get_watcher_active=self.watcher_active,
@@ -513,6 +564,7 @@ class App:
     def open_support(self) -> None:
         try:
             from welcome import open_support_picker
+
             open_support_picker(self.settings)
         except Exception:
             log.exception("support picker crashed")
@@ -545,9 +597,7 @@ class App:
                     except Exception:
                         pass
                 if self.watcher is not None:
-                    self.watcher.set_debounce_ms(
-                        int(self.settings.get("selection_debounce_ms"))
-                    )
+                    self.watcher.set_debounce_ms(int(self.settings.get("selection_debounce_ms")))
                 # Reload plugins so settings that gate plugin registration
                 # (e.g. ai_services) take effect immediately. Debounced so
                 # a burst of saves (textarea editing, multi-toggle bulk
@@ -556,12 +606,18 @@ class App:
                 new_polling = bool(self.settings.get("hotkey_use_polling", False))
                 polling_changed = new_polling != self._bound_use_polling
                 if polling_changed:
-                    log.info("hotkey polling mode changed: %s → %s - "
-                             "rebuilding both hotkey threads",
-                             self._bound_use_polling, new_polling)
+                    log.info(
+                        "hotkey polling mode changed: %s → %s - rebuilding both hotkey threads",
+                        self._bound_use_polling,
+                        new_polling,
+                    )
                 if new_hotkey != self._bound_hotkey or polling_changed:
-                    log.info("hotkey: %r → %r (polling=%s) - rebinding",
-                             self._bound_hotkey, new_hotkey, new_polling)
+                    log.info(
+                        "hotkey: %r → %r (polling=%s) - rebinding",
+                        self._bound_hotkey,
+                        new_hotkey,
+                        new_polling,
+                    )
                     if self.hotkey is not None:
                         self.hotkey.stop()
                         self.hotkey = None
@@ -569,8 +625,12 @@ class App:
                     if new_hotkey:
                         self._start_hotkey()
                 if new_clip != self._bound_clipboard_hotkey or polling_changed:
-                    log.info("clipboard hotkey: %r → %r (polling=%s) - rebinding",
-                             self._bound_clipboard_hotkey, new_clip, new_polling)
+                    log.info(
+                        "clipboard hotkey: %r → %r (polling=%s) - rebinding",
+                        self._bound_clipboard_hotkey,
+                        new_clip,
+                        new_polling,
+                    )
                     if self.clipboard_hotkey is not None:
                         self.clipboard_hotkey.stop()
                         self.clipboard_hotkey = None
@@ -580,8 +640,7 @@ class App:
                 # Bind the OCR hotkey if it just became usable - e.g. the
                 # user installed tesseract via the Settings Install button -
                 # so it starts working without a daemon restart.
-                if ((self.settings.get("ocr_hotkey") or "").strip()
-                        and self.ocr_hotkey is None):
+                if (self.settings.get("ocr_hotkey") or "").strip() and self.ocr_hotkey is None:
                     self._start_ocr_hotkey()
                 # Live-apply the double-click watcher toggle.
                 self._maybe_start_dblclick_watcher()
@@ -620,8 +679,9 @@ class App:
         about = Gtk.AboutDialog()
         about.set_program_name("LinuxPop")
         about.set_version(__version__)
-        about.set_comments("A PopClip-inspired floating action popup for Linux "
-                           f"({get_backend().name}).")
+        about.set_comments(
+            f"A PopClip-inspired floating action popup for Linux ({get_backend().name})."
+        )
         about.set_license_type(Gtk.License.MIT_X11)
         about.set_logo_icon_name("linuxpop")
         about.set_icon_name("linuxpop")
@@ -634,10 +694,8 @@ class App:
         # Add a "Support" action button so the donation flow is one click
         # away from the canonical "About" surface.
         try:
-            support_btn = about.add_button("Support LinuxPop…",
-                                           Gtk.ResponseType.HELP)
-            support_btn.connect("clicked",
-                                lambda *_: self.open_support())
+            support_btn = about.add_button("Support LinuxPop…", Gtk.ResponseType.HELP)
+            support_btn.connect("clicked", lambda *_: self.open_support())
         except Exception:
             pass
         about.run()
@@ -657,6 +715,7 @@ class App:
         def _open_welcome():
             try:
                 from onboarding import show_onboarding
+
                 show_onboarding(
                     self.settings,
                     on_open_plugins=self.open_plugins,
@@ -665,6 +724,7 @@ class App:
                 log.exception("onboarding failed; falling back to welcome dialog")
                 try:
                     from welcome import show_welcome_dialog
+
                     show_welcome_dialog(
                         self.settings,
                         on_open_plugins=self.open_plugins,
@@ -674,10 +734,17 @@ class App:
                     log.exception("welcome dialog failed; falling back to notify")
                 try:
                     subprocess.run(
-                        ["notify-send", "--hint=byte:transient:1",  "-i", "linuxpop", "-t", "8000",
-                         "LinuxPop is running",
-                         "Select text anywhere to see actions. Tray icon "
-                         "has settings & plugins."],
+                        [
+                            "notify-send",
+                            "--hint=byte:transient:1",
+                            "-i",
+                            "linuxpop",
+                            "-t",
+                            "8000",
+                            "LinuxPop is running",
+                            "Select text anywhere to see actions. Tray icon "
+                            "has settings & plugins.",
+                        ],
                         check=False,
                     )
                 except FileNotFoundError:
@@ -691,10 +758,12 @@ class App:
     def _schedule_plugin_reload(self) -> None:
         if self._reload_pending_id is not None:
             GLib.source_remove(self._reload_pending_id)
+
         def _do_reload() -> bool:
             self._reload_pending_id = None
             plugin_loader.load_all()
             return False
+
         self._reload_pending_id = GLib.timeout_add(400, _do_reload)
 
     def quit(self) -> None:
@@ -707,11 +776,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         description="PopClip-inspired floating action popup for Linux (X11 + KDE Wayland).",
     )
     p.add_argument("--version", action="version", version=f"LinuxPop {__version__}")
-    p.add_argument("--no-tray", action="store_true",
-                   help="Run without the tray icon (selection + hotkey only)")
+    p.add_argument(
+        "--no-tray", action="store_true", help="Run without the tray icon (selection + hotkey only)"
+    )
     p.add_argument("--debug", action="store_true", help="Verbose logging")
-    p.add_argument("--reset-first-run", action="store_true",
-                   help="Force the welcome flow on next launch")
+    p.add_argument(
+        "--reset-first-run", action="store_true", help="Force the welcome flow on next launch"
+    )
     return p.parse_args(argv)
 
 
@@ -746,26 +817,29 @@ def main(argv: list[str] | None = None) -> int:
     # clipboard picker is opened. Accepting some zombie PIDs over uptime
     # is the lesser evil; a proper periodic reaper can come later.
 
-    theme.install_premium_theme(
-        get_settings().get("theme", "dark") or "dark")
+    theme.install_premium_theme(get_settings().get("theme", "dark") or "dark")
 
     app = App(enable_tray=not args.no_tray)
 
     signal.signal(signal.SIGINT, lambda *_: app.quit())
-    log.info("LinuxPop %s running (tray=%s, hotkey=%s, watcher=%s)",
-             __version__,
-             "on" if app.tray else "off",
-             app.settings.get("hotkey") or "disabled",
-             "on" if app.watcher else "off")
+    log.info(
+        "LinuxPop %s running (tray=%s, hotkey=%s, watcher=%s)",
+        __version__,
+        "on" if app.tray else "off",
+        app.settings.get("hotkey") or "disabled",
+        "on" if app.watcher else "off",
+    )
     print("[linuxpop] running - Ctrl+C to quit. Logs at " + str(LOG_FILE))
 
     # Freeze the startup object graph so the GC never re-scans it. Cheap one-line
     # win for a long-running daemon - recommended by Python gc docs.
     def _freeze_gc_after_startup():
         import gc
+
         gc.collect()
         gc.freeze()
         return False
+
     GLib.idle_add(_freeze_gc_after_startup)
 
     Gtk.main()

@@ -2,6 +2,7 @@
 trim per line, strip HTML, remove diacritics, ASCII-only, swap case.
 Each transforms the selection and copies the result to the clipboard.
 """
+
 from __future__ import annotations
 
 import random as _random
@@ -20,9 +21,19 @@ def _copy(text: str, label: str) -> None:
     themselves. Imported from actions so all transformers share the
     same paste-over-selection behaviour."""
     import actions
+
     actions.replace_selection(text)
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "2500",  "-i", "accessories-text-editor", label, text[:200]],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "2500",
+            "-i",
+            "accessories-text-editor",
+            label,
+            text[:200],
+        ],
         check=False,
     )
 
@@ -57,9 +68,14 @@ _TAG_RE = re.compile(r"<\/?[a-zA-Z][^<>]*>")
 def _strip_html(text: str) -> None:
     cleaned = _TAG_RE.sub("", text)
     # Collapse the common entities; lazy decode without importing html module
-    cleaned = (cleaned.replace("&amp;", "&").replace("&lt;", "<")
-                       .replace("&gt;", ">").replace("&quot;", '"')
-                       .replace("&#39;", "'").replace("&nbsp;", " "))
+    cleaned = (
+        cleaned.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+    )
     _copy(cleaned, "HTML stripped")
 
 
@@ -80,6 +96,7 @@ def _swap_case(text: str) -> None:
 
 # ---- predicates (cheap, run on every popup show) -----------------------
 
+
 def _has_multiple_lines(text: str) -> bool:
     return "\n" in text.strip("\n")
 
@@ -92,10 +109,7 @@ def _lines_can_dedupe(text: str) -> bool:
 
 def _lines_have_edge_whitespace(text: str) -> bool:
     """At least one line has leading or trailing whitespace worth trimming."""
-    for ln in text.splitlines():
-        if ln != ln.strip():
-            return True
-    return False
+    return any(ln != ln.strip() for ln in text.splitlines())
 
 
 def _has_html_tags(text: str) -> bool:
@@ -146,37 +160,109 @@ def _mock_case(text: str) -> None:
 def register(register_plugin) -> None:
     types = (ContentType.PLAIN_TEXT,)
     # Reverse: any non-empty selection - no predicate needed.
-    register_plugin(Plugin(name="reverse-text", icon="object-flip-horizontal-symbolic",
-        tooltip="Reverse text", handler=_reverse, content_types=types, priority=150,
-        predicate=_worth_reversing))
+    register_plugin(
+        Plugin(
+            name="reverse-text",
+            icon="object-flip-horizontal-symbolic",
+            tooltip="Reverse text",
+            handler=_reverse,
+            content_types=types,
+            priority=150,
+            predicate=_worth_reversing,
+        )
+    )
     # Sort: only show when there's more than one line to sort.
-    register_plugin(Plugin(name="sort-lines", icon="view-sort-ascending-symbolic",
-        tooltip="Sort lines", handler=_sort_lines, content_types=types, priority=151,
-        predicate=_has_multiple_lines))
+    register_plugin(
+        Plugin(
+            name="sort-lines",
+            icon="view-sort-ascending-symbolic",
+            tooltip="Sort lines",
+            handler=_sort_lines,
+            content_types=types,
+            priority=151,
+            predicate=_has_multiple_lines,
+        )
+    )
     # Dedupe: only show when there's actually a duplicate to remove.
-    register_plugin(Plugin(name="dedupe-lines", icon="edit-clear-all-symbolic",
-        tooltip="Deduplicate lines", handler=_dedupe_lines, content_types=types, priority=152,
-        predicate=_lines_can_dedupe))
+    register_plugin(
+        Plugin(
+            name="dedupe-lines",
+            icon="edit-clear-all-symbolic",
+            tooltip="Deduplicate lines",
+            handler=_dedupe_lines,
+            content_types=types,
+            priority=152,
+            predicate=_lines_can_dedupe,
+        )
+    )
     # Trim: only show if at least one line has leading/trailing whitespace.
-    register_plugin(Plugin(name="trim-lines", icon="format-justify-left-symbolic",
-        tooltip="Trim each line", handler=_trim_lines, content_types=types, priority=153,
-        predicate=_lines_have_edge_whitespace))
+    register_plugin(
+        Plugin(
+            name="trim-lines",
+            icon="format-justify-left-symbolic",
+            tooltip="Trim each line",
+            handler=_trim_lines,
+            content_types=types,
+            priority=153,
+            predicate=_lines_have_edge_whitespace,
+        )
+    )
     # Strip-HTML: only show if there's an actual <tag> in the selection.
-    register_plugin(Plugin(name="strip-html", icon="text-x-generic-symbolic",
-        tooltip="Strip HTML tags", handler=_strip_html, content_types=types, priority=154,
-        predicate=_has_html_tags))
+    register_plugin(
+        Plugin(
+            name="strip-html",
+            icon="text-x-generic-symbolic",
+            tooltip="Strip HTML tags",
+            handler=_strip_html,
+            content_types=types,
+            priority=154,
+            predicate=_has_html_tags,
+        )
+    )
     # Remove diacritics: only show when there are accented characters.
-    register_plugin(Plugin(name="remove-diacritics", icon="format-text-strikethrough-symbolic",
-        tooltip="Remove diacritics", handler=_remove_diacritics, content_types=types, priority=155,
-        predicate=_has_diacritics))
+    register_plugin(
+        Plugin(
+            name="remove-diacritics",
+            icon="format-text-strikethrough-symbolic",
+            tooltip="Remove diacritics",
+            handler=_remove_diacritics,
+            content_types=types,
+            priority=155,
+            predicate=_has_diacritics,
+        )
+    )
     # ASCII-only: only show when there are non-ASCII characters to drop.
-    register_plugin(Plugin(name="ascii-only", icon="format-text-richtext-symbolic",
-        tooltip="ASCII only", handler=_ascii_only, content_types=types, priority=156,
-        predicate=_has_non_ascii))
+    register_plugin(
+        Plugin(
+            name="ascii-only",
+            icon="format-text-richtext-symbolic",
+            tooltip="ASCII only",
+            handler=_ascii_only,
+            content_types=types,
+            priority=156,
+            predicate=_has_non_ascii,
+        )
+    )
     # Swap / mock case: only meaningful if the selection has letters.
-    register_plugin(Plugin(name="swap-case", icon="format-text-bold-symbolic",
-        tooltip="Swap case", handler=_swap_case, content_types=types, priority=157,
-        predicate=_has_mixed_case))
-    register_plugin(Plugin(name="mock-case", icon="face-laugh-symbolic",
-        tooltip="mOcKiNg cAsE", handler=_mock_case, content_types=types, priority=158,
-        predicate=_worth_mocking))
+    register_plugin(
+        Plugin(
+            name="swap-case",
+            icon="format-text-bold-symbolic",
+            tooltip="Swap case",
+            handler=_swap_case,
+            content_types=types,
+            priority=157,
+            predicate=_has_mixed_case,
+        )
+    )
+    register_plugin(
+        Plugin(
+            name="mock-case",
+            icon="face-laugh-symbolic",
+            tooltip="mOcKiNg cAsE",
+            handler=_mock_case,
+            content_types=types,
+            priority=158,
+            predicate=_worth_mocking,
+        )
+    )

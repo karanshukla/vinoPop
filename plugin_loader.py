@@ -4,22 +4,21 @@ User plugins are Python files in ~/.config/linuxpop/plugins/ that expose
 a top-level `register(register_plugin)` function. Each plugin file may
 register one or more Plugin instances.
 """
+
 from __future__ import annotations
 
 import importlib.util
-import os
 import shutil
 import sys
 import traceback
 from pathlib import Path
-from typing import List
 
 import actions
 from classifier import ContentType
 from plugin_base import Plugin
 from xdg_paths import CONFIG_DIR
 
-_PLUGINS: List[Plugin] = []
+_PLUGINS: list[Plugin] = []
 
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
 LINUXPOP_DIR = str(Path(__file__).resolve().parent)
@@ -32,12 +31,12 @@ HICOLOR_APPS = Path.home() / ".local/share/icons/hicolor/scalable/apps"
 # heavy plugins (base64, json_format, etc.) and niche transforms stay
 # in the catalogue - they're one click away from Plugin Manager.
 DEFAULT_PLUGIN_SEEDS = (
-    "editing_actions.py",       # Cut / Paste / Backspace / Select All
-    "clipboard_history.py",     # the core picker
+    "editing_actions.py",  # Cut / Paste / Backspace / Select All
+    "clipboard_history.py",  # the core picker
     "wordcount.py",
     "large_type.py",
     "text_transformations.py",  # case + sort/dedupe/trim, all predicate-guarded
-    "translate.py",             # in-place translation bubble, language picker
+    "translate.py",  # in-place translation bubble, language picker
 )
 _PLUGIN_SEED_MARKER = USER_PLUGIN_DIR.parent / ".default-plugins-seeded"
 
@@ -74,9 +73,11 @@ def _install_all_icons() -> None:
     user_icons_dir = Path.home() / ".config/linuxpop/icons"
     bundled_mtime = _dir_mtime(ICONS_DIR)
     user_mtime = _dir_mtime(user_icons_dir)
-    if (_icon_sync_cache.get("bundled") == bundled_mtime
-            and _icon_sync_cache.get("user") == user_mtime
-            and _icon_sync_cache.get("done")):
+    if (
+        _icon_sync_cache.get("bundled") == bundled_mtime
+        and _icon_sync_cache.get("user") == user_mtime
+        and _icon_sync_cache.get("done")
+    ):
         return
 
     HICOLOR_APPS.mkdir(parents=True, exist_ok=True)
@@ -111,6 +112,7 @@ def _install_all_icons() -> None:
     # and falls back to the "image-missing" icon for our linuxpop-* names.
     try:
         from gi.repository import Gtk
+
         theme = Gtk.IconTheme.get_default()
         if theme is not None:
             theme.append_search_path(str(ICONS_DIR))
@@ -128,16 +130,21 @@ def _install_all_icons() -> None:
         # to finish to function.
         import subprocess
         import threading as _threading
+
         def _bg_rebuild_cache() -> None:
             try:
                 subprocess.run(
                     ["gtk-update-icon-cache", "-f", str(hicolor_root)],
-                    check=False, capture_output=True, timeout=30,
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
+
         _threading.Thread(
-            target=_bg_rebuild_cache, daemon=True,
+            target=_bg_rebuild_cache,
+            daemon=True,
             name="linuxpop-icon-cache",
         ).start()
 
@@ -148,8 +155,8 @@ def _install_all_icons() -> None:
     # Remember that we've completed an install pass with these source-dir
     # mtimes so subsequent load_all() calls can short-circuit.
     _icon_sync_cache["bundled"] = bundled_mtime
-    _icon_sync_cache["user"]    = user_mtime
-    _icon_sync_cache["done"]    = True  # type: ignore[assignment]
+    _icon_sync_cache["user"] = user_mtime
+    _icon_sync_cache["done"] = True  # type: ignore[assignment]
 
 
 def _sync_user_icons() -> None:
@@ -167,6 +174,7 @@ def _sync_user_icons() -> None:
     if user_copied:
         try:
             from gi.repository import Gtk
+
             theme = Gtk.IconTheme.get_default()
             if theme is not None:
                 theme.rescan_if_needed()
@@ -189,6 +197,7 @@ def register(plugin: Plugin) -> None:
     deleting the whole bundle."""
     try:
         from settings import get_settings
+
         disabled = set(get_settings().get("disabled_plugins") or [])
     except Exception:
         disabled = set()
@@ -197,7 +206,7 @@ def register(plugin: Plugin) -> None:
     _PLUGINS.append(plugin)
 
 
-def all_plugins() -> List[Plugin]:
+def all_plugins() -> list[Plugin]:
     return list(_PLUGINS)
 
 
@@ -217,7 +226,7 @@ def plugins_by_source() -> dict[str, list[str]]:
     return out
 
 
-def for_content_type(content_type: ContentType, text: str | None = None) -> List[Plugin]:
+def for_content_type(content_type: ContentType, text: str | None = None) -> list[Plugin]:
     matched = [p for p in _PLUGINS if p.handles(content_type)]
     if text is not None:
         matched = [p for p in matched if p.matches(text)]
@@ -225,6 +234,7 @@ def for_content_type(content_type: ContentType, text: str | None = None) -> List
     # Plugins not in the order list fall back to their built-in priority.
     try:
         from settings import get_settings
+
         order = list(get_settings().get("plugin_order") or [])
     except Exception:
         order = []
@@ -242,14 +252,16 @@ def for_content_type(content_type: ContentType, text: str | None = None) -> List
 
 def _register_builtins() -> None:
     # Universal: copy works on anything
-    register(Plugin(
-        name="copy",
-        icon="edit-copy-symbolic",
-        tooltip="Copy",
-        handler=actions.copy_to_clipboard,
-        content_types=(),  # empty = all
-        priority=10,
-    ))
+    register(
+        Plugin(
+            name="copy",
+            icon="edit-copy-symbolic",
+            tooltip="Copy",
+            handler=actions.copy_to_clipboard,
+            content_types=(),  # empty = all
+            priority=10,
+        )
+    )
 
     # Universal: pin the current selection as a snippet. Sits next to
     # Copy in the popup so the path from "I keep retyping this" to
@@ -258,18 +270,23 @@ def _register_builtins() -> None:
     # nothing to save into.
     def _snippets_loaded() -> bool:
         import sys
-        ch = (sys.modules.get("linuxpop_user_clipboard_history")
-              or sys.modules.get("clipboard_history"))
+
+        ch = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get(
+            "clipboard_history"
+        )
         return ch is not None and hasattr(ch, "_create_snippet")
-    register(Plugin(
-        name="pin-as-snippet",
-        icon="non-starred-symbolic",
-        tooltip="Pin as snippet",
-        handler=actions.pin_as_snippet,
-        content_types=(),  # empty = all
-        priority=11,
-        predicate=lambda _t: _snippets_loaded(),
-    ))
+
+    register(
+        Plugin(
+            name="pin-as-snippet",
+            icon="non-starred-symbolic",
+            tooltip="Pin as snippet",
+            handler=actions.pin_as_snippet,
+            content_types=(),  # empty = all
+            priority=11,
+            predicate=lambda _t: _snippets_loaded(),
+        )
+    )
 
     # COMMAND - also shown for PATH-classified selections that look like
     # an executable script ('./build.sh', '~/bin/deploy'), via the
@@ -282,6 +299,7 @@ def _register_builtins() -> None:
         # the PATH branch - for the COMMAND branch, the plugin's content_types
         # gate already matched. We only need to gate the PATH case.
         from classifier import classify as _classify
+
         ct = _classify(text)
         if ct == ContentType.COMMAND:
             return True
@@ -289,55 +307,65 @@ def _register_builtins() -> None:
             return is_runnable_path(text)
         return False
 
-    register(Plugin(
-        name="run-terminal",
-        icon="utilities-terminal-symbolic",
-        tooltip="Run in terminal",
-        handler=actions.run_in_terminal,
-        content_types=(ContentType.COMMAND, ContentType.PATH),
-        priority=20,
-        predicate=_can_run,
-    ))
+    register(
+        Plugin(
+            name="run-terminal",
+            icon="utilities-terminal-symbolic",
+            tooltip="Run in terminal",
+            handler=actions.run_in_terminal,
+            content_types=(ContentType.COMMAND, ContentType.PATH),
+            priority=20,
+            predicate=_can_run,
+        )
+    )
 
     # URL
-    register(Plugin(
-        name="open-url",
-        icon="web-browser-symbolic",
-        tooltip="Open in browser",
-        handler=actions.open_url,
-        content_types=(ContentType.URL,),
-        priority=20,
-    ))
+    register(
+        Plugin(
+            name="open-url",
+            icon="web-browser-symbolic",
+            tooltip="Open in browser",
+            handler=actions.open_url,
+            content_types=(ContentType.URL,),
+            priority=20,
+        )
+    )
 
     # EMAIL
-    register(Plugin(
-        name="compose-email",
-        icon="mail-send-symbolic",
-        tooltip="Compose email",
-        handler=actions.compose_email,
-        content_types=(ContentType.EMAIL,),
-        priority=20,
-    ))
+    register(
+        Plugin(
+            name="compose-email",
+            icon="mail-send-symbolic",
+            tooltip="Compose email",
+            handler=actions.compose_email,
+            content_types=(ContentType.EMAIL,),
+            priority=20,
+        )
+    )
 
     # PATH
-    register(Plugin(
-        name="open-path",
-        icon="folder-open-symbolic",
-        tooltip="Open path",
-        handler=actions.open_path,
-        content_types=(ContentType.PATH,),
-        priority=20,
-    ))
+    register(
+        Plugin(
+            name="open-path",
+            icon="folder-open-symbolic",
+            tooltip="Open path",
+            handler=actions.open_path,
+            content_types=(ContentType.PATH,),
+            priority=20,
+        )
+    )
 
     # PLAIN_TEXT: search
-    register(Plugin(
-        name="search-web",
-        icon="system-search-symbolic",
-        tooltip="Search the web",
-        handler=actions.search_web,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=30,
-    ))
+    register(
+        Plugin(
+            name="search-web",
+            icon="system-search-symbolic",
+            tooltip="Search the web",
+            handler=actions.search_web,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=30,
+        )
+    )
 
 
 def _seed_default_plugins() -> None:
@@ -426,6 +454,7 @@ def load_all() -> None:
 def _load_recipes() -> None:
     try:
         import recipe_loader
+
         recipe_loader.load_recipes(register)
     except Exception as exc:  # noqa: BLE001
         print(f"[plugin_loader] recipe loading failed: {exc}")

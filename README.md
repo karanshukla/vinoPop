@@ -142,18 +142,22 @@ A plugin file just needs a top-level `register(register_plugin)` function:
 from classifier import ContentType
 from plugin_base import Plugin
 
+
 def _handler(text: str) -> None:
     print("got:", text)
 
+
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="my-plugin",
-        icon="emblem-favorite",
-        tooltip="Do something",
-        handler=_handler,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=50,
-    ))
+    register_plugin(
+        Plugin(
+            name="my-plugin",
+            icon="emblem-favorite",
+            tooltip="Do something",
+            handler=_handler,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=50,
+        )
+    )
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.

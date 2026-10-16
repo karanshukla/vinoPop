@@ -13,6 +13,7 @@ The user picks between them in Settings via the ``icon_style`` setting:
 `resolve()` maps whatever icon name a plugin declares to the right variant.
 Unmapped names (edit-cut-symbolic etc.) pass through untouched.
 """
+
 from __future__ import annotations
 
 # plugin-declared icon name -> concept that has colour + mono variants
@@ -38,21 +39,30 @@ _CONCEPT_BY_ICON = {
 
 # Concept ordering for the Settings preview (most recognisable first).
 PREVIEW_CONCEPTS = [
-    "google", "youtube", "wikipedia", "maps", "translate",
-    "github", "package", "clipboard", "qr", "json",
+    "google",
+    "youtube",
+    "wikipedia",
+    "maps",
+    "translate",
+    "github",
+    "package",
+    "clipboard",
+    "qr",
+    "json",
 ]
 
 
 def current_style() -> str:
     try:
         from settings import get_settings
+
         s = (get_settings().get("icon_style") or "color").strip().lower()
     except Exception:
         s = "color"
     return s if s in ("color", "glyph") else "color"
 
 
-def resolve(icon_name: str, style: "str | None" = None) -> str:
+def resolve(icon_name: str, style: str | None = None) -> str:
     """Return the icon name to actually load for the current icon_style."""
     if not icon_name:
         return icon_name
@@ -60,8 +70,7 @@ def resolve(icon_name: str, style: "str | None" = None) -> str:
     if concept is None:
         # Already a concept colour name? (e.g. a future plugin sets
         # icon="linuxpop-maps" directly.)
-        if icon_name.startswith("linuxpop-") and icon_name[9:] in set(
-                _CONCEPT_BY_ICON.values()):
+        if icon_name.startswith("linuxpop-") and icon_name[9:] in set(_CONCEPT_BY_ICON.values()):
             concept = icon_name[9:]
         else:
             return icon_name

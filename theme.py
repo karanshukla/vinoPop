@@ -15,10 +15,10 @@ Mode resolution:
 The installer is idempotent and hot-reloadable: calling it again with a
 different mode swaps the active provider without restarting.
 """
+
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import gi
 
@@ -785,6 +785,7 @@ def _apply_remap(css: bytes, remap: dict[str, str]) -> bytes:
     would corrupt the first output if it shared a substring). Build a
     regex and replace by full match instead."""
     import re
+
     if not remap:
         return css
     text = css.decode("ascii")
@@ -809,9 +810,7 @@ def _system_prefers_dark() -> bool:
         if s.get_property("gtk-application-prefer-dark-theme"):
             return True
         name = s.get_property("gtk-theme-name") or ""
-        if "dark" in name.lower():
-            return True
-        return False
+        return "dark" in name.lower()
     except Exception:
         return True
 
@@ -824,8 +823,8 @@ def _resolve_mode(mode: str) -> str:
     return "dark"
 
 
-_active_provider: Optional[Gtk.CssProvider] = None
-_active_mode: Optional[str] = None
+_active_provider: Gtk.CssProvider | None = None
+_active_mode: str | None = None
 
 
 def install_premium_theme(mode: str = "dark") -> None:
@@ -855,17 +854,20 @@ def install_premium_theme(mode: str = "dark") -> None:
     try:
         src_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "icons", "hdy-compat", "hicolor", "scalable", "actions")
+            "icons",
+            "hdy-compat",
+            "hicolor",
+            "scalable",
+            "actions",
+        )
         if os.path.isdir(src_dir):
             import shutil as _sh
-            dst_dir = os.path.expanduser(
-                "~/.local/share/icons/hicolor/scalable/actions")
+
+            dst_dir = os.path.expanduser("~/.local/share/icons/hicolor/scalable/actions")
             os.makedirs(dst_dir, exist_ok=True)
             for _fn in os.listdir(src_dir):
-                if _fn.endswith(".svg") and not os.path.exists(
-                        os.path.join(dst_dir, _fn)):
-                    _sh.copy2(os.path.join(src_dir, _fn),
-                              os.path.join(dst_dir, _fn))
+                if _fn.endswith(".svg") and not os.path.exists(os.path.join(dst_dir, _fn)):
+                    _sh.copy2(os.path.join(src_dir, _fn), os.path.join(dst_dir, _fn))
             Gtk.IconTheme.get_default().rescan_if_needed()
     except OSError:
         pass
@@ -877,6 +879,7 @@ def install_premium_theme(mode: str = "dark") -> None:
     if effective == "dark":
         try:
             from platform_backend import get_backend
+
             if get_backend().name == "wayland_kde":
                 s = Gtk.Settings.get_default()
                 if s is not None:
@@ -890,27 +893,27 @@ def install_premium_theme(mode: str = "dark") -> None:
         except Exception:
             pass
 
-    css = _PREMIUM_CSS if effective == "dark" else _apply_remap(
-        _PREMIUM_CSS, _LIGHT_REMAP)
+    css = _PREMIUM_CSS if effective == "dark" else _apply_remap(_PREMIUM_CSS, _LIGHT_REMAP)
 
     provider = Gtk.CssProvider()
     try:
         provider.load_from_data(css)
     except Exception:
         import logging
-        logging.getLogger("linuxpop").exception(
-            "premium theme (%s) failed to load", effective)
+
+        logging.getLogger("linuxpop").exception("premium theme (%s) failed to load", effective)
         return
 
     if _active_provider is not None:
         try:
-            Gtk.StyleContext.remove_provider_for_screen(
-                screen, _active_provider)
+            Gtk.StyleContext.remove_provider_for_screen(screen, _active_provider)
         except Exception:
             pass
 
     Gtk.StyleContext.add_provider_for_screen(
-        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        screen,
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
     )
     _active_provider = provider
     _active_mode = effective

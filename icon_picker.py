@@ -7,6 +7,7 @@ chosen icon name; Esc → returns None.
 Usage:
     chosen = IconPicker(parent=some_window, initial="folder-symbolic").run()
 """
+
 from __future__ import annotations
 
 import os
@@ -108,8 +109,7 @@ class IconPicker:
         dlg.set_icon_name("linuxpop")
         self._dialog = dlg
 
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
-                        margin=10)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=10)
 
         # Top bar: search + symbolic-only toggle
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -198,13 +198,14 @@ class IconPicker:
             symbolic_hint = (
                 " <b>Tip:</b> if you added a colored brand icon, "
                 "uncheck <i>Symbolic only</i> above to see it."
-                if symbolic_only else ""
+                if symbolic_only
+                else ""
             )
             self._count_label.set_markup(
                 f"<i>No icons match “{esc_query}”. Standard themes don't ship "
                 f"brand-specific icons (Wikipedia, GitHub etc.).</i>\n"
                 f"<small>Drop your own <tt>.svg</tt> or <tt>.png</tt> files in "
-                f"<a href=\"linuxpop://open-user-icons\">"
+                f'<a href="linuxpop://open-user-icons">'
                 f"~/.config/linuxpop/icons/</a>.{symbolic_hint} "
                 f"Or pick a generic one:</small>"
             )
@@ -213,14 +214,14 @@ class IconPicker:
             self._count_label.set_markup(
                 f"{len(self._filtered)} matching icons "
                 f"({len(self._all_icons)} total in your theme) - "
-                f"<a href=\"linuxpop://open-user-icons\">add your own</a>"
+                f'<a href="linuxpop://open-user-icons">add your own</a>'
             )
 
         self._render_next_page()
 
     def _render_next_page(self) -> None:
         end = min(self._rendered + _PAGE_SIZE, len(self._filtered))
-        for name in self._filtered[self._rendered:end]:
+        for name in self._filtered[self._rendered : end]:
             child = self._make_icon_tile(name)
             if child is not None:
                 self._flowbox.add(child)
@@ -261,12 +262,14 @@ class IconPicker:
         """Handle the custom linuxpop:// link in the empty-state message."""
         if uri == "linuxpop://open-user-icons":
             USER_ICONS_DIR.mkdir(parents=True, exist_ok=True)
-            argv = (["flatpak-spawn", "--host", "xdg-open", str(USER_ICONS_DIR)]
-                    if os.path.exists("/.flatpak-info")
-                    else ["xdg-open", str(USER_ICONS_DIR)])
+            argv = (
+                ["flatpak-spawn", "--host", "xdg-open", str(USER_ICONS_DIR)]
+                if os.path.exists("/.flatpak-info")
+                else ["xdg-open", str(USER_ICONS_DIR)]
+            )
             try:
                 subprocess.Popen(argv, start_new_session=True)
             except FileNotFoundError:
                 pass
             return True  # consumed
-        return False     # let GTK handle real URIs
+        return False  # let GTK handle real URIs

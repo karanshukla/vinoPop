@@ -3,13 +3,14 @@
 Uses XFixes selection-owner-notify events (event-driven, ~zero CPU when
 idle) with a short xclip read after each event to fetch the actual text.
 """
+
 from __future__ import annotations
 
 import select as _select
 import subprocess
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from Xlib import display
 from Xlib.ext import xfixes
@@ -23,7 +24,7 @@ class SelectionWatcher:
     ) -> None:
         self._on_selection = on_selection
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._last_text: str = ""
         # Wait this long after the last selection-change event before firing.
         # Avoids popup churn while the user is still dragging the selection -

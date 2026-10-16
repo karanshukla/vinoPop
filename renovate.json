@@ -1,0 +1,64 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Runtime dependencies (OpenVINO and friends) are bumped by hand: a version change can break the NPU path, which no CI runner can catch.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Dev tooling (the dev dependency group) is safe to keep current: none of it ships to users.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchDepTypes": [
+        "dependency-groups"
+      ],
+      "enabled": true,
+      "schedule": [
+        "before 9am on Monday"
+      ]
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true,
+      "enabled": true,
+      "schedule": [
+        "before 9am on Monday"
+      ]
+    },
+    {
+      "description": "Auto-merge only dev tooling, and only once a release has been public for a week.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchDepTypes": [
+        "dependency-groups"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor",
+        "digest",
+        "pin"
+      ],
+      "minimumReleaseAge": "7 days",
+      "automerge": true,
+      "platformAutomerge": true,
+      "automergeStrategy": "squash"
+    },
+    {
+      "description": "Always a human review: actions run with the release job's repo-write token.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "automerge": false
+    }
+  ]
+}

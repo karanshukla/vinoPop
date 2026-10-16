@@ -1,0 +1,38 @@
+name: Bandit
+
+# Config is [tool.bandit] in pyproject.toml, so `uv run poe security` matches it.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "32 0 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    permissions:
+      contents: read
+      security-events: write # to upload the SARIF results
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Bandit scan
+        # --exit-zero: findings must not fail the job, or the upload step below
+        # is skipped and code scanning keeps showing the previous run's alerts.
+        run: >-
+          uvx --from 'bandit[toml,sarif]==1.9.4' bandit
+          -c pyproject.toml -r . -f sarif -o bandit.sarif --exit-zero
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@88585263c0627ee42c0e1c5143a112c8d6f4aa18 # v4.38.2
+        with:
+          sarif_file: bandit.sarif
+          category: bandit

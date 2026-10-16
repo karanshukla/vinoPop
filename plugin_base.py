@@ -4,10 +4,11 @@ A plugin exposes one action: a button in the popup. It declares which
 content types it cares about, which icon and label to render, and what
 to do when the user clicks it.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
 
 from classifier import ContentType
 
@@ -25,7 +26,7 @@ class Plugin:
     # 'URL decode' on text that contains no %-escapes. Exceptions in the
     # predicate are treated as False (skip the plugin) - predicates run on
     # every popup show, so they must be cheap.
-    predicate: Optional[Callable[[str], bool]] = None
+    predicate: Callable[[str], bool] | None = None
     # If True, the button is hidden when the currently-focused widget is
     # not editable (read-only PDF viewer, web page body, image viewer).
     # The check uses AT-SPI with a WM_CLASS blocklist as fallback. Set on

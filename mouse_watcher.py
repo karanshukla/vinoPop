@@ -16,14 +16,14 @@ between the two clicks still counts as a double-click.
 The watcher emits the callback on the GLib main thread via
 timeout_add, so the popup builder doesn't need its own locking.
 """
+
 from __future__ import annotations
 
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from gi.repository import GLib
-
 
 _DOUBLE_CLICK_MS = 300
 _POSITION_TOLERANCE_PX = 8
@@ -41,13 +41,14 @@ def _required_modifier_mask() -> int:
     """
     try:
         from settings import get_settings
+
         name = (get_settings().get("double_click_modifier") or "ctrl").lower()
     except Exception:
         name = "ctrl"
     return {
-        "ctrl":  4,
+        "ctrl": 4,
         "shift": 1,
-        "alt":   8,
+        "alt": 8,
         "super": 64,
     }.get(name, 4)
 
@@ -58,7 +59,7 @@ class DoubleClickWatcher:
     def __init__(self, on_double_click: Callable[[int, int], None]) -> None:
         self._cb = on_double_click
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._record_display = None
         self._local_display = None
         self._ctx = None
@@ -72,7 +73,9 @@ class DoubleClickWatcher:
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._run, daemon=True, name="linuxpop-dblclick",
+            target=self._run,
+            daemon=True,
+            name="linuxpop-dblclick",
         )
         self._thread.start()
 
@@ -87,7 +90,8 @@ class DoubleClickWatcher:
 
     def _run(self) -> None:
         try:
-            from Xlib import display as Xdisplay, X
+            from Xlib import X
+            from Xlib import display as Xdisplay
             from Xlib.ext import record
             from Xlib.protocol import rq
         except ImportError:
@@ -105,17 +109,19 @@ class DoubleClickWatcher:
         self._ctx = self._local_display.record_create_context(
             0,
             [record.AllClients],
-            [{
-                "core_requests": (0, 0),
-                "core_replies": (0, 0),
-                "ext_requests": (0, 0, 0, 0),
-                "ext_replies": (0, 0, 0, 0),
-                "delivered_events": (0, 0),
-                "device_events": (X.ButtonPress, X.ButtonRelease),
-                "errors": (0, 0),
-                "client_started": False,
-                "client_died": False,
-            }],
+            [
+                {
+                    "core_requests": (0, 0),
+                    "core_replies": (0, 0),
+                    "ext_requests": (0, 0, 0, 0),
+                    "ext_replies": (0, 0, 0, 0),
+                    "delivered_events": (0, 0),
+                    "device_events": (X.ButtonPress, X.ButtonRelease),
+                    "errors": (0, 0),
+                    "client_started": False,
+                    "client_died": False,
+                }
+            ],
         )
 
         def handler(reply):
@@ -126,15 +132,20 @@ class DoubleClickWatcher:
             data = reply.data
             while len(data):
                 event, data = rq.EventField(None).parse_binary_value(
-                    data, self._record_display.display, None, None,
+                    data,
+                    self._record_display.display,
+                    None,
+                    None,
                 )
                 # Button 1 = primary mouse button. Require the user's
                 # configured modifier held so the gesture never
                 # collides with the app's own double-click word-
                 # select behaviour.
-                if (event.type == X.ButtonPress
-                        and event.detail == 1
-                        and event.state & _required_modifier_mask()):
+                if (
+                    event.type == X.ButtonPress
+                    and event.detail == 1
+                    and event.state & _required_modifier_mask()
+                ):
                     self._on_left_click(event.root_x, event.root_y)
 
         try:
@@ -157,9 +168,11 @@ class DoubleClickWatcher:
         elapsed = now_ms - self._last_ms
         dx = abs(x - self._last_xy[0])
         dy = abs(y - self._last_xy[1])
-        if (elapsed < _DOUBLE_CLICK_MS
-                and dx < _POSITION_TOLERANCE_PX
-                and dy < _POSITION_TOLERANCE_PX):
+        if (
+            elapsed < _DOUBLE_CLICK_MS
+            and dx < _POSITION_TOLERANCE_PX
+            and dy < _POSITION_TOLERANCE_PX
+        ):
             # Reset so a third click doesn't fire again.
             self._last_ms = 0
             self._last_xy = (0, 0)

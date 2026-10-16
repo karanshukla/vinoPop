@@ -8,17 +8,23 @@ only thing that actually shows a menu on KWin/Wayland (a parentless QMenu.popup
 never maps). Talks to the main LinuxPop process over a small length-prefixed
 JSON socket, unchanged from the previous implementation.
 """
+
 from __future__ import annotations
 
-import json, os, socket, sys, struct
+import json
+import os
+import socket
+import struct
+import sys
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
-from PySide6.QtGui import QIcon, QCursor
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCursor, QIcon
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdg_paths import CACHE_DIR as SOCKET_DIR, CONFIG_DIR  # noqa: E402
+from xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
+from xdg_paths import CONFIG_DIR
 
 ICON_DIR = str(Path(__file__).resolve().parent / "icons")
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -35,7 +41,9 @@ def _tray_icon_style() -> str:
     except Exception:
         return "color"
 
+
 # ─── Wire helpers ───────────────────────────────────────────────────
+
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
     buf = b""
@@ -45,6 +53,7 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
             raise ConnectionError("Socket closed")
         buf += chunk
     return buf
+
 
 def _recv_message(sock: socket.socket) -> dict | None:
     try:
@@ -57,11 +66,14 @@ def _recv_message(sock: socket.socket) -> dict | None:
     except (ConnectionError, OSError, json.JSONDecodeError):
         return None
 
+
 def _send_message(sock: socket.socket, msg: dict) -> None:
     raw = json.dumps(msg).encode("utf-8")
     sock.sendall(struct.pack("!I", len(raw)) + raw)
 
+
 # ─── TrayQt ─────────────────────────────────────────────────────────
+
 
 class TrayQt:
     def __init__(self) -> None:
@@ -106,8 +118,7 @@ class TrayQt:
         self._ppid_timer.start(2000)
 
         avail = QSystemTrayIcon.isSystemTrayAvailable()
-        print(f"[tray-qt] Started (QSystemTrayIcon, tray_available={avail})",
-              flush=True)
+        print(f"[tray-qt] Started (QSystemTrayIcon, tray_available={avail})", flush=True)
 
     # ─── icon ───
     def _load_icon(self) -> QIcon:
@@ -134,8 +145,7 @@ class TrayQt:
                 ic = QIcon(str(p))
                 if not ic.isNull():
                     return ic
-        return (QIcon.fromTheme("linuxpop")
-                or QIcon.fromTheme("applications-internet"))
+        return QIcon.fromTheme("linuxpop") or QIcon.fromTheme("applications-internet")
 
     def _render_symbolic(self, color: str) -> QIcon | None:
         """Render the monochrome symbolic tray SVG (fill="currentColor") in
@@ -145,9 +155,10 @@ class TrayQt:
         if not p.is_file():
             return None
         try:
-            from PySide6.QtSvg import QSvgRenderer
-            from PySide6.QtGui import QImage, QPixmap, QPainter
             from PySide6.QtCore import QByteArray, Qt
+            from PySide6.QtGui import QImage, QPainter, QPixmap
+            from PySide6.QtSvg import QSvgRenderer
+
             svg = p.read_text(encoding="utf-8").replace("currentColor", color)
             renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
             icon = QIcon()
@@ -165,6 +176,7 @@ class TrayQt:
 
     def _install_icon(self) -> None:
         import shutil
+
         user_dir = Path.home() / ".local/share/icons/hicolor/scalable/apps"
         user_dir.mkdir(parents=True, exist_ok=True)
         for name in ("linuxpop-tray-symbolic", "linuxpop"):
@@ -194,8 +206,7 @@ class TrayQt:
         self._toggle_action = self._menu.addAction("Auto-popup on selection")
         self._toggle_action.setCheckable(True)
         self._toggle_action.setChecked(True)
-        self._toggle_action.triggered.connect(
-            lambda checked: self._emit("toggle_watcher", checked))
+        self._toggle_action.triggered.connect(lambda checked: self._emit("toggle_watcher", checked))
         a = self._menu.addAction("Show popup now")
         a.triggered.connect(lambda: self._emit("show_popup", None))
         self._menu.addSeparator()
@@ -286,12 +297,11 @@ class TrayQt:
                 print(f"[tray-qt] reload_icon failed: {exc}", flush=True)
         elif cmd == "quit":
             self._running = False
-        elif cmd == "ping":
-            if self._client:
-                try:
-                    _send_message(self._client, {"event": "pong", "value": None})
-                except OSError:
-                    pass
+        elif cmd == "ping" and self._client:
+            try:
+                _send_message(self._client, {"event": "pong", "value": None})
+            except OSError:
+                pass
 
     def run(self) -> None:
         self._app.exec()
@@ -305,6 +315,7 @@ class TrayQt:
                 self._sock.close()
             except OSError:
                 pass
+
 
 if __name__ == "__main__":
     TrayQt().run()

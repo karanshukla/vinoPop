@@ -18,6 +18,7 @@ Strategy: trust AT-SPI when it answers. Otherwise consult the blocklist.
 Default to True (editable) when neither produces a signal - better to
 show a button that does nothing than to hide one the user wanted.
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,13 +38,14 @@ _log = logging.getLogger("linuxpop")
 # event bridge does fire when the user clicks an editable element vs
 # the page body, even though the tree doesn't reflect it cleanly.
 _focus_cache: dict = {
-    "editable": None,   # True / False / None (no event yet)
-    "timestamp": 0.0,   # monotonic time of last update
-    "role": "",         # for diagnostics
+    "editable": None,  # True / False / None (no event yet)
+    "timestamp": 0.0,  # monotonic time of last update
+    "role": "",  # for diagnostics
 }
 _focus_cache_lock = threading.Lock()
 _focus_listener_started = False
 _focus_listener_ref = None  # keep listener alive (GC would otherwise drop it)
+
 
 # AT-SPI is optional. If gi bindings aren't installed we skip to the
 # WM_CLASS fallback only - no hard dependency.
@@ -60,11 +62,11 @@ _focus_listener_ref = None  # keep listener alive (GC would otherwise drop it)
 # back to the WM_CLASS heuristic. The walker still works fine,
 # just without per-widget editable detection inside Electron apps.
 def _atspi_environment_safe() -> tuple[bool, str]:
-    import os as _os
     import glob as _glob
+    import os as _os
+
     try:
-        runtime_dir = (_os.environ.get("XDG_RUNTIME_DIR")
-                        or f"/run/user/{_os.getuid()}")
+        runtime_dir = _os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{_os.getuid()}"
         bus_socket = _os.path.join(runtime_dir, "at-spi", "bus_0")
         if not _os.path.exists(bus_socket):
             return False, f"bus socket missing at {bus_socket}"
@@ -83,7 +85,8 @@ def _atspi_environment_safe() -> tuple[bool, str]:
                     return False, (
                         f"a foreign-uid at-spi-bus-launcher "
                         f"(pid={pid}, uid={proc_uid}) is running - "
-                        f"refusing to risk a dbind crash")
+                        f"refusing to risk a dbind crash"
+                    )
             except (OSError, ValueError):
                 continue
         return True, ""
@@ -96,30 +99,52 @@ _atspi_ok, _atspi_skip_reason = _atspi_environment_safe()
 if _atspi_ok:
     try:
         import gi
+
         gi.require_version("Atspi", "2.0")
         from gi.repository import Atspi  # type: ignore[attr-defined]
+
         _HAS_ATSPI = True
     except (ImportError, ValueError):
-        _log.info("[editable] Atspi gi bindings unavailable - "
-                  "will use WM_CLASS heuristic only")
+        _log.info("[editable] Atspi gi bindings unavailable - will use WM_CLASS heuristic only")
 else:
-    _log.info("[editable] AT-SPI skipped (%s) - using WM_CLASS only",
-              _atspi_skip_reason)
+    _log.info("[editable] AT-SPI skipped (%s) - using WM_CLASS only", _atspi_skip_reason)
 
 
 # WM_CLASS substrings (case-insensitive) for apps where the focused
 # widget is virtually always read-only.
 _READONLY_APP_CLASSES = (
     # PDF / document viewers
-    "evince", "okular", "atril", "qpdfview", "mupdf", "xpdf", "zathura",
+    "evince",
+    "okular",
+    "atril",
+    "qpdfview",
+    "mupdf",
+    "xpdf",
+    "zathura",
     # Image viewers
-    "feh", "geeqie", "gthumb", "eog", "gpicview", "qiv", "nomacs",
+    "feh",
+    "geeqie",
+    "gthumb",
+    "eog",
+    "gpicview",
+    "qiv",
+    "nomacs",
     # Media players
-    "mpv", "vlc", "smplayer", "totem", "celluloid",
+    "mpv",
+    "vlc",
+    "smplayer",
+    "totem",
+    "celluloid",
     # File managers (rename in-place exists but it's a tiny corner of usage)
-    "nautilus", "nemo", "caja", "thunar", "pcmanfm", "dolphin",
+    "nautilus",
+    "nemo",
+    "caja",
+    "thunar",
+    "pcmanfm",
+    "dolphin",
     # Read-only ebook readers
-    "calibre", "fbreader",
+    "calibre",
+    "fbreader",
 )
 
 
@@ -169,13 +194,17 @@ def _start_focus_listener() -> None:
     # Local import - avoids settings module circulars at module load.
     try:
         from settings import get_settings
+
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
-            _log.info("[editable] AT-SPI focus listener disabled by setting "
-                      "(editable_atspi_listener_enabled=false)")
+            _log.info(
+                "[editable] AT-SPI focus listener disabled by setting "
+                "(editable_atspi_listener_enabled=false)"
+            )
             return
     except Exception as exc:
-        _log.info("[editable] could not read AT-SPI listener setting (%s) - "
-                  "leaving listener off", exc)
+        _log.info(
+            "[editable] could not read AT-SPI listener setting (%s) - leaving listener off", exc
+        )
         return
     _focus_listener_started = True
 
@@ -193,15 +222,13 @@ def _start_focus_listener() -> None:
             # from under the C-side registration.
             global _focus_listener_ref
             _focus_listener_ref = listener
-            _log.info("[editable] AT-SPI focus listener registered - "
-                      "starting event loop")
+            _log.info("[editable] AT-SPI focus listener registered - starting event loop")
             # Blocking call - runs the AT-SPI event dispatch loop.
             Atspi.event_main()
         except Exception as exc:
             _log.info("[editable] AT-SPI listener init failed: %s", exc)
 
-    threading.Thread(target=runner, daemon=True,
-                     name="linuxpop-atspi-listener").start()
+    threading.Thread(target=runner, daemon=True, name="linuxpop-atspi-listener").start()
 
 
 def _cached_focus_editable(max_age_s: float = 30.0) -> bool | None:
@@ -222,8 +249,9 @@ def _cached_focus_editable(max_age_s: float = 30.0) -> bool | None:
     age = _time.monotonic() - ts
     if age > max_age_s:
         return None
-    _log.info("[editable] using cached focus event (%.1f s old): "
-              "role=%s editable=%s", age, role, editable)
+    _log.info(
+        "[editable] using cached focus event (%.1f s old): role=%s editable=%s", age, role, editable
+    )
     return editable
 
 
@@ -277,6 +305,7 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
     # WM_CLASS fallback handles the common case fine.
     try:
         from settings import get_settings
+
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
             return None
     except Exception:
@@ -340,8 +369,7 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
                         return  # result[0] stays None
                     try:
                         fstate = focused.get_state_set()
-                        editable = bool(
-                            fstate.contains(Atspi.StateType.EDITABLE))
+                        editable = bool(fstate.contains(Atspi.StateType.EDITABLE))
                         result[0] = editable
                         diag.append(
                             f"app={app.get_name()!r} "
@@ -356,13 +384,11 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
         except Exception as exc:
             diag.append(f"atspi error: {exc}")
 
-    t = threading.Thread(target=worker, daemon=True,
-                         name="linuxpop-atspi-probe")
+    t = threading.Thread(target=worker, daemon=True, name="linuxpop-atspi-probe")
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
-        _log.info("[editable] AT-SPI probe timed out (>%.0f ms)",
-                  timeout * 1000)
+        _log.info("[editable] AT-SPI probe timed out (>%.0f ms)", timeout * 1000)
         return None
     if diag:
         _log.info("[editable] AT-SPI: %s", " | ".join(diag))
@@ -390,8 +416,7 @@ def _selection_rect_of(acc) -> tuple[int, int, int, int] | None:
     if end <= start:
         return None
     try:
-        r = Atspi.Text.get_range_extents(acc, start, end,
-                                         Atspi.CoordType.SCREEN)
+        r = Atspi.Text.get_range_extents(acc, start, end, Atspi.CoordType.SCREEN)
     except Exception:
         return None
     if r is None:
@@ -429,6 +454,7 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
         return None
     try:
         from settings import get_settings
+
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
             return None
     except Exception:
@@ -460,8 +486,7 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
                     if win is None:
                         continue
                     try:
-                        if not win.get_state_set().contains(
-                                Atspi.StateType.ACTIVE):
+                        if not win.get_state_set().contains(Atspi.StateType.ACTIVE):
                             continue
                     except Exception:
                         continue
@@ -473,13 +498,11 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
         except Exception:
             return
 
-    t = threading.Thread(target=worker, daemon=True,
-                         name="linuxpop-atspi-selrect")
+    t = threading.Thread(target=worker, daemon=True, name="linuxpop-atspi-selrect")
     t.start()
     t.join(timeout=timeout)
     if t.is_alive():
-        _log.info("[anchor] AT-SPI selection-rect probe timed out (>%.0f ms)",
-                  timeout * 1000)
+        _log.info("[anchor] AT-SPI selection-rect probe timed out (>%.0f ms)", timeout * 1000)
         return None
     if result[0] is not None:
         _log.info("[anchor] AT-SPI selection rect (screen px): %r", result[0])
@@ -500,13 +523,17 @@ def _wm_class_lower() -> str:
     try:
         wid = subprocess.run(
             ["xdotool", "getactivewindow"],
-            capture_output=True, text=True, timeout=0.3,
+            capture_output=True,
+            text=True,
+            timeout=0.3,
         ).stdout.strip()
         if not wid:
             return ""
         out = subprocess.run(
             ["xprop", "-id", wid, "WM_CLASS"],
-            capture_output=True, text=True, timeout=0.3,
+            capture_output=True,
+            text=True,
+            timeout=0.3,
         ).stdout.strip()
         # xprop format: WM_CLASS(STRING) = "instance", "Class"
         # Lower-case everything and let the blocklist substring-match
@@ -540,22 +567,24 @@ def is_focus_editable(extra_readonly_classes: tuple[str, ...] = ()) -> bool:
 
     atspi_answer = _atspi_focus_editable()
     if atspi_answer is not None:
-        _log.info("[editable] AT-SPI tree-walk authoritative: editable=%s",
-                  atspi_answer)
+        _log.info("[editable] AT-SPI tree-walk authoritative: editable=%s", atspi_answer)
         return atspi_answer
 
     wm = _wm_class_lower()
-    blocklist = _READONLY_APP_CLASSES + tuple(
-        c.lower() for c in extra_readonly_classes
-    )
+    blocklist = _READONLY_APP_CLASSES + tuple(c.lower() for c in extra_readonly_classes)
     if not wm:
         _log.info("[editable] no WM_CLASS + no AT-SPI signal - defaulting to True")
         return True
     for needle in blocklist:
         if needle in wm:
-            _log.info("[editable] WM_CLASS=%r matched read-only entry %r "
-                      "(AT-SPI silent) - hiding edit-only plugins", wm, needle)
+            _log.info(
+                "[editable] WM_CLASS=%r matched read-only entry %r "
+                "(AT-SPI silent) - hiding edit-only plugins",
+                wm,
+                needle,
+            )
             return False
-    _log.info("[editable] WM_CLASS=%r (AT-SPI silent, no cached event) "
-              "- treating as editable=True", wm)
+    _log.info(
+        "[editable] WM_CLASS=%r (AT-SPI silent, no cached event) - treating as editable=True", wm
+    )
     return True

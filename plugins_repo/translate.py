@@ -10,6 +10,7 @@ the clipboard.
 No API key, no window switch. Falls back to a desktop notification if the
 network call fails.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,13 +28,28 @@ from plugin_base import Plugin
 # (code, human label). Kept short so the dropdown stays compact. "auto" is
 # only ever the *source* (detected), never a target.
 _LANGS = [
-    ("en", "English"), ("no", "Norsk"), ("sv", "Svenska"), ("da", "Dansk"),
-    ("de", "Deutsch"), ("fr", "Français"), ("es", "Español"),
-    ("it", "Italiano"), ("nl", "Nederlands"), ("pt", "Português"),
-    ("pl", "Polski"), ("ru", "Русский"), ("uk", "Українська"),
-    ("fi", "Suomi"), ("is", "Íslenska"), ("cs", "Čeština"),
-    ("tr", "Türkçe"), ("ar", "العربية"), ("hi", "हिन्दी"),
-    ("zh-CN", "中文"), ("ja", "日本語"), ("ko", "한국어"),
+    ("en", "English"),
+    ("no", "Norsk"),
+    ("sv", "Svenska"),
+    ("da", "Dansk"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("nl", "Nederlands"),
+    ("pt", "Português"),
+    ("pl", "Polski"),
+    ("ru", "Русский"),
+    ("uk", "Українська"),
+    ("fi", "Suomi"),
+    ("is", "Íslenska"),
+    ("cs", "Čeština"),
+    ("tr", "Türkçe"),
+    ("ar", "العربية"),
+    ("hi", "हिन्दी"),
+    ("zh-CN", "中文"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
 ]
 _LABEL_BY_CODE = dict(_LANGS)
 
@@ -73,14 +89,16 @@ def _install_css() -> None:
     screen = Gdk.Screen.get_default()
     if screen is not None:
         Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
     _css_installed = True
 
 
 def _target_lang() -> str:
     try:
         from settings import get_settings
-        return (get_settings().get("translate_target_lang") or "en")
+
+        return get_settings().get("translate_target_lang") or "en"
     except Exception:
         return "en"
 
@@ -88,6 +106,7 @@ def _target_lang() -> str:
 def _save_target_lang(code: str) -> None:
     try:
         from settings import get_settings
+
         s = get_settings()
         s.set("translate_target_lang", code)
         s.save()
@@ -97,9 +116,10 @@ def _save_target_lang(code: str) -> None:
 
 def _translate_text(text: str, target: str) -> tuple[str, str]:
     """Return (translated_text, detected_source_lang). Raises on failure."""
-    url = ("https://translate.googleapis.com/translate_a/single?client=gtx"
-           "&sl=auto&tl=%s&dt=t&q=%s"
-           % (urllib.parse.quote(target), urllib.parse.quote(text)))
+    url = (
+        "https://translate.googleapis.com/translate_a/single?client=gtx"
+        f"&sl=auto&tl={urllib.parse.quote(target)}&dt=t&q={urllib.parse.quote(text)}"
+    )
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     raw = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
     data = json.loads(raw)
@@ -110,17 +130,28 @@ def _translate_text(text: str, target: str) -> tuple[str, str]:
 
 def _notify(title: str, body: str) -> None:
     import subprocess
+
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "4000",
-         "-i", "preferences-desktop-locale", title, body[:300]],
-        check=False)
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "4000",
+            "-i",
+            "preferences-desktop-locale",
+            title,
+            body[:300],
+        ],
+        check=False,
+    )
 
 
 class _Bubble:
     """The floating translation result window."""
 
-    def __init__(self, original: str, translated: str, src: str,
-                 target: str, x: int, y: int) -> None:
+    def __init__(
+        self, original: str, translated: str, src: str, target: str, x: int, y: int
+    ) -> None:
         self._original = original
         self._x, self._y = x, y
         self._dismiss_id = None
@@ -150,8 +181,7 @@ class _Bubble:
         # (reliable on Wayland, unlike surface-local pointer coords) and watch
         # global clicks via the same evdev watcher the main popup uses.
         ev = self.win.get_events()
-        self.win.set_events(ev | Gdk.EventMask.ENTER_NOTIFY_MASK
-                            | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.win.set_events(ev | Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.win.connect("enter-notify-event", self._on_enter)
         self.win.connect("leave-notify-event", self._on_leave)
 
@@ -245,7 +275,7 @@ class _Bubble:
         mon = disp.get_monitor_at_point(self._x, self._y)
         geom = mon.get_geometry() if mon else None
         tx = int(self._x - w / 2)
-        ty = int(self._y + 24)            # below the selection/cursor
+        ty = int(self._y + 24)  # below the selection/cursor
         if geom is not None:
             tx = max(geom.x + 4, min(tx, geom.x + geom.width - w - 4))
             if ty + h > geom.y + geom.height - 4:
@@ -306,6 +336,7 @@ class _Bubble:
     def _on_copy(self, *_):
         try:
             from platform_backend import get_backend
+
             get_backend().set_clipboard(self._last_translation)
         except Exception:
             pass
@@ -324,8 +355,8 @@ class _Bubble:
                 GLib.idle_add(self._set_error, f"(error: {exc})")
                 return
             GLib.idle_add(self._set_result, translated, src)
-        threading.Thread(target=_work, daemon=True,
-                         name="translate-relang").start()
+
+        threading.Thread(target=_work, daemon=True, name="translate-relang").start()
 
     def _on_timeout(self) -> bool:
         self._dismiss_id = None
@@ -357,6 +388,7 @@ def _translate(text: str) -> None:
     x, y = 0, 0
     try:
         from platform_backend import get_backend
+
         x, y = get_backend().pointer_position()
     except Exception:
         pass
@@ -372,15 +404,18 @@ def _translate(text: str) -> None:
         except Exception as exc:  # noqa: BLE001
             print(f"[translate] bubble failed: {exc}")
         return False
+
     GLib.idle_add(_build)
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="translate",
-        icon="preferences-desktop-locale-symbolic",
-        tooltip="Translate",
-        handler=_translate,
-        content_types=(),  # offer for any selection
-        priority=45,
-    ))
+    register_plugin(
+        Plugin(
+            name="translate",
+            icon="preferences-desktop-locale-symbolic",
+            tooltip="Translate",
+            handler=_translate,
+            content_types=(),  # offer for any selection
+            priority=45,
+        )
+    )

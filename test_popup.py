@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Tester at popup-vinduet vises korrekt uten å trenge X11-watcher."""
-import gi
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
 
+import gi
+
+gi.require_version("Gtk", "3.0")
 import sys
-sys.path.insert(0, '.')
+
+from gi.repository import GLib, Gtk
+
+sys.path.insert(0, ".")
 import plugin_loader
 from classifier import ContentType
 from popup import PopupWindow
+
 
 def main():
     plugin_loader.load_all()
@@ -42,6 +46,7 @@ def main():
     popup.win.connect("hide", on_hide)
 
     Gtk.main()
+
 
 if __name__ == "__main__":
     main()

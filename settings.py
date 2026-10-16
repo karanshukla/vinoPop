@@ -4,6 +4,7 @@ Lives at ~/.config/linuxpop/settings.json. Missing file or missing keys
 fall back to defaults. Unknown keys in the file are preserved on save so
 the user can hand-edit and add comments-as-keys.
 """
+
 from __future__ import annotations
 
 import json
@@ -235,7 +236,7 @@ DEFAULTS: dict[str, Any] = {
     # (each is independent - show only the ones you've actually set up).
     # Conventional defaults are pre-filled assuming the GitHub org name
     # matches the upstream repo; update or blank out as needed.
-    "support_paypal_url":   "https://paypal.me/gaimsdev",
+    "support_paypal_url": "https://paypal.me/gaimsdev",
     # 'Skip short auto-popup selections' filter. Off by default to
     # match PopClip out of the box (no minimum-size knob there). When
     # on, the watcher silently drops selections shorter than

@@ -13,6 +13,7 @@ dialogs that block selection) becomes unreachable. OCR turns the
 *pixels* into a PRIMARY-equivalent selection - the rest of LinuxPop's
 pipeline lights up automatically.
 """
+
 from __future__ import annotations
 
 import logging
@@ -34,16 +35,14 @@ def _stage_text(text: str) -> None:
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
         for extra in ([], ["--primary"]):
             try:
-                subprocess.run(["wl-copy", *extra], input=data,
-                               check=False, timeout=2.0)
+                subprocess.run(["wl-copy", *extra], input=data, check=False, timeout=2.0)
             except (OSError, subprocess.SubprocessError):
                 pass
         return
     if shutil.which("xclip"):
         for sel in ("clipboard", "primary"):
             try:
-                subprocess.run(["xclip", "-selection", sel], input=data,
-                               check=False, timeout=2.0)
+                subprocess.run(["xclip", "-selection", sel], input=data, check=False, timeout=2.0)
             except (OSError, subprocess.SubprocessError):
                 pass
 
@@ -78,15 +77,15 @@ def install_command() -> str:
     if has(("fedora", "rhel", "centos", "rocky", "alma")):
         return "sudo dnf install -y tesseract tesseract-langpack-eng maim"
     if has(("arch", "manjaro", "endeavouros")):
-        return ("sudo pacman -S --noconfirm tesseract tesseract-data-eng "
-                "maim")
+        return "sudo pacman -S --noconfirm tesseract tesseract-data-eng maim"
     if has(("opensuse", "suse")):
-        return ("sudo zypper --non-interactive install tesseract-ocr "
-                "tesseract-ocr-traineddata-english maim")
+        return (
+            "sudo zypper --non-interactive install tesseract-ocr "
+            "tesseract-ocr-traineddata-english maim"
+        )
     # Default to apt: Debian, Ubuntu, Mint, Pop_OS, elementary,
     # Zorin, Kubuntu, Xubuntu, MX, Deepin, KDE Neon, ...
-    return ("sudo apt install -y tesseract-ocr tesseract-ocr-eng "
-            "tesseract-ocr-nor maim")
+    return "sudo apt install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-nor maim"
 
 
 def _in_flatpak() -> bool:
@@ -100,6 +99,7 @@ def _portal_screenshot(out_path: Path) -> bool:
     Flatpak sandbox, where no screenshot binary is on PATH."""
     try:
         import urllib.parse
+
         import dbus
         from dbus.mainloop.glib import DBusGMainLoop
         from gi.repository import GLib
@@ -110,8 +110,7 @@ def _portal_screenshot(out_path: Path) -> bool:
     try:
         DBusGMainLoop(set_as_default=True)
         bus = dbus.SessionBus()
-        portal = bus.get_object("org.freedesktop.portal.Desktop",
-                                "/org/freedesktop/portal/desktop")
+        portal = bus.get_object("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop")
         iface = dbus.Interface(portal, "org.freedesktop.portal.Screenshot")
         loop = GLib.MainLoop()
 
@@ -121,11 +120,14 @@ def _portal_screenshot(out_path: Path) -> bool:
             loop.quit()
 
         req_path = iface.Screenshot(
-            "", {"interactive": dbus.Boolean(True),
-                 "handle_token": "linuxpop_ocr_%d" % os.getpid()})
+            "", {"interactive": dbus.Boolean(True), "handle_token": f"linuxpop_ocr_{os.getpid()}"}
+        )
         bus.add_signal_receiver(
-            _on_response, signal_name="Response",
-            dbus_interface="org.freedesktop.portal.Request", path=str(req_path))
+            _on_response,
+            signal_name="Response",
+            dbus_interface="org.freedesktop.portal.Request",
+            path=str(req_path),
+        )
         # Generous timeout: the user is drawing a box by hand.
         GLib.timeout_add(180000, lambda: (loop.quit(), False)[1])
         loop.run()
@@ -151,7 +153,10 @@ def _host_has(binary: str) -> bool:
     try:
         r = subprocess.run(
             ["flatpak-spawn", "--host", "sh", "-c", f"command -v {binary}"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
         return r.returncode == 0 and bool(r.stdout.strip())
     except (OSError, subprocess.SubprocessError):
         return False
@@ -179,8 +184,9 @@ def _host_capture_region(out_path: Path) -> bool:
 
     def host(*argv, timeout):
         try:
-            return subprocess.run(["flatpak-spawn", "--host", *argv],
-                                  capture_output=True, text=True, timeout=timeout)
+            return subprocess.run(
+                ["flatpak-spawn", "--host", *argv], capture_output=True, text=True, timeout=timeout
+            )
         except (OSError, subprocess.SubprocessError):
             return None
 
@@ -226,8 +232,12 @@ def _has_capture_tool() -> bool:
     (Wayland) or maim/gnome-screenshot (X11) on PATH."""
     if _in_flatpak():
         return True
-    return bool(shutil.which("spectacle") or shutil.which("grim")
-                or shutil.which("maim") or shutil.which("gnome-screenshot"))
+    return bool(
+        shutil.which("spectacle")
+        or shutil.which("grim")
+        or shutil.which("maim")
+        or shutil.which("gnome-screenshot")
+    )
 
 
 def is_supported() -> tuple[bool, str]:
@@ -242,7 +252,7 @@ def is_supported() -> tuple[bool, str]:
     return True, ""
 
 
-def install_argv() -> "list[str] | None":
+def install_argv() -> list[str] | None:
     """A pkexec argv that installs the missing OCR dependencies non-
     interactively (pkexec shows a graphical auth prompt). Returns None when
     we don't recognise the package manager. A capture tool is only added
@@ -271,8 +281,9 @@ def install_argv() -> "list[str] | None":
         if need_capture:
             pkgs.append("maim")
         return ["pkexec", "zypper", "--non-interactive", "install", *pkgs]
-    if has(("debian", "ubuntu", "mint", "pop", "elementary", "zorin",
-            "neon", "kali", "deepin", "mx")):
+    if has(
+        ("debian", "ubuntu", "mint", "pop", "elementary", "zorin", "neon", "kali", "deepin", "mx")
+    ):
         pkgs = ["tesseract-ocr", "tesseract-ocr-eng", "tesseract-ocr-nor"]
         if need_capture:
             pkgs.append("maim")
@@ -299,7 +310,8 @@ def _capture_region(out_path: Path) -> bool:
         try:
             subprocess.run(
                 ["spectacle", "-r", "-b", "-n", "-o", str(out_path)],
-                capture_output=True, timeout=120,
+                capture_output=True,
+                timeout=120,
             )
             return out_path.is_file() and out_path.stat().st_size > 0
         except subprocess.TimeoutExpired:
@@ -309,13 +321,13 @@ def _capture_region(out_path: Path) -> bool:
         # wlroots compositors (sway, Hyprland): slurp picks the region,
         # grim captures it.
         try:
-            geom = subprocess.run(["slurp"], capture_output=True,
-                                  timeout=60, text=True)
+            geom = subprocess.run(["slurp"], capture_output=True, timeout=60, text=True)
             if geom.returncode != 0 or not geom.stdout.strip():
                 return False
             res = subprocess.run(
                 ["grim", "-g", geom.stdout.strip(), str(out_path)],
-                capture_output=True, timeout=30,
+                capture_output=True,
+                timeout=30,
             )
             return res.returncode == 0 and out_path.is_file()
         except subprocess.TimeoutExpired:
@@ -327,11 +339,11 @@ def _capture_region(out_path: Path) -> bool:
         try:
             res = subprocess.run(
                 ["maim", "-s", str(out_path)],
-                capture_output=True, timeout=60,
+                capture_output=True,
+                timeout=60,
             )
             if res.returncode != 0:
-                log.info("[ocr] maim exited %d (user cancelled?)",
-                         res.returncode)
+                log.info("[ocr] maim exited %d (user cancelled?)", res.returncode)
                 return False
             return out_path.is_file() and out_path.stat().st_size > 0
         except subprocess.TimeoutExpired:
@@ -343,7 +355,8 @@ def _capture_region(out_path: Path) -> bool:
         try:
             res = subprocess.run(
                 ["gnome-screenshot", "--area", "--file", str(out_path)],
-                capture_output=True, timeout=60,
+                capture_output=True,
+                timeout=60,
             )
             return res.returncode == 0 and out_path.is_file()
         except subprocess.TimeoutExpired:
@@ -357,11 +370,12 @@ def _run_tesseract(image_path: Path, lang: str = "eng") -> str | None:
     try:
         res = subprocess.run(
             ["tesseract", str(image_path), "-", "-l", lang],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True,
+            text=True,
+            timeout=20,
         )
         if res.returncode != 0:
-            log.warning("[ocr] tesseract returncode=%d stderr=%s",
-                        res.returncode, res.stderr[:200])
+            log.warning("[ocr] tesseract returncode=%d stderr=%s", res.returncode, res.stderr[:200])
             return None
         return (res.stdout or "").strip()
     except subprocess.TimeoutExpired:
@@ -385,9 +399,7 @@ def capture_and_recognize(lang: str = "eng+nor") -> tuple[bool, str]:
     if not ok:
         return False, reason
 
-    with tempfile.NamedTemporaryFile(
-            suffix=".png", prefix="linuxpop-ocr-",
-            delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".png", prefix="linuxpop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
 
     try:
@@ -408,13 +420,16 @@ def capture_and_recognize(lang: str = "eng+nor") -> tuple[bool, str]:
             pass
 
 
-def _capture_via_overlay() -> "str | None":
+def _capture_via_overlay() -> str | None:
     """Run the frictionless overlay selector on the GTK main thread and return
     the cropped PNG path (or None if cancelled). Called from a worker thread,
     so it blocks on an Event until the user finishes the drag."""
     import threading
+
     from gi.repository import GLib
+
     import ocr_selector
+
     done = threading.Event()
     holder: dict = {}
 
@@ -436,8 +451,16 @@ def run_ocr_to_clipboard() -> None:
     ok_sup, reason = is_supported()
     if not ok_sup:
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "4000",
-             "-i", "dialog-information", "LinuxPop OCR", reason],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "4000",
+                "-i",
+                "dialog-information",
+                "LinuxPop OCR",
+                reason,
+            ],
             check=False,
         )
         return
@@ -445,25 +468,34 @@ def run_ocr_to_clipboard() -> None:
     # Prefer the frictionless overlay selector (drag -> done, no Accept step).
     # Fall back to spectacle's region capture if it isn't available.
     payload = None
-    used_overlay = False
     try:
         import ocr_selector
+
         if ocr_selector.available():
-            used_overlay = True
             crop = _capture_via_overlay()
             if crop is None:
                 return  # user cancelled (Esc / zero-size drag)
-            text = (_run_tesseract(Path(crop), lang="eng+nor")
-                    or _run_tesseract(Path(crop), lang="eng"))
+            text = _run_tesseract(Path(crop), lang="eng+nor") or _run_tesseract(
+                Path(crop), lang="eng"
+            )
             try:
                 os.unlink(crop)
             except OSError:
                 pass
             if not text:
                 subprocess.run(
-                    ["notify-send", "--hint=byte:transient:1", "-t", "3500",
-                     "-i", "dialog-information", "LinuxPop OCR",
-                     "No text found in the selection."], check=False)
+                    [
+                        "notify-send",
+                        "--hint=byte:transient:1",
+                        "-t",
+                        "3500",
+                        "-i",
+                        "dialog-information",
+                        "LinuxPop OCR",
+                        "No text found in the selection.",
+                    ],
+                    check=False,
+                )
                 return
             payload = text
     except Exception as exc:  # noqa: BLE001
@@ -474,8 +506,16 @@ def run_ocr_to_clipboard() -> None:
         ok, payload = capture_and_recognize()
         if not ok:
             subprocess.run(
-                ["notify-send", "--hint=byte:transient:1", "-t", "4000",
-                 "-i", "dialog-information", "LinuxPop OCR", payload],
+                [
+                    "notify-send",
+                    "--hint=byte:transient:1",
+                    "-t",
+                    "4000",
+                    "-i",
+                    "dialog-information",
+                    "LinuxPop OCR",
+                    payload,
+                ],
                 check=False,
             )
             return
@@ -486,8 +526,15 @@ def run_ocr_to_clipboard() -> None:
     # OCR ran and roughly what came out.
     preview = payload.replace("\n", " ")[:120]
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "3500",
-         "-i", "edit-paste-symbolic", "OCR captured",
-         f"{len(payload)} chars on clipboard - “{preview}”"],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "3500",
+            "-i",
+            "edit-paste-symbolic",
+            "OCR captured",
+            f"{len(payload)} chars on clipboard - “{preview}”",
+        ],
         check=False,
     )

@@ -5,6 +5,7 @@ colleague across the room, showing a confirmation number from your
 screen to a friend on the phone, or just enlarging a tiny menu item
 your eyes don't like. Click anywhere or press Esc / Space to dismiss.
 """
+
 from __future__ import annotations
 
 import gi
@@ -13,7 +14,6 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from plugin_base import Plugin
-
 
 _CSS = b"""
 window.linuxpop-large-type {
@@ -40,7 +40,9 @@ def _install_css() -> None:
     screen = Gdk.Screen.get_default()
     if screen is not None:
         Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            screen,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
     _css_installed = True
 
@@ -81,9 +83,12 @@ def _show_large(text: str) -> None:
             win.destroy()
             return True
 
-        win.connect("key-press-event",
-                    lambda _w, e: _dismiss() if e.keyval in
-                    (Gdk.KEY_Escape, Gdk.KEY_space, Gdk.KEY_Return) else False)
+        win.connect(
+            "key-press-event",
+            lambda _w, e: (
+                _dismiss() if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_space, Gdk.KEY_Return) else False
+            ),
+        )
         win.connect("button-press-event", _dismiss)
         win.show_all()
         return False
@@ -92,11 +97,13 @@ def _show_large(text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="large-type",
-        icon="zoom-in-symbolic",
-        tooltip="Show as large text",
-        handler=_show_large,
-        content_types=(),  # works for anything
-        priority=70,
-    ))
+    register_plugin(
+        Plugin(
+            name="large-type",
+            icon="zoom-in-symbolic",
+            tooltip="Show as large text",
+            handler=_show_large,
+            content_types=(),  # works for anything
+            priority=70,
+        )
+    )
