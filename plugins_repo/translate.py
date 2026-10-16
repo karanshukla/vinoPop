@@ -18,7 +18,7 @@ from gi.repository import Gtk  # noqa: E402
 
 from plugin_base import Plugin  # noqa: E402
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 # (code, label in its own language, English name for the prompt)
 _LANGS = [

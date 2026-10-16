@@ -1,4 +1,4 @@
-"""`linuxpop --doctor`: what the offline AI needs from this machine.
+"""`vinopop --doctor`: what the offline AI needs from this machine.
 
 Modelled on vinowhisper-doctor. Reads, never changes anything, and needs
 no GTK, so it also works over SSH and in a bug report (`--json`).

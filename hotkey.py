@@ -126,7 +126,7 @@ class Hotkey:
         self._root = None
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._run, daemon=True, name="linuxpop-hotkey")
+        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-hotkey")
         self._thread.start()
 
     def stop(self, wait: bool = True, timeout: float = 1.5) -> None:
@@ -222,7 +222,7 @@ class Hotkey:
                         "critical",
                         "-i",
                         "dialog-warning",
-                        "LinuxPop hotkey conflict",
+                        "vinoPop hotkey conflict",
                         f"'{self._hotkey_str}' is already bound by another app. "
                         "Pick a different combination in Settings.",
                     ],

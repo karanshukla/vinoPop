@@ -1,11 +1,11 @@
-"""Theme for LinuxPop on GTK 4 + libadwaita -- one CSS provider for every window.
+"""Theme for vinoPop on GTK 4 + libadwaita -- one CSS provider for every window.
 
 libadwaita's own stylesheet is the base, so windows look native on GNOME and
 follow its light/dark handling everywhere else. install_premium_theme() maps
 the user's "dark" / "light" / "system" choice onto Adw.StyleManager's colour
 scheme (FORCE_DARK / FORCE_LIGHT / DEFAULT) and layers a small brand layer on
 top: the accent colour (cobalt blue -> royal violet -> magenta pink, from the
-app icon), the gradient on suggested-action buttons, and LinuxPop's own helper
+app icon), the gradient on suggested-action buttons, and vinoPop's own helper
 classes (.lp-*). Everything else - header bars, rows, entries, switches,
 popovers - is left to Adwaita.
 
@@ -30,7 +30,7 @@ from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 # @accent_bg_color, ...) so one stylesheet serves light and dark.
 _BRAND_CSS = """
 /* ============================================================
-   LinuxPop brand layer over libadwaita
+   vinoPop brand layer over libadwaita
      accent-1   #5B7DF5  (cobalt blue)
      accent-2   #7C3AED  (royal violet)
      accent-3   #EC4899  (magenta pink)
@@ -129,7 +129,7 @@ textview.lp-cmd-edit {
         alpha(#7C3AED, 0.22));
 }
 
-/* ----- LinuxPop-specific helper classes -----
+/* ----- vinoPop-specific helper classes -----
    Any widget that adds these style classes via add_css_class()
    gets brand accents on top of the Adwaita widget styling. */
 .lp-accent {
@@ -297,7 +297,7 @@ def _apply_brand(effective: str) -> None:
     except Exception:
         import logging
 
-        logging.getLogger("linuxpop").exception("brand theme (%s) failed to load", effective)
+        logging.getLogger("vinopop").exception("brand theme (%s) failed to load", effective)
         return
     if _active_provider is not None:
         try:

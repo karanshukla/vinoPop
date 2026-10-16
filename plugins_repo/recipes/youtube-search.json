@@ -1,7 +1,7 @@
 {
   "name": "youtube-search",
   "tooltip": "Search YouTube",
-  "icon": "linuxpop-youtube",
+  "icon": "vinopop-youtube",
   "content_types": ["plain_text"],
   "priority": 70,
   "action": {

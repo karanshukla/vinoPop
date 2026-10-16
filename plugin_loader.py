@@ -1,6 +1,6 @@
 """Loads built-in and user-defined plugins.
 
-User plugins are Python files in ~/.config/linuxpop/plugins/ that expose
+User plugins are Python files in ~/.config/vinopop/plugins/ that expose
 a top-level `register(register_plugin)` function. Each plugin file may
 register one or more Plugin instances.
 """
@@ -21,9 +21,9 @@ from xdg_paths import CONFIG_DIR
 _PLUGINS: list[Plugin] = []
 
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
-LINUXPOP_DIR = str(Path(__file__).resolve().parent)
-REPO_PLUGIN_DIR = Path(LINUXPOP_DIR) / "plugins_repo"
-ICONS_DIR = Path(LINUXPOP_DIR) / "icons"
+VINOPOP_DIR = str(Path(__file__).resolve().parent)
+REPO_PLUGIN_DIR = Path(VINOPOP_DIR) / "plugins_repo"
+ICONS_DIR = Path(VINOPOP_DIR) / "icons"
 HICOLOR_APPS = Path.home() / ".local/share/icons/hicolor/scalable/apps"
 
 # Curated set seeded into a brand-new install. Aim is "useful within
@@ -44,8 +44,8 @@ _PLUGIN_SEED_MARKER = USER_PLUGIN_DIR.parent / ".default-plugins-seeded"
 
 def _ensure_on_path() -> None:
     """User plugins import classifier/plugin_base - make sure those resolve."""
-    if LINUXPOP_DIR not in sys.path:
-        sys.path.insert(0, LINUXPOP_DIR)
+    if VINOPOP_DIR not in sys.path:
+        sys.path.insert(0, VINOPOP_DIR)
 
 
 # Cache of (icons_dir_mtime, user_icons_dir_mtime) → (any_copied) from the
@@ -63,7 +63,7 @@ def _dir_mtime(p: Path) -> float:
 
 
 def _install_all_icons() -> None:
-    """Copy every SVG from linuxpop/icons/ into the user's hicolor theme,
+    """Copy every SVG from vinopop/icons/ into the user's hicolor theme,
     register an extra search path with the running GTK process, and refresh
     the icon-theme cache so newly installed icons are findable.
     """
@@ -71,7 +71,7 @@ def _install_all_icons() -> None:
         return
     # Fast path: if neither the bundled icons dir nor the user icons dir
     # has been touched since the last run, skip the stat-storm + rescan.
-    user_icons_dir = Path.home() / ".config/linuxpop/icons"
+    user_icons_dir = Path.home() / ".config/vinopop/icons"
     bundled_mtime = _dir_mtime(ICONS_DIR)
     user_mtime = _dir_mtime(user_icons_dir)
     if (
@@ -110,7 +110,7 @@ def _install_all_icons() -> None:
 
     # Tell the running GTK process about our icon dir AND refresh the cache.
     # Without this, GTK has already scanned its theme dirs before we copied,
-    # and falls back to the "image-missing" icon for our linuxpop-* names.
+    # and falls back to the "image-missing" icon for our vinopop-* names.
     # (GTK 4 re-checks its theme directories on its own; adding the search
     # path is all that's needed in-process.)
     try:
@@ -145,10 +145,10 @@ def _install_all_icons() -> None:
         _threading.Thread(
             target=_bg_rebuild_cache,
             daemon=True,
-            name="linuxpop-icon-cache",
+            name="vinopop-icon-cache",
         ).start()
 
-    # Mirror any user-supplied icons from ~/.config/linuxpop/icons/ into
+    # Mirror any user-supplied icons from ~/.config/vinopop/icons/ into
     # hicolor so they're searchable in the picker and usable by recipes.
     _sync_user_icons()
 
@@ -173,7 +173,7 @@ def _icon_theme():
 
 
 def _sync_user_icons() -> None:
-    user_icons_dir = Path.home() / ".config/linuxpop/icons"
+    user_icons_dir = Path.home() / ".config/vinopop/icons"
     user_icons_dir.mkdir(parents=True, exist_ok=True)
     user_copied = False
     for src in list(user_icons_dir.glob("*.svg")) + list(user_icons_dir.glob("*.png")):
@@ -278,7 +278,7 @@ def _register_builtins() -> None:
     def _snippets_loaded() -> bool:
         import sys
 
-        ch = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get(
+        ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get(
             "clipboard_history"
         )
         return ch is not None and hasattr(ch, "_create_snippet")
@@ -414,7 +414,7 @@ def _load_user_plugins() -> None:
     for path in sorted(USER_PLUGIN_DIR.glob("*.py")):
         if path.name.startswith("_"):
             continue
-        mod_name = f"linuxpop_user_{path.stem}"
+        mod_name = f"vinopop_user_{path.stem}"
         try:
             spec = importlib.util.spec_from_file_location(mod_name, path)
             if spec is None or spec.loader is None:
@@ -439,7 +439,7 @@ def _load_user_plugins() -> None:
                 print(f"[plugin_loader] loaded user plugin: {path.name}")
         except Exception:
             # Roll back the half-initialised module so main.py's
-            # sys.modules.get("linuxpop_user_clipboard_history") doesn't
+            # sys.modules.get("vinopop_user_clipboard_history") doesn't
             # find a broken stub and silently behave as if the plugin
             # were loaded. Next load_all() then gets a clean re-import.
             sys.modules.pop(mod_name, None)

@@ -66,7 +66,7 @@
       "snippets",
       "essentials"
     ],
-    "icon": "linuxpop-clipboard-symbolic"
+    "icon": "vinopop-clipboard-symbolic"
   },
   {
     "file": "wordcount.py",
@@ -77,7 +77,7 @@
       "text",
       "utility"
     ],
-    "icon": "linuxpop-wordcount-symbolic"
+    "icon": "vinopop-wordcount-symbolic"
   },
   {
     "file": "calculator.py",
@@ -88,7 +88,7 @@
       "math",
       "utility"
     ],
-    "icon": "linuxpop-calculator-symbolic"
+    "icon": "vinopop-calculator-symbolic"
   },
   {
     "file": "case_convert.py",
@@ -99,7 +99,7 @@
       "text",
       "case"
     ],
-    "icon": "linuxpop-case-upper-symbolic"
+    "icon": "vinopop-case-upper-symbolic"
   },
   {
     "file": "speak.py",
@@ -132,7 +132,7 @@
       "url",
       "qr"
     ],
-    "icon": "linuxpop-qr-symbolic"
+    "icon": "vinopop-qr-symbolic"
   },
   {
     "kind": "recipe",
@@ -168,7 +168,7 @@
     "tags": [
       "web"
     ],
-    "icon": "linuxpop-wikipedia"
+    "icon": "vinopop-wikipedia"
   },
   {
     "kind": "recipe",
@@ -202,7 +202,7 @@
     "tags": [
       "web"
     ],
-    "icon": "linuxpop-youtube"
+    "icon": "vinopop-youtube"
   },
   {
     "kind": "recipe",
@@ -273,7 +273,7 @@
       "text",
       "encoding"
     ],
-    "icon": "linuxpop-base64-encode-symbolic"
+    "icon": "vinopop-base64-encode-symbolic"
   },
   {
     "file": "json_format.py",
@@ -284,7 +284,7 @@
       "json",
       "developer"
     ],
-    "icon": "linuxpop-json-symbolic"
+    "icon": "vinopop-json-symbolic"
   },
   {
     "file": "url_encode.py",
@@ -295,7 +295,7 @@
       "url",
       "encoding"
     ],
-    "icon": "linuxpop-url-encode-symbolic"
+    "icon": "vinopop-url-encode-symbolic"
   },
   {
     "file": "dev_hashes.py",

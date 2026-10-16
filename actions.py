@@ -51,7 +51,7 @@ def pin_as_snippet(text: str) -> None:
     gi.require_version("Adw", "1")
     from gi.repository import Adw, GLib, Gtk
 
-    ch = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get("clipboard_history")
+    ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get("clipboard_history")
     if ch is None or not hasattr(ch, "_create_snippet"):
         subprocess.run(
             [
@@ -61,7 +61,7 @@ def pin_as_snippet(text: str) -> None:
                 "3000",
                 "-i",
                 "dialog-warning",
-                "LinuxPop",
+                "vinoPop",
                 "Snippets need the Clipboard history plugin enabled.",
             ],
             check=False,
@@ -143,8 +143,8 @@ def pin_as_snippet(text: str) -> None:
                     "-t",
                     "2000",
                     "-i",
-                    "linuxpop",
-                    "LinuxPop",
+                    "vinopop",
+                    "vinoPop",
                     f"Saved snippet: {name or text[:40]}",
                 ],
                 check=False,
@@ -213,7 +213,7 @@ def replace_selection(new_text: str) -> None:
 def _desktop_env() -> dict:
     """Env that lets xdg-open talk to the running desktop session.
 
-    If LinuxPop was launched without inheriting DBUS_SESSION_BUS_ADDRESS
+    If vinoPop was launched without inheriting DBUS_SESSION_BUS_ADDRESS
     (some systemd-user / detached-shell scenarios), Firefox's
     "is there an instance running?" probe fails - it can't find the
     real process via DBus, sees the profile lockfile, and pops
@@ -338,7 +338,7 @@ def _spawn_terminal(argv: list[str], log) -> None:
         with env=None has been observed to drop some env vars that the
         terminal's D-Bus client needs (DBUS_SESSION_BUS_ADDRESS, GIO*).
         Explicit copy forces the fork+exec path.
-      * start_new_session=True -- terminal outlives LinuxPop if we exit.
+      * start_new_session=True -- terminal outlives vinoPop if we exit.
     """
     try:
         subprocess.Popen(
@@ -378,11 +378,11 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     gi.require_version("Adw", "1")
     from gi.repository import Adw, Gdk, Gtk
 
-    log = logging.getLogger("linuxpop")
+    log = logging.getLogger("vinopop")
 
     dlg = Adw.Window(title="Run in terminal")
     dlg.set_default_size(580, 260)
-    dlg.set_icon_name("linuxpop")
+    dlg.set_icon_name("vinopop")
 
     box = Gtk.Box(
         orientation=Gtk.Orientation.VERTICAL,
@@ -564,7 +564,7 @@ def run_in_terminal(text: str) -> None:
 
     import logging
 
-    log = logging.getLogger("linuxpop")
+    log = logging.getLogger("vinopop")
     wrapped = _wrap_for_terminal(cmd)
     try:
         _spawn_terminal([*prefix, wrapped], log)

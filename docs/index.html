@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LinuxPop - PopClip-inspired text actions for Linux</title>
+  <title>vinoPop - PopClip-inspired text actions for Linux</title>
   <meta name="description" content="A floating popup of context-aware actions on whatever text you highlight. Open URLs, run commands, ask an AI, transform text - without leaving the keyboard.">
-  <link rel="icon" href="assets/icons/linuxpop.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/icons/vinopop.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -13,19 +13,19 @@
 <nav class="nav">
   <div class="nav-inner">
     <a class="brand" href="index.html">
-      <img src="assets/icons/linuxpop.svg" alt="LinuxPop">
-      LinuxPop
+      <img src="assets/icons/vinopop.svg" alt="vinoPop">
+      vinoPop
     </a>
     <div class="nav-links">
       <a href="plugins.html">Plugins</a>
       <a href="develop.html">Build your own</a>
-      <a class="nav-cta" href="https://github.com/GaimsDevSoftware/linuxpop">GitHub</a>
+      <a class="nav-cta" href="https://github.com/karanshukla/vinoPop">GitHub</a>
     </div>
   </div>
 </nav>
 
 <header class="hero">
-  <img class="hero-logo" src="assets/icons/linuxpop.svg" alt="">
+  <img class="hero-logo" src="assets/icons/vinopop.svg" alt="">
   <h1>Text actions for Linux,<br>without leaving where you are.</h1>
   <p class="lead">
     Highlight anything. A small popup appears with context-aware actions -
@@ -33,7 +33,7 @@
     on macOS, built for X11 and native KDE Plasma 6 / Wayland.
   </p>
   <div class="hero-buttons">
-    <a class="btn btn-primary" href="#install">Install LinuxPop</a>
+    <a class="btn btn-primary" href="#install">Install vinoPop</a>
     <a class="btn btn-secondary" href="plugins.html">Browse plugins →</a>
   </div>
 </header>
@@ -99,10 +99,10 @@ sudo pacman -S python python-gobject gtk4 libadwaita \
     placement on KDE/wlroots Wayland; on GNOME vinoPop runs on XWayland automatically.</p>
 
     <h3>2. Clone &amp; install</h3>
-    <pre><code>git clone https://github.com/GaimsDevSoftware/linuxpop.git ~/linuxpop
-cd ~/linuxpop
+    <pre><code>git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
+cd ~/vinopop
 bash install.sh
-python3 ~/linuxpop/main.py    # start now without logging out</code></pre>
+python3 ~/vinopop/main.py    # start now without logging out</code></pre>
 
     <h3>3. Use it</h3>
     <ul>
@@ -114,7 +114,7 @@ python3 ~/linuxpop/main.py    # start now without logging out</code></pre>
 
     <div class="callout">
       <strong>Tip:</strong> the first time you open <em>Plugins</em>, browse the catalogue.
-      Most of LinuxPop's power lives in plugins - install only what you'll use.
+      Most of vinoPop's power lives in plugins - install only what you'll use.
     </div>
   </div>
 </section>
@@ -137,7 +137,7 @@ python3 ~/linuxpop/main.py    # start now without logging out</code></pre>
       </div>
       <div class="feature">
         <h3>3 · Write a Python plugin</h3>
-        <p>20-line skeleton. Drop your <code>.py</code> in <code>~/.config/linuxpop/plugins/</code>. Full access to the API.</p>
+        <p>20-line skeleton. Drop your <code>.py</code> in <code>~/.config/vinopop/plugins/</code>. Full access to the API.</p>
         <p><a href="develop.html#python">Python guide →</a></p>
       </div>
     </div>
@@ -146,9 +146,9 @@ python3 ~/linuxpop/main.py    # start now without logging out</code></pre>
 
 <footer>
   <div class="container">
-    LinuxPop is MIT-licensed. No telemetry. No accounts. <br>
-    <a href="https://github.com/GaimsDevSoftware/linuxpop">Source on GitHub</a> ·
-    <a href="https://github.com/GaimsDevSoftware/linuxpop/issues">Issues</a> ·
+    vinoPop is MIT-licensed. No telemetry. No accounts. <br>
+    <a href="https://github.com/karanshukla/vinoPop">Source on GitHub</a> ·
+    <a href="https://github.com/karanshukla/vinoPop/issues">Issues</a> ·
     <a href="develop.html">Plugin API</a>
   </div>
 </footer>

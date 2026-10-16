@@ -23,7 +23,7 @@ def _count(text: str) -> None:
                 "3000",
                 "-i",
                 "accessories-text-editor",
-                "LinuxPop wordcount",
+                "vinoPop wordcount",
                 body,
             ],
             check=False,
@@ -36,7 +36,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="wordcount",
-            icon="linuxpop-wordcount-symbolic",
+            icon="vinopop-wordcount-symbolic",
             tooltip="Word & char count",
             handler=_count,
             content_types=(ContentType.PLAIN_TEXT,),

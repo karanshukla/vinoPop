@@ -21,7 +21,7 @@ from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib  # only GLib: no GTK in this helper
 
 # Use an app-specific bus name. _JS references the constant to stay in sync.
-BUS_NAME = "io.github.GaimsDevSoftware.LinuxPop.Cursor"
+BUS_NAME = "io.github.karanshukla.vinoPop.Cursor"
 OBJ_PATH = "/cursor"
 _JS = (
     f'callDBus("{BUS_NAME}", "{OBJ_PATH}", "{BUS_NAME}", '
@@ -45,7 +45,7 @@ def main() -> int:
     name = dbus.service.BusName(BUS_NAME, bus)
     _svc = _Svc(name, OBJ_PATH)
 
-    fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-cursor-")
+    fd, path = tempfile.mkstemp(suffix=".js", prefix="vinopop-cursor-")
     try:
         os.write(fd, _JS.encode("utf-8"))
         os.close(fd)

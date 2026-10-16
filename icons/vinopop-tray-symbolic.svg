@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
   <!--
-    LinuxPop symbolic tray icon.
+    vinoPop symbolic tray icon.
     Pill with downward tail + three action dots (punched via evenodd).
     Uses currentColor so the panel theme can recolor it to match the bar.
   -->

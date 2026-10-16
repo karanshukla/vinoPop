@@ -21,27 +21,27 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 _CSS = """
-window.linuxpop-ai {
+window.vinopop-ai {
     background-color: transparent;
 }
-box.linuxpop-ai-bubble {
+box.vinopop-ai-bubble {
     background-color: #1f2330;
     border-radius: 14px;
     border: 1px solid rgba(255,255,255,0.08);
     padding: 12px 14px;
 }
-label.linuxpop-ai-text {
+label.vinopop-ai-text {
     color: #f4f6fb;
     font-size: 13pt;
 }
-label.linuxpop-ai-title {
+label.vinopop-ai-title {
     color: #8a92a8;
     font-size: 9pt;
 }
-button.linuxpop-ai-chip {
+button.vinopop-ai-chip {
     padding: 2px 8px;
     min-height: 0;
 }
@@ -135,7 +135,7 @@ class ResultBubble:
         self.win.set_title(f"vinoPop - {title}")
         self.win.set_decorated(False)
         self.win.set_resizable(False)
-        self.win.add_css_class("linuxpop-ai")
+        self.win.add_css_class("vinopop-ai")
 
         # "leave" only fires when the pointer leaves the whole window, so
         # crossings between child widgets need no filtering.
@@ -145,13 +145,13 @@ class ResultBubble:
         self.win.add_controller(motion)
 
         bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        bubble.add_css_class("linuxpop-ai-bubble")
+        bubble.add_css_class("vinopop-ai-bubble")
         bubble.set_size_request(300, -1)
         self.win.set_child(bubble)
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._title_lbl = Gtk.Label(label=title, xalign=0)
-        self._title_lbl.add_css_class("linuxpop-ai-title")
+        self._title_lbl.add_css_class("vinopop-ai-title")
         header.append(self._title_lbl)
         if header_widget is not None:
             header.append(header_widget)
@@ -174,7 +174,7 @@ class ResultBubble:
         self._text_lbl.set_selectable(True)
         # A selectable label is focusable; keep it from grabbing focus.
         self._text_lbl.set_focusable(False)
-        self._text_lbl.add_css_class("linuxpop-ai-text")
+        self._text_lbl.add_css_class("vinopop-ai-text")
         self._text_lbl.set_vexpand(True)
         bubble.append(self._text_lbl)
 
@@ -182,7 +182,7 @@ class ResultBubble:
 
     def _chip(self, label: str, cb) -> Gtk.Button:
         btn = Gtk.Button(label=label)
-        btn.add_css_class("linuxpop-ai-chip")
+        btn.add_css_class("vinopop-ai-chip")
         btn.set_focusable(False)
         btn.connect("clicked", cb)
         return btn

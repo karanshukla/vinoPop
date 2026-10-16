@@ -1,6 +1,6 @@
-"""Platform backend interface for LinuxPop's OS-integration layer.
+"""Platform backend interface for vinoPop's OS-integration layer.
 
-LinuxPop started life X11-only. To run on Fedora KDE Plasma (Wayland) without
+vinoPop started life X11-only. To run on Fedora KDE Plasma (Wayland) without
 forking, every OS-specific operation - reading the selection, querying the
 pointer, watching for selection changes, grabbing a global hotkey, injecting
 keystrokes, positioning the popup - goes through a `PlatformBackend`.
@@ -45,7 +45,7 @@ def _warn_missing_injector(backend_name: str, message: str) -> None:
                 "6000",
                 "-i",
                 "dialog-warning",
-                "LinuxPop",
+                "vinoPop",
                 message,
             ],
             check=False,
@@ -75,7 +75,7 @@ class DoubleClickWatcher(Protocol):
 
 
 class PlatformBackend(abc.ABC):
-    """The OS-integration surface the rest of LinuxPop depends on."""
+    """The OS-integration surface the rest of vinoPop depends on."""
 
     #: short identifier, e.g. "x11" or "wayland_kde"
     name: str = "base"

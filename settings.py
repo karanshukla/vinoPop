@@ -1,6 +1,6 @@
-"""Simple JSON-backed settings for LinuxPop.
+"""Simple JSON-backed settings for vinoPop.
 
-Lives at ~/.config/linuxpop/settings.json. Missing file or missing keys
+Lives at ~/.config/vinopop/settings.json. Missing file or missing keys
 fall back to defaults. Unknown keys in the file are preserved on save so
 the user can hand-edit and add comments-as-keys.
 """
@@ -31,7 +31,7 @@ DEFAULTS: dict[str, Any] = {
     # (Paste / Select all / Backspace) at the cursor. The modifier
     # is required so the gesture doesn't collide with the app's own
     # double-click-to-select-a-word behaviour.
-    # Off by default because turning it on means LinuxPop watches all
+    # Off by default because turning it on means vinoPop watches all
     # mouse clicks globally via the X11 RECORD extension. Nothing is
     # logged or transmitted - we only look for the chosen chord.
     "double_click_popup_enabled": False,
@@ -64,7 +64,7 @@ DEFAULTS: dict[str, Any] = {
     # Master on/off for the clipboard plugin. When False, the background
     # selection-watcher thread is NOT started, the picker hotkey does
     # nothing, and the popup button is hidden. Use this if you'd rather
-    # not have LinuxPop track your clipboard at all.
+    # not have vinoPop track your clipboard at all.
     "clipboard_history_enabled": True,
     # Hotkey to open the clipboard / snippets picker. Press, type to filter,
     # Enter to paste at the cursor. Ignored if clipboard_history_enabled
@@ -237,12 +237,6 @@ DEFAULTS: dict[str, Any] = {
     # replaced with the URL-encoded selection. Example for searx:
     #   "https://searx.example.com/search?q={q}"
     "search_engine_custom_url": "",
-    # Support / donation URLs surfaced in the welcome dialog, the About
-    # dialog, and the tray menu. Leave empty to hide that button entirely
-    # (each is independent - show only the ones you've actually set up).
-    # Conventional defaults are pre-filled assuming the GitHub org name
-    # matches the upstream repo; update or blank out as needed.
-    "support_paypal_url": "https://paypal.me/gaimsdev",
     # 'Skip short auto-popup selections' filter. Off by default to
     # match PopClip out of the box (no minimum-size knob there). When
     # on, the watcher silently drops selections shorter than
@@ -257,7 +251,7 @@ DEFAULTS: dict[str, Any] = {
     # covers the main use case and AT-SPI was correlated with a
     # Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw
     # ATK_IS_STATE_SET assertions, cinnamon dereferenced a freed
-    # GObject and crashed the panel - see knowledge/linuxpop.md).
+    # GObject and crashed the panel).
     # Stays here as a hidden settings.json knob for the rare user who
     # explicitly wants AT-SPI back on. Default off.
     "editable_atspi_listener_enabled": False,

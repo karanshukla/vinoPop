@@ -1,4 +1,4 @@
-# LinuxPop website
+# vinoPop website
 
 Static site that doubles as the project landing page, plugin store, and
 developer docs. Hosted on GitHub Pages directly from this `/docs` folder.

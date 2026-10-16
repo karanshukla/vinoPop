@@ -1,4 +1,4 @@
-"""Step-by-step assistant for building a custom LinuxPop button (recipe).
+"""Step-by-step assistant for building a custom vinoPop button (recipe).
 
 Uses an Adw.NavigationView so the user gets one decision per page (with
 the usual Adwaita back button / swipe), with a live popup-mockup updating
@@ -331,7 +331,7 @@ class RecipeWizard:
         win.set_default_size(720, 560)
         if isinstance(self._parent, Gtk.Window):
             win.set_transient_for(self._parent)
-        win.set_icon_name("linuxpop")
+        win.set_icon_name("vinopop")
         self._window = win
 
         self._nav = Adw.NavigationView()
@@ -440,7 +440,7 @@ class RecipeWizard:
         page.set_margin_top(24)
         page.set_margin_bottom(24)
 
-        page.append(_label("Make your own LinuxPop button", "title-1", wrap=True))
+        page.append(_label("Make your own vinoPop button", "title-1", wrap=True))
         page.append(
             _label(
                 "Custom buttons turn any text you select into an action. We'll "
@@ -459,7 +459,7 @@ class RecipeWizard:
                 2,
                 "input-mouse-symbolic",
                 "Click",
-                "The LinuxPop popup\nshows up. Pick your\nnew button.",
+                "The vinoPop popup\nshows up. Pick your\nnew button.",
             ),
             (
                 3,
@@ -636,7 +636,7 @@ class RecipeWizard:
         right.append(_label("Live preview", "heading"))
         right.append(
             _label(
-                "This is roughly how your button will appear in the LinuxPop popup, "
+                "This is roughly how your button will appear in the vinoPop popup, "
                 "next to the built-in ones.",
                 "dim-label",
                 "caption",

@@ -1,4 +1,4 @@
-"""GTK 4 + libadwaita preferences window for LinuxPop.
+"""GTK 4 + libadwaita preferences window for vinoPop.
 
 Uses Adw.PreferencesWindow with grouped boxed-list rows (Adw.SwitchRow,
 Adw.ComboRow, Adw.SpinRow, Adw.EntryRow) - the GNOME-Settings-style UI
@@ -54,7 +54,7 @@ def _open_text_editor_modal(
     dlg = Adw.Window()
     dlg.set_title(title)
     dlg.set_default_size(580, 420)
-    dlg.set_icon_name("linuxpop")
+    dlg.set_icon_name("vinopop")
     dlg.set_modal(True)
     if parent is not None:
         dlg.set_transient_for(parent)
@@ -354,10 +354,10 @@ class SettingsDialog:
             return
 
         win = Adw.PreferencesWindow()
-        win.set_title("LinuxPop")
+        win.set_title("vinoPop")
         win.set_search_enabled(False)
         win.set_default_size(720, 640)
-        win.set_icon_name("linuxpop")
+        win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
         # GTK 4 may keep the destroyed window alive while Python holds a
@@ -369,7 +369,7 @@ class SettingsDialog:
         page.set_icon_name("preferences-system-symbolic")
 
         # Snippets & Clipboard first - that's the core of what people use
-        # LinuxPop for. Activation comes second because users new to
+        # vinoPop for. Activation comes second because users new to
         # the app reach for "what's my hotkey" before anything else.
         page.add(self._build_activation_group())
         page.add(self._build_appearance_group())
@@ -378,9 +378,6 @@ class SettingsDialog:
         page.add(self._build_search_group())
         page.add(self._build_terminal_group())
         page.add(self._build_advanced_group())
-        # Donation entry-points live in the tray menu, the About dialog
-        # and the first-run welcome - see welcome.open_support_picker.
-        # Settings stays focused on configuration.
 
         win.add(page)
         self._decorate_badges(page)
@@ -592,7 +589,7 @@ class SettingsDialog:
             except Exception:
                 concepts = []
             for concept in concepts:
-                nm = f"linuxpop-{concept}-symbolic" if style == "glyph" else f"linuxpop-{concept}"
+                nm = f"vinopop-{concept}-symbolic" if style == "glyph" else f"vinopop-{concept}"
                 im = Gtk.Image.new_from_icon_name(nm)
                 im.set_pixel_size(30)
                 icon_preview.append(im)
@@ -691,7 +688,7 @@ class SettingsDialog:
     def _build_activation_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Activation")
-        group.set_description("How LinuxPop appears.")
+        group.set_description("How vinoPop appears.")
 
         # Popup hotkey row. Lives here rather than in a dedicated Hotkeys
         # group because, with the clipboard shortcut moved to Snippets &
@@ -896,7 +893,7 @@ class SettingsDialog:
         # the DE actually reads. We just toggle the file from here.
         auto_row = self._switch_row(
             "Start at login",
-            "Launch LinuxPop automatically when you sign in.",
+            "Launch vinoPop automatically when you sign in.",
             False,
         )
         try:
@@ -924,7 +921,7 @@ class SettingsDialog:
         group.set_title("Snippets &amp; Clipboard")
         group.set_description(
             "The picker that remembers what you've copied and the snippets "
-            "you save for reuse. Most of LinuxPop lives here."
+            "you save for reuse. Most of vinoPop lives here."
         )
 
         # Clipboard plugin master toggle. When off, the background
@@ -933,7 +930,7 @@ class SettingsDialog:
         clip_master_row = self._switch_row(
             "Clipboard history",
             "Remember things you've recently copied so you can paste them "
-            "later. Turn off to stop LinuxPop from watching the clipboard.",
+            "later. Turn off to stop vinoPop from watching the clipboard.",
             self._settings.get("clipboard_history_enabled", True),
         )
         clip_master_row.connect("notify::active", self._on_switch, "clipboard_history_enabled")
@@ -966,13 +963,13 @@ class SettingsDialog:
         group.add(clip_row)
 
         # Snippet triggers (text expansion). Off by default - turning it
-        # on means LinuxPop attaches to the X11 RECORD extension and sees
+        # on means vinoPop attaches to the X11 RECORD extension and sees
         # every keystroke on the desktop. Be honest about that in the
         # subtitle so the user can decide.
         trigger_row = self._switch_row(
             "Snippet triggers (text expansion)",
             "When ON, typing a snippet's trigger code (e.g. ';email') followed "
-            "by space or tab auto-expands it. Requires LinuxPop to watch "
+            "by space or tab auto-expands it. Requires vinoPop to watch "
             "global keystrokes locally - keys are matched against your "
             "snippet triggers only, never logged or sent anywhere.",
             self._settings.get("snippet_triggers_enabled", False),
@@ -1406,7 +1403,7 @@ class SettingsDialog:
         confirm = Adw.AlertDialog.new(
             "Reset all preferences to defaults?",
             "Every setting in this window will go back to how "
-            "LinuxPop ships out of the box.\n\n"
+            "vinoPop ships out of the box.\n\n"
             "Kept: your snippets, clipboard history, installed "
             "plugins, custom buttons.\n"
             "Reset: hotkeys, timing, popup look, AI services, "
@@ -1537,7 +1534,7 @@ class SettingsDialog:
         try:
             import sys
 
-            mod = sys.modules.get("linuxpop_user_clipboard_history") or sys.modules.get(
+            mod = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get(
                 "clipboard_history"
             )
             if mod is not None and hasattr(mod, "_maybe_start_trigger_watcher"):

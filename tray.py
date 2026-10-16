@@ -1,4 +1,4 @@
-"""System tray icon (KStatusNotifierItem via separate Qt process) for LinuxPop.
+"""System tray icon (KStatusNotifierItem via separate Qt process) for vinoPop.
 
 Spawns a lean Qt process that uses KStatusNotifierItem - native KDE/Wayland
 protocol, no XWayland dependency, no GTK thread conflicts.
@@ -28,7 +28,7 @@ def _tray_preexec() -> None:
     1. PR_SET_PDEATHSIG: ask the kernel to SIGTERM this process the instant
        its parent (the main daemon) dies. Without this, killing or crashing
        the daemon left the Qt tray subprocess orphaned (reparented to systemd)
-       and its tray icon lingered forever -- which is how two LinuxPop icons
+       and its tray icon lingered forever -- which is how two vinoPop icons
        could end up side by side after a few restarts.
     2. setsid(): give the tray its own session so a Ctrl-C in the daemon's
        terminal doesn't also tear it down (the original intent of the
@@ -92,7 +92,6 @@ class Tray:
         on_open_plugins: Callable[[], None],
         on_open_about: Callable[[], None],
         on_quit: Callable[[], None],
-        on_open_support: Callable[[], None] | None = None,
     ) -> None:
         self._on_toggle_watcher = on_toggle_watcher
         self._get_watcher_active = get_watcher_active
@@ -101,7 +100,6 @@ class Tray:
         self._on_open_plugins = on_open_plugins
         self._on_open_about = on_open_about
         self._on_quit = on_quit
-        self._on_open_support = on_open_support
 
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
@@ -182,9 +180,6 @@ class Tray:
             self._on_open_plugins()
         elif event == "about":
             self._on_open_about()
-        elif event == "support":
-            if self._on_open_support:
-                self._on_open_support()
         elif event == "quit":
             self._on_quit()
         elif event == "pong":

@@ -1,4 +1,4 @@
-"""Screen-region OCR for LinuxPop.
+"""Screen-region OCR for vinoPop.
 
 User holds a hotkey, drags a rectangle, the rectangle's contents land
 on the clipboard as text. Capture uses the overlay selector or the
@@ -6,12 +6,12 @@ desktop's own region tool (spectacle, grim+slurp, maim, or
 gnome-screenshot); recognition is PP-OCR running
 offline on OpenVINO (vino_ai.ocr), on the iGPU when there is one.
 
-Why this matters beyond a one-off screenshot tool: the LinuxPop popup
+Why this matters beyond a one-off screenshot tool: the vinoPop popup
 runs on X11 PRIMARY selection. Anywhere the user can't make a real
 selection (PDF viewers' rasterized text, video frames, OS chrome,
 CodeMirror / Monaco editors that don't propagate to PRIMARY, error
 dialogs that block selection) becomes unreachable. OCR turns the
-*pixels* into a PRIMARY-equivalent selection - the rest of LinuxPop's
+*pixels* into a PRIMARY-equivalent selection - the rest of vinoPop's
 pipeline lights up automatically.
 """
 
@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 
 def _stage_text(text: str) -> None:
@@ -221,7 +221,7 @@ def capture_and_recognize() -> tuple[bool, str]:
     if not ok:
         return False, reason
 
-    with tempfile.NamedTemporaryFile(suffix=".png", prefix="linuxpop-ocr-", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".png", prefix="vinopop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
 
     try:
@@ -265,7 +265,7 @@ def run_ocr_to_clipboard() -> None:
     """User-facing entry point. Triggered by the OCR hotkey or by the
     tray menu. Captures a region, OCRs it, puts the result on the
     clipboard, and shows the result text in the popup (so it lands as
-    a selection the rest of LinuxPop's actions can pick up)."""
+    a selection the rest of vinoPop's actions can pick up)."""
     ok_sup, reason = is_supported()
     if not ok_sup:
         subprocess.run(
@@ -276,7 +276,7 @@ def run_ocr_to_clipboard() -> None:
                 "4000",
                 "-i",
                 "dialog-information",
-                "LinuxPop OCR",
+                "vinoPop OCR",
                 reason,
             ],
             check=False,
@@ -307,7 +307,7 @@ def run_ocr_to_clipboard() -> None:
                         "3500",
                         "-i",
                         "dialog-information",
-                        "LinuxPop OCR",
+                        "vinoPop OCR",
                         "No text found in the selection.",
                     ],
                     check=False,
@@ -329,7 +329,7 @@ def run_ocr_to_clipboard() -> None:
                     "4000",
                     "-i",
                     "dialog-information",
-                    "LinuxPop OCR",
+                    "vinoPop OCR",
                     payload,
                 ],
                 check=False,

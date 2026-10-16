@@ -15,7 +15,7 @@ from xdg_paths import CACHE_DIR
 
 from . import devices
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 _lock = threading.Lock()
 _engine = None

@@ -2,7 +2,7 @@
 
 One OpenVINO GenAI pipeline is loaded on first use and kept for the life
 of the daemon, so only the first click pays the load/compile cost
-(compiled blobs are cached under $XDG_CACHE_HOME/linuxpop/ov-cache, which
+(compiled blobs are cached under $XDG_CACHE_HOME/vinopop/ov-cache, which
 makes later daemon starts fast too). Generation is serialised with a
 lock: two clicks in a row queue instead of fighting over the device.
 """
@@ -17,7 +17,7 @@ from xdg_paths import CACHE_DIR
 
 from . import devices, models
 
-log = logging.getLogger("linuxpop")
+log = logging.getLogger("vinopop")
 
 # Long selections are cut to keep the prompt inside the NPU's static
 # prompt window (MAX_PROMPT_LEN below). ~4 chars per token, with room for

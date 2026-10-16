@@ -66,7 +66,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="json-format",
-            icon="linuxpop-json-symbolic",
+            icon="vinopop-json-symbolic",
             tooltip="JSON pretty-print",
             handler=_format,
             content_types=(ContentType.PLAIN_TEXT,),

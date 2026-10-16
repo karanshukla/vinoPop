@@ -74,7 +74,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="url-encode",
-            icon="linuxpop-url-encode-symbolic",
+            icon="vinopop-url-encode-symbolic",
             tooltip="URL-encode",
             handler=_encode,
             content_types=(ContentType.PLAIN_TEXT, ContentType.URL),
@@ -85,7 +85,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="url-decode",
-            icon="linuxpop-url-decode-symbolic",
+            icon="vinopop-url-decode-symbolic",
             tooltip="URL-decode",
             handler=_decode,
             content_types=(ContentType.PLAIN_TEXT, ContentType.URL),

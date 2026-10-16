@@ -17,11 +17,11 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 from plugin_base import Plugin  # noqa: E402
 
 _CSS = """
-window.linuxpop-large-type {
+window.vinopop-large-type {
     background-color: rgba(10, 12, 20, 0.92);
 }
 
-label.linuxpop-large-type-label {
+label.vinopop-large-type-label {
     color: #f7f8fa;
     font-size: 96pt;
     font-weight: 600;
@@ -58,12 +58,12 @@ def _show_large(text: str) -> None:
     def _build() -> bool:
         _install_css()
         win = Gtk.Window()
-        win.set_title("LinuxPop - Large Type")
+        win.set_title("vinoPop - Large Type")
         win.set_decorated(False)
         win.fullscreen()
         # GTK 4 windows are translucent wherever the CSS background is, so
         # no RGBA visual setup is needed for the dim backdrop.
-        win.add_css_class("linuxpop-large-type")
+        win.add_css_class("vinopop-large-type")
 
         label = Gtk.Label()
         label.set_text(text)
@@ -72,7 +72,7 @@ def _show_large(text: str) -> None:
         label.set_xalign(0.5)
         label.set_yalign(0.5)
         label.set_selectable(True)
-        label.add_css_class("linuxpop-large-type-label")
+        label.add_css_class("vinopop-large-type-label")
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)

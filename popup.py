@@ -31,14 +31,14 @@ from platform_backend import get_backend  # noqa: E402
 _CSS = b"""
 /* The window itself is invisible; only the rounded bar paints. GTK 4 needs
  * no RGBA visual for this - a transparent window background is enough. */
-window.linuxpop-popup {
+window.vinopop-popup {
     background: none;
     background-color: rgba(0, 0, 0, 0);
     box-shadow: none;
     border: none;
 }
 
-box.linuxpop-bar {
+box.vinopop-bar {
     background-image: linear-gradient(to bottom, #262d3f, #1c2231);
     background-color: #1c2231;
     border: 1px solid #3a4258;
@@ -48,7 +48,7 @@ box.linuxpop-bar {
                 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 
-button.linuxpop-action {
+button.vinopop-action {
     background: transparent;
     border: none;
     box-shadow: none;
@@ -61,31 +61,31 @@ button.linuxpop-action {
     transition: background-color 100ms ease, color 100ms ease;
 }
 
-button.linuxpop-action:hover {
+button.vinopop-action:hover {
     background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
     color: #ffffff;
 }
 
-button.linuxpop-action:active {
+button.vinopop-action:active {
     background-image: linear-gradient(to bottom right, #4A6CE3, #6929DB);
     color: #ffffff;
 }
 
-button.linuxpop-action image {
+button.vinopop-action image {
     color: #f0f3fa;
 }
 
 /* Overflow chip - shown when more plugins matched than the popup
  * limit allows. Renders as a "+N" pill with a softer tone so it
  * reads as informational rather than a normal action. */
-button.linuxpop-overflow {
+button.vinopop-overflow {
     color: #c4cad8;
     font-weight: 600;
     font-size: 0.85em;
     padding-left: __PAD_H_OVERFLOW__px;
     padding-right: __PAD_H_OVERFLOW__px;
 }
-button.linuxpop-overflow:hover {
+button.vinopop-overflow:hover {
     background-image: linear-gradient(to bottom right, #3a4258, #2c3146);
     color: #ffffff;
 }
@@ -340,8 +340,8 @@ class PopupWindow:
         self.win = Gtk.Window()
         self.win.set_decorated(False)
         self.win.set_resizable(False)
-        self.win.set_title("LinuxPop")
-        self.win.add_css_class("linuxpop-popup")
+        self.win.set_title("vinoPop")
+        self.win.add_css_class("vinopop-popup")
 
         # Let the platform backend prepare the window before it's ever shown
         # (X11: override-redirect on realize; Wayland/KDE: gtk4-layer-shell).
@@ -361,7 +361,7 @@ class PopupWindow:
         # _bar is the rounded pill background. It stacks one or two
         # rows vertically depending on how many actions matched.
         self._bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self._bar.add_css_class("linuxpop-bar")
+        self._bar.add_css_class("vinopop-bar")
         self._bar.set_hexpand(True)
         self._outer.append(self._bar)
         self._row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -461,7 +461,7 @@ class PopupWindow:
         btn.add_css_class("flat")
         btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
-        btn.add_css_class("linuxpop-action")
+        btn.add_css_class("vinopop-action")
         btn.set_child(self._make_icon_image(icon_name))
         btn.connect("clicked", on_click)
         target.append(btn)
@@ -494,7 +494,7 @@ class PopupWindow:
         # X11 mod bitmasks. Mod1Mask is Alt on essentially every modern
         # X11 desktop; Mod4Mask is Super/Win on Cinnamon, GNOME, KDE,
         # XFCE, MATE. The rare exception (some i3/sway setups remap)
-        # rarely runs LinuxPop anyway.
+        # rarely runs vinoPop anyway.
         mod_bits = {
             "shift": 1 << 0,  # ShiftMask
             "ctrl": 1 << 2,  # ControlMask
@@ -515,7 +515,7 @@ class PopupWindow:
         """
         size = _resolve_button_size()
         # Button outer width: min-width + horizontal padding on each side
-        # (kept in sync with linuxpop.css). Slight overestimate so we
+        # (kept in sync with vinopop.css). Slight overestimate so we
         # don't push a button half-off the line by one pixel.
         approx_button_width = size + 14
         # GTK 4 can't query the global pointer, so size against the monitor
@@ -612,7 +612,7 @@ class PopupWindow:
         return fg, bg
 
     def _glyph_image(self, icon_name: str, icon_px: int):
-        """Load one of our custom linuxpop-*-symbolic glyphs, recolouring its
+        """Load one of our custom vinopop-*-symbolic glyphs, recolouring its
         hardcoded palette to the current theme.
 
         These SVGs hardcode #f0f0f0 strokes (tuned for the dark bar) and are
@@ -662,7 +662,7 @@ class PopupWindow:
 
         Colour logos (non-symbolic) are composited with a thin dark contrast
         rim at device resolution so they stay crisp on HiDPI and separate
-        cleanly from the dark bar. Our custom linuxpop-*-symbolic glyphs are
+        cleanly from the dark bar. Our custom vinopop-*-symbolic glyphs are
         recoloured to the theme foreground at load time (GTK can't recolour
         them via CSS). System symbolic icons stay on the icon-name path so the
         popup's CSS can recolour them to follow the text."""
@@ -679,7 +679,7 @@ class PopupWindow:
             img = self._colored_icon_with_rim(icon_name, icon_px)
             if img is not None:
                 return img
-        elif icon_name and icon_name.startswith("linuxpop-"):
+        elif icon_name and icon_name.startswith("vinopop-"):
             img = self._glyph_image(icon_name, icon_px)
             if img is not None:
                 return img
@@ -844,8 +844,8 @@ class PopupWindow:
         btn.add_css_class("flat")
         btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
-        btn.add_css_class("linuxpop-action")
-        btn.add_css_class("linuxpop-overflow")
+        btn.add_css_class("vinopop-action")
+        btn.add_css_class("vinopop-overflow")
         btn.connect("clicked", _on_click)
         target = row if row is not None else self._row1
         target.append(btn)
@@ -906,8 +906,8 @@ class PopupWindow:
         btn.add_css_class("flat")
         btn.set_focus_on_click(False)
         btn.set_tooltip_text(f"Show {count} more action{'s' if count != 1 else ''}")
-        btn.add_css_class("linuxpop-action")
-        btn.add_css_class("linuxpop-overflow")
+        btn.add_css_class("vinopop-action")
+        btn.add_css_class("vinopop-overflow")
         img = Gtk.Image.new_from_icon_name("pan-down-symbolic")
         img.set_pixel_size(max(12, int(_resolve_button_size() * 0.6)))
         btn.set_child(img)

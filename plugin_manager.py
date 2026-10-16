@@ -122,10 +122,10 @@ class PluginManagerDialog:
             return
 
         win = Adw.PreferencesWindow()
-        win.set_title("LinuxPop - Plugins")
+        win.set_title("vinoPop - Plugins")
         win.set_search_enabled(False)
         win.set_default_size(780, 620)
-        win.set_icon_name("linuxpop")
+        win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
         # GTK 4 may keep the destroyed window alive while Python holds a
@@ -220,7 +220,7 @@ class PluginManagerDialog:
     ]
     _CATEGORY_DESCRIPTIONS = {
         "Snippets & Clipboard": "The picker that remembers what you've copied and the snippets "
-        "you save for reuse. The core of what LinuxPop is for.",
+        "you save for reuse. The core of what vinoPop is for.",
         "Productivity": "Everyday actions - math, counts, speech, formatting.",
         "Web shortcuts": "Open the selection in a search engine or web service.",
         "AI": "Summarize, rewrite, explain and translate offline, on your NPU, GPU or CPU.",
@@ -507,7 +507,7 @@ class PluginManagerDialog:
         group.set_title("Custom actions")
         group.set_description(
             "Create your own popup buttons without writing Python. Each recipe "
-            "is a small JSON file in ~/.config/linuxpop/recipes/."
+            "is a small JSON file in ~/.config/vinopop/recipes/."
         )
         self._fill_custom_group_with_header(group)
         return group

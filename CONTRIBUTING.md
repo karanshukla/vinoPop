@@ -1,12 +1,12 @@
-# Contributing to LinuxPop
+# Contributing to vinoPop
 
-Thanks for your interest! LinuxPop is a small, hackable tool - most useful
+Thanks for your interest! vinoPop is a small, hackable tool - most useful
 contributions will be plugins.
 
 ## Writing a plugin
 
-A plugin is a single Python file in `~/.config/linuxpop/plugins/` that defines
-a top-level `register(register_plugin)` function. LinuxPop discovers it on
+A plugin is a single Python file in `~/.config/vinopop/plugins/` that defines
+a top-level `register(register_plugin)` function. vinoPop discovers it on
 startup (and after install via the Plugin Manager).
 
 ### Minimal example
@@ -40,7 +40,7 @@ def register(register_plugin) -> None:
     )
 ```
 
-Save as `~/.config/linuxpop/plugins/shout.py` and restart LinuxPop. Select
+Save as `~/.config/vinopop/plugins/shout.py` and restart vinoPop. Select
 text → popup shows your new button.
 
 ### Plugin API
@@ -74,7 +74,7 @@ text → popup shows your new button.
   `-symbolic` suffix for monochrome icons that pick up theme colors.
 - **Don't depend on a specific path layout** - `classifier`, `plugin_base`,
   `actions` and `settings` are importable because plugin_loader puts the
-  LinuxPop directory on `sys.path`. Don't add `sys.path.insert` to your
+  vinoPop directory on `sys.path`. Don't add `sys.path.insert` to your
   plugin.
 
 ### Submitting a plugin to the built-in catalogue
