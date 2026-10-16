@@ -562,7 +562,7 @@ def _draw_summon(cr, w, h, t):
 
 
 # ── scene 3: add ready-made plugins (a little store) ─────────────────────────
-_PLUGINS = [("Send to AI", BLUE), ("Clipboard", VIOLET), ("Transforms", PINK),
+_PLUGINS = [("Translate", BLUE), ("Clipboard", VIOLET), ("Transforms", PINK),
             ("Word count", GREEN), ("QR code", AMBER), ("Search", BLUE)]
 
 
@@ -776,7 +776,7 @@ def _build_pages(settings):
              draw=_draw_summon),
         dict(title="Add ready-made plugins",
              body="Open the tray icon → <b>Plugins</b> → <b>Available</b> and "
-                  "one-click install extras: send-to-AI, transforms, QR codes, "
+                  "one-click install extras: transforms, QR codes, "
                   "word count, search shortcuts and more.",
              draw=_draw_plugins),
         dict(title="Build your own - no code needed",

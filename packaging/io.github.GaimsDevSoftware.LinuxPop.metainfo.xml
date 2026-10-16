@@ -31,7 +31,6 @@
       <li>Floating action popup that appears at your text selection</li>
       <li>Runs on both X11 and KDE Plasma 6 / Wayland</li>
       <li>Context-aware buttons (URL decode only shows on encoded URLs, etc.)</li>
-      <li>Send any selection to ChatGPT, Claude, Gemini, Perplexity or local Ollama</li>
       <li>In-place translation bubble with a language picker</li>
       <li>Clipboard manager + snippets picker on a configurable hotkey</li>
       <li>No-code recipe wizard for building your own custom buttons</li>

@@ -104,7 +104,7 @@ def show_welcome_dialog(
         (3, "Open the tray icon for more",
          "Top panel, right side -- find Settings, Plugin Manager, and your custom buttons."),
         (4, "Starter plugins are pre-installed",
-         "Clipboard history, send-to-AI, word count, large type, transforms, and search shortcuts. "
+         "Clipboard history, translate, word count, large type, transforms, and search shortcuts. "
          "Open Plugin Manager to add more (developer tools, code formatters, QR, etc.)."),
     ]):
         num = Gtk.Label(xalign=0.5, yalign=0)

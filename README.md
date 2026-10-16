@@ -18,9 +18,9 @@ It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and nat
 - **Global hotkey** to pop the bar on your current selection from any app.
 - **Tray icon** for settings, the plugin manager, and a quick on/off toggle.
 - **Plugins are just `.py` files.** Drop one in `~/.config/linuxpop/plugins/`, or grab one from the built-in list.
-- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, in-place translate, send-to-AI, local Ollama, and run-in-terminal for things that look like commands.
+- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, in-place translate, and run-in-terminal for things that look like commands.
 - **Double-click a word** (while holding a modifier) to pop the bar. Works on real Wayland, not just XWayland.
-- **Your text stays on your machine** unless a plugin obviously sends it somewhere. The "Send to Claude" button, for example, hands off to Claude via its `claude://` link (or your browser if that isn't set up).
+- **Your text stays on your machine** unless you click something that obviously goes online, like web search or opening a link.
 
 ---
 
@@ -79,7 +79,7 @@ sudo pacman -S python python-gobject gtk3 libayatana-appindicator \
     xclip xdotool xdg-utils python-xlib
 ```
 
-Optional: `qrencode` for the QR plugin, `ollama` for the local-AI plugin.
+Optional: `qrencode` for the QR plugin.
 
 #### 2. Install LinuxPop
 

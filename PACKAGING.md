@@ -130,7 +130,6 @@ optdepends=('gtk-layer-shell: native popup placement on Wayland/KDE'
             'wl-clipboard: selection capture on Wayland'
             'ydotool: key injection (paste) on Wayland/KDE'
             'at-spi2-core: anchor popup to the selected-text rectangle'
-            'ollama: local AI plugin'
             'python-pillow: QR code plugin')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/GaimsDevSoftware/linuxpop/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')

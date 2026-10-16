@@ -17,11 +17,6 @@ from __future__ import annotations
 
 # plugin-declared icon name -> concept that has colour + mono variants
 _CONCEPT_BY_ICON = {
-    "linuxpop-google-ai": "google-ai",
-    "linuxpop-claude": "claude",
-    "linuxpop-chatgpt": "chatgpt",
-    "linuxpop-gemini": "gemini",
-    "linuxpop-perplexity": "perplexity",
     "linuxpop-youtube": "youtube",
     "linuxpop-wikipedia": "wikipedia",
     "mark-location-symbolic": "maps",
@@ -43,8 +38,8 @@ _CONCEPT_BY_ICON = {
 
 # Concept ordering for the Settings preview (most recognisable first).
 PREVIEW_CONCEPTS = [
-    "claude", "chatgpt", "gemini", "google-ai", "youtube",
-    "maps", "translate", "github", "package", "clipboard",
+    "google", "youtube", "wikipedia", "maps", "translate",
+    "github", "package", "clipboard", "qr", "json",
 ]
 
 
