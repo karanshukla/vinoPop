@@ -1,5 +1,29 @@
 [
   {
+    "file": "local_ai.py",
+    "title": "Summarize, rewrite, explain",
+    "description": "Runs a local model on your NPU, GPU or CPU through OpenVINO. Nothing leaves your machine; the model downloads once on first use.",
+    "category": "AI",
+    "tags": [
+      "ai",
+      "offline",
+      "writing"
+    ],
+    "icon": "document-edit-symbolic"
+  },
+  {
+    "file": "translate.py",
+    "title": "Translate",
+    "description": "Translate the selection in a bubble with a language picker, offline on a local OpenVINO model.",
+    "category": "AI",
+    "tags": [
+      "ai",
+      "offline",
+      "translate"
+    ],
+    "icon": "preferences-desktop-locale-symbolic"
+  },
+  {
     "file": "editing_actions.py",
     "title": "Editing - Cut, Paste, Backspace, Select All",
     "description": "PopClip's bread-and-butter buttons. Cut/Paste/Delete operate on the selection; Select All expands it. Sends Ctrl+X / Ctrl+V / Backspace / Ctrl+A via xdotool.",
@@ -150,7 +174,7 @@
     "kind": "recipe",
     "file": "google-translate.json",
     "title": "Google Translate to English",
-    "description": "Auto-detect source language \u2192 translate to English",
+    "description": "Auto-detect source language → translate to English",
     "category": "Web shortcuts",
     "tags": [
       "web",
@@ -162,7 +186,7 @@
     "kind": "recipe",
     "file": "google-maps.json",
     "title": "Look up in Google Maps",
-    "description": "Address, place name or coordinates \u2192 Maps search",
+    "description": "Address, place name or coordinates → Maps search",
     "category": "Web shortcuts",
     "tags": [
       "web"
@@ -241,29 +265,6 @@
     "icon": "package-x-generic-symbolic"
   },
   {
-    "file": "send_to_ai.py",
-    "title": "Send to chat AI",
-    "description": "Copies text and opens Claude/ChatGPT/Gemini/Perplexity/Google AI - no setup, no API keys",
-    "category": "AI",
-    "tags": [
-      "ai",
-      "web"
-    ],
-    "icon": "linuxpop-google-ai"
-  },
-  {
-    "file": "ollama_ai.py",
-    "title": "Local AI (Ollama)",
-    "description": "Explain, summarize, translate, rewrite - runs locally via Ollama (free, offline). Requires Ollama with a model installed.",
-    "category": "AI",
-    "tags": [
-      "ai",
-      "local",
-      "offline"
-    ],
-    "icon": "help-about-symbolic"
-  },
-  {
     "file": "base64_codec.py",
     "title": "Base64 encode/decode",
     "description": "Encodes or decodes selected text as Base64 and copies the result",
@@ -310,7 +311,7 @@
   {
     "file": "converters.py",
     "title": "Timestamp and color converters",
-    "description": "Auto-detects Unix epoch \u2194 ISO 8601, #hex \u2194 rgb(r,g,b)",
+    "description": "Auto-detects Unix epoch ↔ ISO 8601, #hex ↔ rgb(r,g,b)",
     "category": "Developer",
     "tags": [
       "developer",
@@ -321,7 +322,7 @@
   {
     "file": "html_entities.py",
     "title": "HTML entity encode/decode",
-    "description": "<p>caf\u00e9 & \"co\"</p> \u2194 &lt;p&gt;caf\u00e9 &amp; &quot;co&quot;&lt;/p&gt;",
+    "description": "<p>café & \"co\"</p> ↔ &lt;p&gt;café &amp; &quot;co&quot;&lt;/p&gt;",
     "category": "Developer",
     "tags": [
       "text",
@@ -329,17 +330,5 @@
       "encoding"
     ],
     "icon": "text-html-symbolic"
-  },
-  {
-    "file": "send_to_mentor.py",
-    "title": "Send to Mentor",
-    "description": "Send the selection to the active chat in Mentor (your local Odysseus fork)",
-    "category": "AI",
-    "tags": [
-      "ai",
-      "mentor",
-      "local"
-    ],
-    "icon": "linuxpop-mentor"
   }
 ]

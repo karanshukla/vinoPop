@@ -1,0 +1,54 @@
+name: Bug report
+description: The popup, a plugin, OCR or an AI action doesn't behave.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you selected or clicked, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - The popup (placement, focus, dismissal)
+        - A plugin or recipe
+        - Screen OCR
+        - AI actions (summarize, rewrite, explain, translate)
+        - Clipboard history / snippets
+        - Settings / install
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop and session
+      placeholder: KDE Plasma 6.4, Wayland / GNOME 48, Wayland / Cinnamon, X11
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distro and version
+      placeholder: Fedora 43
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: AI device (only for OCR / AI issues)
+      placeholder: Intel Core Ultra NPU / Arc iGPU / CPU only
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The relevant part of ~/.cache/linuxpop/linuxpop.log
+      render: text

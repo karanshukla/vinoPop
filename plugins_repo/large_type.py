@@ -5,17 +5,18 @@ colleague across the room, showing a confirmation number from your
 screen to a friend on the phone, or just enlarging a tiny menu item
 your eyes don't like. Click anywhere or press Esc / Space to dismiss.
 """
+
 from __future__ import annotations
 
 import gi
 
-gi.require_version("Gtk", "3.0")
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from plugin_base import Plugin
+from plugin_base import Plugin  # noqa: E402
 
-
-_CSS = b"""
+_CSS = """
 window.linuxpop-large-type {
     background-color: rgba(10, 12, 20, 0.92);
 }
@@ -36,11 +37,16 @@ def _install_css() -> None:
     if _css_installed:
         return
     provider = Gtk.CssProvider()
-    provider.load_from_data(_CSS)
-    screen = Gdk.Screen.get_default()
-    if screen is not None:
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(_CSS)
+    else:
+        provider.load_from_data(_CSS.encode(), -1)
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
     _css_installed = True
 
@@ -51,52 +57,61 @@ def _show_large(text: str) -> None:
     # thread to avoid threading errors.
     def _build() -> bool:
         _install_css()
-        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win = Gtk.Window()
         win.set_title("LinuxPop - Large Type")
         win.set_decorated(False)
         win.fullscreen()
-        win.set_app_paintable(True)
-        win.get_style_context().add_class("linuxpop-large-type")
-        # RGBA visual so the dim background actually renders translucent.
-        screen = win.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None and screen.is_composited():
-            win.set_visual(visual)
+        # GTK 4 windows are translucent wherever the CSS background is, so
+        # no RGBA visual setup is needed for the dim backdrop.
+        win.add_css_class("linuxpop-large-type")
 
         label = Gtk.Label()
         label.set_text(text)
-        label.set_line_wrap(True)
+        label.set_wrap(True)
         label.set_justify(Gtk.Justification.CENTER)
         label.set_xalign(0.5)
         label.set_yalign(0.5)
         label.set_selectable(True)
-        label.get_style_context().add_class("linuxpop-large-type-label")
+        label.add_css_class("linuxpop-large-type-label")
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scroll.add(label)
-        win.add(scroll)
+        scroll.set_child(label)
+        win.set_child(scroll)
 
         def _dismiss(*_):
             win.destroy()
             return True
 
-        win.connect("key-press-event",
-                    lambda _w, e: _dismiss() if e.keyval in
-                    (Gdk.KEY_Escape, Gdk.KEY_space, Gdk.KEY_Return) else False)
-        win.connect("button-press-event", _dismiss)
-        win.show_all()
+        keys = Gtk.EventControllerKey()
+        # Capture phase: the selectable label takes focus and would see the
+        # keys first otherwise.
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect(
+            "key-pressed",
+            lambda _c, keyval, _code, _state: (
+                _dismiss() if keyval in (Gdk.KEY_Escape, Gdk.KEY_space, Gdk.KEY_Return) else False
+            ),
+        )
+        win.add_controller(keys)
+        click = Gtk.GestureClick()
+        click.set_button(0)  # any button, like button-press-event
+        click.connect("pressed", _dismiss)
+        win.add_controller(click)
+        win.present()
         return False
 
     GLib.idle_add(_build)
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="large-type",
-        icon="zoom-in-symbolic",
-        tooltip="Show as large text",
-        handler=_show_large,
-        content_types=(),  # works for anything
-        priority=70,
-    ))
+    register_plugin(
+        Plugin(
+            name="large-type",
+            icon="zoom-in-symbolic",
+            tooltip="Show as large text",
+            handler=_show_large,
+            content_types=(),  # works for anything
+            priority=70,
+        )
+    )

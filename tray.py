@@ -3,6 +3,7 @@
 Spawns a lean Qt process that uses KStatusNotifierItem - native KDE/Wayland
 protocol, no XWayland dependency, no GTK thread conflicts.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,10 +14,11 @@ import struct
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from xdg_paths import CACHE_DIR as SOCKET_DIR
+
 TRAY_SCRIPT = str(Path(__file__).resolve().parent / "tray_qt.py")
 
 
@@ -36,9 +38,9 @@ def _tray_preexec() -> None:
     alive, to close the tiny fork-then-parent-exits race before setsid()."""
     try:
         import ctypes
+
         PR_SET_PDEATHSIG = 1
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(
-            PR_SET_PDEATHSIG, signal.SIGTERM)
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
         # If the parent vanished between fork and now, PDEATHSIG already
         # missed its window -- exit rather than become the next orphan.
         if os.getppid() == 1:
@@ -135,7 +137,7 @@ class Tray:
     def _connect(self) -> None:
         """Connect to the tray subprocess's Unix socket with retries."""
         socket_path = str(SOCKET_DIR / "tray.sock")
-        for attempt in range(30):  # wait up to ~3 seconds
+        for _attempt in range(30):  # wait up to ~3 seconds
             if not os.path.exists(socket_path):
                 time.sleep(0.1)
                 continue
@@ -212,7 +214,7 @@ class Tray:
 
     def poll(self) -> None:
         """Read any pending messages from the tray subprocess.
-        
+
         Must be called periodically from the GTK main loop (via GLib.timeout_add).
         """
         if not self._connected or self._sock is None:

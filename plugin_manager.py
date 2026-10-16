@@ -1,159 +1,55 @@
-"""Plugin manager window using libhandy boxed-list rows."""
+"""Plugin manager window using libadwaita boxed-list rows."""
+
 from __future__ import annotations
 
 import json
-import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
-from xdg_paths import CONFIG_DIR
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Handy", "1")
-from gi.repository import Gdk, GLib, Gtk, Handy, Pango  # noqa: E402
+from xdg_paths import CONFIG_DIR
 
-try:
-    gi.require_version("GdkX11", "3.0")
-    from gi.repository import GdkX11  # noqa: F401, E402
-except (ImportError, ValueError):
-    pass
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-Handy.init()
+import gtk4_app  # noqa: E402
 
-
-def _unwrap_subtitle_labels(root: Gtk.Widget) -> None:
-    """Same treatment as settings_gui - let HdyActionRow subtitles wrap
-    to multiple lines so plugin descriptions stay fully visible instead
-    of being cropped to a single ellipsis-tailed line."""
-    def visit(widget: Gtk.Widget) -> None:
-        if isinstance(widget, Gtk.Label):
-            try:
-                ctx = widget.get_style_context()
-                if ctx.has_class("subtitle"):
-                    widget.set_ellipsize(Pango.EllipsizeMode.NONE)
-                    widget.set_line_wrap(True)
-                    widget.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-                    widget.set_max_width_chars(-1)
-                    widget.set_xalign(0)
-                    try:
-                        widget.set_lines(-1)
-                    except AttributeError:
-                        pass
-            except Exception:
-                pass
-        if isinstance(widget, Gtk.Container):
-            children: list[Gtk.Widget] = []
-            try:
-                widget.forall(lambda c, _: children.append(c), None)
-            except Exception:
-                children = widget.get_children()
-            for c in children:
-                visit(c)
-    visit(root)
-    def _again() -> bool:
-        visit(root)
-        return False
-    GLib.idle_add(_again)
-    GLib.timeout_add(150, _again)
-
-
-def _unellipsize_tab_labels(root: Gtk.Widget) -> None:
-    """Walk every Gtk.Label under `root` (INCLUDING internal-template
-    children) and turn off ellipsize + width-cap.
-
-    Why this is needed in three layers of confusion:
-      1. HdyPreferencesWindow puts its tab strip inside an internal HdyHeaderBar
-         that get_children() doesn't expose -- you have to use forall() to
-         reach the titlebar's descendants.
-      2. Each HdyViewSwitcherButton wraps an internal Stack that holds *two*
-         GtkLabel instances per tab (one for the wide layout, one for
-         narrow). Both have ellipsize=PANGO_ELLIPSIZE_END set in C and
-         allocations like 36 px, so they crop to 'Availat' / 'Installe'.
-      3. CSS cannot reach the ellipsize attribute -- it's a widget property,
-         not a CSS one.
-
-    So: forall-walk the realised tree, find every label, force
-    ellipsize=NONE on it. With ellipsize off, the label demands its
-    natural width and the parent reallocates accordingly.
-    """
-    tab_names = {"Available", "Installed", "Custom", "Order"}
-
-    def visit(widget: Gtk.Widget) -> None:
-        if isinstance(widget, Gtk.Label):
-            try:
-                widget.set_ellipsize(Pango.EllipsizeMode.NONE)
-                widget.set_max_width_chars(-1)
-                text = widget.get_text() or ""
-                if text in tab_names:
-                    # width_chars alone wasn't enough: HdyViewSwitcher's
-                    # internal Gtk.Stack allocates each tab a fixed slot
-                    # that still clipped the last character. Force a
-                    # generous pixel-based minimum and let the parent
-                    # widen instead of cropping us. ~14 px per character
-                    # is roomy for the system font.
-                    widget.set_width_chars(len(text) + 2)
-                    widget.set_size_request(len(text) * 14, -1)
-                    widget.set_hexpand(True)
-                else:
-                    widget.set_width_chars(-1)
-            except Exception:
-                pass
-        if isinstance(widget, Gtk.Container):
-            children = []
-            try:
-                # forall() exposes internal-template children that the
-                # public get_children() hides - that's where the tab
-                # labels live.
-                widget.forall(lambda c, _: children.append(c), None)
-            except Exception:
-                children = widget.get_children()
-            for child in children:
-                visit(child)
-    visit(root)
-
-    # Also queue a re-run on the next idle cycle. HdyViewSwitcherTitle
-    # has an internal GtkStack that swaps between wide and narrow layouts
-    # based on allocated width, and the swap may happen AFTER the first
-    # show_all -- which would replace the labels we just patched. Re-
-    # patching from idle catches the post-swap labels too.
-    def _again():
-        visit(root)
-        return False
-    GLib.idle_add(_again)
-    GLib.timeout_add(150, _again)
+# libhandy needed two tree-walking hacks here (_unwrap_subtitle_labels and
+# _unellipsize_tab_labels) because HdyActionRow ellipsised subtitles and
+# HdyViewSwitcherButton cropped tab labels in C. Adw.ActionRow wraps its
+# subtitle by default (subtitle-lines=0) and Adw.ViewSwitcher sizes its
+# labels properly, so both are gone.
 
 
 def _force_to_front(window: Gtk.Window) -> None:
-    """Raise on X11 even past the clipboard picker's permanent
-    keep_above. Same shape as settings_gui's helper -- the explicit
-    GdkWindow.raise_() is what wins against another LinuxPop dialog
-    that's already on top."""
+    """Bring the window to the foreground. GTK 4 has no keep_above /
+    GdkWindow.raise_() any more; present() is the only portable request
+    and the compositor decides the rest."""
     try:
-        window.deiconify()
-        gdk_win = window.get_window()
-        if gdk_win is not None:
-            try:
-                ts = Gdk.X11.get_server_time(gdk_win)
-            except Exception:
-                ts = Gtk.get_current_event_time() or 0
-            window.present_with_time(ts)
-            try:
-                gdk_win.raise_()
-            except Exception:
-                pass
-        else:
-            window.present()
-        window.set_keep_above(True)
-        GLib.timeout_add(150, lambda: (window.set_keep_above(False), False)[1])
-        window.present()
+        window.unminimize()
     except Exception:
-        try:
-            window.present()
-        except Exception:
-            pass
+        pass
+    window.present()
+
+
+def _plain(row: Gtk.Widget) -> Gtk.Widget:
+    """Adw rows parse title/subtitle as Pango markup by default; plugin
+    titles and descriptions are plain text (they contain '&', '<' ...)."""
+    row.set_use_markup(False)
+    return row
+
+
+def _icon_button(icon_name: str, tooltip: str | None = None) -> Gtk.Button:
+    btn = Gtk.Button.new_from_icon_name(icon_name)
+    btn.set_valign(Gtk.Align.CENTER)
+    if tooltip:
+        btn.set_tooltip_text(tooltip)
+    return btn
+
 
 REPO_DIR = Path(__file__).resolve().parent / "plugins_repo"
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
@@ -194,14 +90,26 @@ def _is_installed(entry_or_filename) -> bool:
 
 class PluginManagerDialog:
     def __init__(self, on_changed: Callable[[], None] | None = None) -> None:
+        gtk4_app.init()
         self._on_changed = on_changed
-        self._window: Handy.PreferencesWindow | None = None
-        self._catalog_group: Handy.PreferencesGroup | None = None
-        self._catalog_groups: list[Handy.PreferencesGroup] = []
-        self._catalog_page: Handy.PreferencesPage | None = None
-        self._installed_group: Handy.PreferencesGroup | None = None
-        self._order_group: Handy.PreferencesGroup | None = None
-        self._custom_group: Handy.PreferencesGroup | None = None
+        self._window: Adw.PreferencesWindow | None = None
+        self._catalog_group: Adw.PreferencesGroup | None = None
+        self._catalog_groups: list[Adw.PreferencesGroup] = []
+        self._catalog_page: Adw.PreferencesPage | None = None
+        self._installed_group: Adw.PreferencesGroup | None = None
+        self._order_group: Adw.PreferencesGroup | None = None
+        self._custom_group: Adw.PreferencesGroup | None = None
+        # Adw.PreferencesGroup has no public "list my rows" API, so every
+        # row we add to a refreshable group is tracked here for removal.
+        self._group_rows: dict[Adw.PreferencesGroup, list[Gtk.Widget]] = {}
+
+    def _add_row(self, group: Adw.PreferencesGroup, row: Gtk.Widget) -> None:
+        group.add(row)
+        self._group_rows.setdefault(group, []).append(row)
+
+    def _clear_group(self, group: Adw.PreferencesGroup) -> None:
+        for row in self._group_rows.pop(group, []):
+            group.remove(row)
 
     def show(self, tab: str | None = None) -> None:
         """Open the Plugin Manager. tab may be one of 'available',
@@ -213,24 +121,26 @@ class PluginManagerDialog:
             _force_to_front(self._window)
             return
 
-        win = Handy.PreferencesWindow()
+        win = Adw.PreferencesWindow()
         win.set_title("LinuxPop - Plugins")
         win.set_search_enabled(False)
         win.set_default_size(780, 620)
-        win.set_position(Gtk.WindowPosition.CENTER)
         win.set_icon_name("linuxpop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
+        # GTK 4 may keep the destroyed window alive while Python holds a
+        # ref, so drop our references on close-request as well.
+        win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
 
         # Tab 1: catalog. Built as one PreferencesGroup per category so
         # the user sees Productivity / Web / AI / Developer separately
         # rather than one undifferentiated flat list. _catalog_group is
         # tracked as a reference to the *first* group purely so the
         # parent-page lookup in _rebuild_catalog_buttons still works.
-        catalog_page = Handy.PreferencesPage()
+        catalog_page = Adw.PreferencesPage()
         catalog_page.set_title("Available")
         catalog_page.set_icon_name("system-software-install-symbolic")
-        self._catalog_groups: list[Handy.PreferencesGroup] = []
+        self._catalog_groups = []
         for group in self._build_catalog_groups():
             catalog_page.add(group)
             self._catalog_groups.append(group)
@@ -239,7 +149,7 @@ class PluginManagerDialog:
         win.add(catalog_page)
 
         # Tab 2: installed
-        installed_page = Handy.PreferencesPage()
+        installed_page = Adw.PreferencesPage()
         installed_page.set_title("Installed")
         installed_page.set_icon_name("emblem-default-symbolic")
         self._installed_group = self._build_installed_group()
@@ -247,7 +157,7 @@ class PluginManagerDialog:
         win.add(installed_page)
 
         # Tab 3: custom actions (recipes)
-        custom_page = Handy.PreferencesPage()
+        custom_page = Adw.PreferencesPage()
         custom_page.set_title("Custom")
         custom_page.set_icon_name("document-new-symbolic")
         self._custom_group = self._build_custom_group()
@@ -255,24 +165,13 @@ class PluginManagerDialog:
         win.add(custom_page)
 
         # Tab 4: order
-        order_page = Handy.PreferencesPage()
+        order_page = Adw.PreferencesPage()
         order_page.set_title("Order")
         order_page.set_icon_name("view-sort-ascending-symbolic")
         self._order_group = self._build_order_group()
         order_page.add(self._order_group)
         win.add(order_page)
 
-        win.show_all()
-        # Libhandy's HdyViewSwitcherButton hard-codes
-        # gtk_label_set_ellipsize(PANGO_ELLIPSIZE_END) on the tab labels
-        # at the C level -- CSS can't undo that. Walk the widget tree
-        # after show_all() and switch every label in the header area off
-        # ellipsize so "Available", "Installed", "Custom" stop being
-        # clipped to "Availat", "Installe", "Custor".
-        _unellipsize_tab_labels(win)
-        # Same after-show_all patch as the settings dialog: let plugin
-        # description subtitles wrap rather than getting ellipsised.
-        _unwrap_subtitle_labels(win)
         self._window = win
         # Remember the pages we created so we can switch tabs later.
         self._pages_by_tab = {
@@ -293,14 +192,12 @@ class PluginManagerDialog:
         page = self._pages_by_tab.get(tab)
         if page is None or self._window is None:
             return
-        try:
-            self._window.set_visible_child(page)
-        except Exception:
-            # libhandy versions differ on the public API for tab switching;
-            # silently degrade rather than crashing the popup overflow.
-            pass
+        self._window.set_visible_page(page)
 
-    def _on_destroy(self, *_):
+    def _on_destroy(self, win=None, *_):
+        # Ignore a late signal from a window we already replaced.
+        if win is not None and self._window is not None and win is not self._window:
+            return
         self._window = None
         self._catalog_group = None
         self._catalog_groups = []
@@ -308,31 +205,34 @@ class PluginManagerDialog:
         self._installed_group = None
         self._order_group = None
         self._custom_group = None
+        self._group_rows = {}
 
     # ---- catalog tab ---------------------------------------------------------
 
     # Display order for category sections. Categories present in the
     # manifest but missing here are appended in first-seen order.
     _CATEGORY_ORDER = [
-        "Snippets & Clipboard", "Productivity", "Web shortcuts",
-        "AI", "Developer",
+        "Snippets & Clipboard",
+        "Productivity",
+        "Web shortcuts",
+        "AI",
+        "Developer",
     ]
     _CATEGORY_DESCRIPTIONS = {
-        "Snippets & Clipboard":
-            "The picker that remembers what you've copied and the snippets "
-            "you save for reuse. The core of what LinuxPop is for.",
-        "Productivity":  "Everyday actions - math, counts, speech, formatting.",
+        "Snippets & Clipboard": "The picker that remembers what you've copied and the snippets "
+        "you save for reuse. The core of what LinuxPop is for.",
+        "Productivity": "Everyday actions - math, counts, speech, formatting.",
         "Web shortcuts": "Open the selection in a search engine or web service.",
-        "AI":            "Send the selection to a chat AI or run one locally.",
-        "Developer":     "Encoders, hashes and converters for technical text.",
+        "AI": "Summarize, rewrite, explain and translate offline, on your NPU, GPU or CPU.",
+        "Developer": "Encoders, hashes and converters for technical text.",
     }
 
-    def _build_catalog_groups(self) -> list[Handy.PreferencesGroup]:
+    def _build_catalog_groups(self) -> list[Adw.PreferencesGroup]:
         manifest = _load_manifest()
         if not manifest:
-            group = Handy.PreferencesGroup()
+            group = Adw.PreferencesGroup()
             group.set_title("Plugin catalogue")
-            row = Handy.ActionRow()
+            row = _plain(Adw.ActionRow())
             row.set_title("Catalogue is empty")
             row.set_subtitle("plugins_repo/manifest.json is missing or unreadable")
             group.add(row)
@@ -356,24 +256,25 @@ class PluginManagerDialog:
             if cat not in seen:
                 ordered_cats.append(cat)
 
-        groups: list[Handy.PreferencesGroup] = []
+        groups: list[Adw.PreferencesGroup] = []
         for cat in ordered_cats:
-            group = Handy.PreferencesGroup()
-            group.set_title(cat)
+            group = Adw.PreferencesGroup()
+            # Group title/description are markup too; escape the '&'.
+            group.set_title(GLib.markup_escape_text(cat))
             desc = self._CATEGORY_DESCRIPTIONS.get(cat)
             if desc:
-                group.set_description(desc)
+                group.set_description(GLib.markup_escape_text(desc))
             for entry in buckets[cat]:
                 group.add(self._make_catalog_row(entry))
             groups.append(group)
         return groups
 
-    def _build_catalog_group(self) -> Handy.PreferencesGroup:
+    def _build_catalog_group(self) -> Adw.PreferencesGroup:
         # Kept for backwards-compat / single-group callers. Returns the
         # first category group; in practice _build_catalog_groups() is
         # what the page now uses.
         groups = self._build_catalog_groups()
-        return groups[0] if groups else Handy.PreferencesGroup()
+        return groups[0] if groups else Adw.PreferencesGroup()
 
     def _badge(self, icon_name: str | None, key: str) -> Gtk.Widget:
         """Each row's leading icon, in the onboarding-store style: a rounded
@@ -383,6 +284,7 @@ class PluginManagerDialog:
         to a coloured initial only when there's no usable icon."""
         try:
             import icon_style
+
             icon_name = icon_style.resolve(icon_name)
         except Exception:
             pass
@@ -393,30 +295,31 @@ class PluginManagerDialog:
         box.set_valign(Gtk.Align.CENTER)
         box.set_halign(Gtk.Align.CENTER)
         box.set_margin_end(10)
-        ctx = box.get_style_context()
-        ctx.add_class("lp-badge")
-        has = bool(icon_name) and Gtk.IconTheme.get_default().has_icon(icon_name)
+        box.add_css_class("lp-badge")
+        theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        has = bool(icon_name) and theme.has_icon(icon_name)
         if has and icon_name.endswith("-symbolic"):
-            ctx.add_class(f"lp-badge-{idx}")
-            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(18)
-            img.get_style_context().add_class("lp-badge-glyph")
-            box.pack_start(img, True, True, 0)
+            box.add_css_class(f"lp-badge-{idx}")
+            child = Gtk.Image.new_from_icon_name(icon_name)
+            child.set_pixel_size(18)
+            child.add_css_class("lp-badge-glyph")
         elif has:
-            ctx.add_class("lp-badge-plain")
-            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
-            img.set_pixel_size(22)
-            box.pack_start(img, True, True, 0)
+            box.add_css_class("lp-badge-plain")
+            child = Gtk.Image.new_from_icon_name(icon_name)
+            child.set_pixel_size(22)
         else:
-            ctx.add_class(f"lp-badge-{idx}")
-            lbl = Gtk.Label(label=(key[:1].upper() if key else "*"))
-            lbl.get_style_context().add_class("lp-badge-letter")
-            box.pack_start(lbl, True, True, 0)
-        box.show_all()
+            box.add_css_class(f"lp-badge-{idx}")
+            child = Gtk.Label(label=(key[:1].upper() if key else "*"))
+            child.add_css_class("lp-badge-letter")
+        child.set_hexpand(True)
+        child.set_halign(Gtk.Align.CENTER)
+        child.set_valign(Gtk.Align.CENTER)
+        box.set_hexpand(False)  # stop the glyph's hexpand propagating to the row prefix
+        box.append(child)
         return box
 
-    def _make_catalog_row(self, entry: dict) -> Handy.ActionRow:
-        row = Handy.ActionRow()
+    def _make_catalog_row(self, entry: dict) -> Adw.ActionRow:
+        row = _plain(Adw.ActionRow())
         row.set_title(entry.get("title", entry["file"]))
         row.add_prefix(self._badge(entry.get("icon"), entry.get("title", entry["file"])))
         desc = entry.get("description", "")
@@ -429,21 +332,20 @@ class PluginManagerDialog:
         btn.set_valign(Gtk.Align.CENTER)
         self._update_install_button(btn, entry)
         btn.connect("clicked", self._on_install_clicked, entry, row)
-        row.add(btn)
+        row.add_suffix(btn)
         return row
 
     def _update_install_button(self, btn: Gtk.Button, entry: dict) -> None:
-        ctx = btn.get_style_context()
-        ctx.remove_class("suggested-action")
-        ctx.remove_class("destructive-action")
+        btn.remove_css_class("suggested-action")
+        btn.remove_css_class("destructive-action")
         if _is_installed(entry):
             btn.set_label("Remove")
-            ctx.add_class("destructive-action")
+            btn.add_css_class("destructive-action")
         else:
             btn.set_label("Install")
-            ctx.add_class("suggested-action")
+            btn.add_css_class("suggested-action")
 
-    def _on_install_clicked(self, btn: Gtk.Button, entry: dict, row: Handy.ActionRow) -> None:
+    def _on_install_clicked(self, btn: Gtk.Button, entry: dict, row: Adw.ActionRow) -> None:
         filename = entry["file"]
         src = _source_path(entry)
         dst_dir = _target_dir(entry)
@@ -467,8 +369,8 @@ class PluginManagerDialog:
 
     # ---- installed tab -------------------------------------------------------
 
-    def _build_installed_group(self) -> Handy.PreferencesGroup:
-        group = Handy.PreferencesGroup()
+    def _build_installed_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
         group.set_title("User plugins")
         group.set_description(
             "Plugins you currently have. Install more from the Available tab, "
@@ -477,14 +379,14 @@ class PluginManagerDialog:
         self._fill_installed_group(group)
         return group
 
-    def _fill_installed_group(self, group: Handy.PreferencesGroup) -> None:
+    def _fill_installed_group(self, group: Adw.PreferencesGroup) -> None:
         USER_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
         files = sorted(USER_PLUGIN_DIR.glob("*.py"))
         if not files:
-            empty = Handy.ActionRow()
+            empty = _plain(Adw.ActionRow())
             empty.set_title("No plugins installed yet")
             empty.set_subtitle("Install one from the Available tab to get started.")
-            group.add(empty)
+            self._add_row(group, empty)
             return
         manifest_by_file = {e["file"]: e for e in _load_manifest()}
 
@@ -495,6 +397,7 @@ class PluginManagerDialog:
         # so the user can keep what they want and silence the rest.
         try:
             import plugin_loader as _pl
+
             by_source = _pl.plugins_by_source()
             all_plugins = {p.name: p for p in _pl.all_plugins()}
         except Exception:
@@ -502,6 +405,7 @@ class PluginManagerDialog:
             all_plugins = {}
         try:
             from settings import get_settings as _gs
+
             settings_obj = _gs()
             disabled_names = set(settings_obj.get("disabled_plugins") or [])
         except Exception:
@@ -515,18 +419,18 @@ class PluginManagerDialog:
             # a Remove button on the right; multi-action bundles render
             # as ExpanderRow with sub-rows per sub-plugin, plus Remove.
             if len(sub_names) > 1:
-                row = Handy.ExpanderRow()
+                row = _plain(Adw.ExpanderRow())
                 row.set_enable_expansion(True)
                 row.set_show_enable_switch(False)
             else:
-                row = Handy.ActionRow()
+                row = _plain(Adw.ActionRow())
             if entry is not None:
                 row.set_title(entry.get("title", path.name))
                 row.set_subtitle(entry.get("description", ""))
             else:
                 row.set_title(path.stem.replace("_", " ").title())
                 row.set_subtitle("Installed by hand (not in the catalogue)")
-            _icon = (entry.get("icon") if entry else None)
+            _icon = entry.get("icon") if entry else None
             if not _icon and sub_names:
                 _p0 = all_plugins.get(sub_names[0])
                 _icon = getattr(_p0, "icon", None) if _p0 else None
@@ -534,32 +438,29 @@ class PluginManagerDialog:
 
             remove_btn = Gtk.Button(label="Remove")
             remove_btn.set_valign(Gtk.Align.CENTER)
-            remove_btn.get_style_context().add_class("destructive-action")
+            remove_btn.add_css_class("destructive-action")
             remove_btn.connect("clicked", self._on_remove_clicked, path)
-            row.add(remove_btn)
+            row.add_suffix(remove_btn)
 
-            if isinstance(row, Handy.ExpanderRow):
+            if isinstance(row, Adw.ExpanderRow):
                 for sub_name in sub_names:
                     sub_plugin = all_plugins.get(sub_name)
-                    sub_row = Handy.ActionRow()
-                    sub_row.set_title(
-                        (sub_plugin.tooltip if sub_plugin else sub_name) or sub_name)
+                    sub_row = _plain(Adw.SwitchRow())
+                    sub_row.set_title((sub_plugin.tooltip if sub_plugin else sub_name) or sub_name)
                     sub_row.set_subtitle(f"action: {sub_name}")
-                    sw = Gtk.Switch()
-                    sw.set_valign(Gtk.Align.CENTER)
-                    sw.set_active(sub_name not in disabled_names)
-                    sw.connect(
+                    sub_row.set_active(sub_name not in disabled_names)
+                    sub_row.connect(
                         "notify::active",
-                        self._on_subplugin_toggle, sub_name,
+                        self._on_subplugin_toggle,
+                        sub_name,
                     )
-                    sub_row.add(sw)
-                    sub_row.set_activatable_widget(sw)
-                    row.add(sub_row)
-            group.add(row)
+                    row.add_row(sub_row)
+            self._add_row(group, row)
 
-    def _on_subplugin_toggle(self, switch: Gtk.Switch, _param, sub_name: str) -> None:
+    def _on_subplugin_toggle(self, switch: Adw.SwitchRow, _param, sub_name: str) -> None:
         try:
             from settings import get_settings as _gs
+
             settings_obj = _gs()
             disabled = list(settings_obj.get("disabled_plugins") or [])
         except Exception:
@@ -582,16 +483,10 @@ class PluginManagerDialog:
     def _refresh_installed_group(self) -> None:
         if self._installed_group is None:
             return
-        for child in list(self._installed_group.get_children()):
-            # remove() only drops the parent ref - without destroy() the
-            # row's GObject (and its signal-handler closures over Path
-            # objects) stays alive until Python GC notices the orphan,
-            # which on long-running daemons leaks across many refreshes.
-            self._installed_group.remove(child)
-            child.destroy()
+        # GTK 4 drops the widget once its last ref (the group) lets go,
+        # so remove() is enough - no separate destroy() needed.
+        self._clear_group(self._installed_group)
         self._fill_installed_group(self._installed_group)
-        self._installed_group.show_all()
-        _unwrap_subtitle_labels(self._installed_group)
 
     def _on_remove_clicked(self, _btn: Gtk.Button, path: Path) -> None:
         try:
@@ -607,41 +502,29 @@ class PluginManagerDialog:
 
     # ---- custom (recipes) tab ------------------------------------------------
 
-    def _build_custom_group(self) -> Handy.PreferencesGroup:
-        group = Handy.PreferencesGroup()
+    def _build_custom_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
         group.set_title("Custom actions")
         group.set_description(
             "Create your own popup buttons without writing Python. Each recipe "
             "is a small JSON file in ~/.config/linuxpop/recipes/."
         )
-
-        # "+ New action" row at the top
-        new_row = Handy.ActionRow()
-        new_row.set_title("New action…")
-        new_row.set_subtitle("Open URL · Run command · Notify · Transform clipboard")
-        add_btn = Gtk.Button.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON)
-        add_btn.set_valign(Gtk.Align.CENTER)
-        add_btn.get_style_context().add_class("suggested-action")
-        add_btn.connect("clicked", lambda *_: self._open_recipe_wizard())
-        new_row.add(add_btn)
-        new_row.set_activatable_widget(add_btn)
-        group.add(new_row)
-
-        self._fill_custom_group(group)
+        self._fill_custom_group_with_header(group)
         return group
 
-    def _fill_custom_group(self, group: Handy.PreferencesGroup) -> None:
+    def _fill_custom_group(self, group: Adw.PreferencesGroup) -> None:
         import recipe_loader
+
         # Translate the internal action-type slug into something a person
         # who didn't write the JSON would recognise.
         atype_labels = {
-            "open_url":         "Opens a web page",
-            "run_command":      "Runs a command",
-            "notify":           "Shows a notification",
+            "open_url": "Opens a web page",
+            "run_command": "Runs a command",
+            "notify": "Shows a notification",
             "copy_transformed": "Transforms text and copies it",
         }
         for path, recipe in recipe_loader.list_recipes():
-            row = Handy.ActionRow()
+            row = _plain(Adw.ActionRow())
             row.set_title(recipe.get("tooltip") or recipe.get("name", path.stem))
             atype = (recipe.get("action") or {}).get("type", "")
             template = (recipe.get("action") or {}).get("template", "")
@@ -656,57 +539,51 @@ class PluginManagerDialog:
             enabled_switch.set_valign(Gtk.Align.CENTER)
             enabled_switch.set_tooltip_text("Show this button in the popup")
             enabled_switch.set_active(bool(recipe.get("enabled", True)))
-            enabled_switch.connect("notify::active",
-                                   self._on_toggle_recipe, path)
-            row.add(enabled_switch)
+            enabled_switch.connect("notify::active", self._on_toggle_recipe, path)
+            row.add_suffix(enabled_switch)
 
-            edit_btn = Gtk.Button.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
-            edit_btn.set_valign(Gtk.Align.CENTER)
-            edit_btn.set_tooltip_text("Edit")
+            edit_btn = _icon_button("document-edit-symbolic", "Edit")
+            edit_btn.add_css_class("flat")
             edit_btn.connect("clicked", self._on_edit_recipe, path, recipe)
-            row.add(edit_btn)
+            row.add_suffix(edit_btn)
 
-            del_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic", Gtk.IconSize.BUTTON)
-            del_btn.set_valign(Gtk.Align.CENTER)
-            del_btn.set_tooltip_text("Delete")
-            del_btn.get_style_context().add_class("destructive-action")
+            del_btn = _icon_button("user-trash-symbolic", "Delete")
+            del_btn.add_css_class("destructive-action")
             del_btn.connect("clicked", self._on_delete_recipe, path)
-            row.add(del_btn)
-            group.add(row)
+            row.add_suffix(del_btn)
+            self._add_row(group, row)
 
     def _refresh_custom_group(self) -> None:
         if self._custom_group is None:
             return
-        for child in list(self._custom_group.get_children()):
-            self._custom_group.remove(child)
-            child.destroy()
+        self._clear_group(self._custom_group)
         self._fill_custom_group_with_header(self._custom_group)
-        self._custom_group.show_all()
-        _unwrap_subtitle_labels(self._custom_group)
 
-    def _fill_custom_group_with_header(self, group: Handy.PreferencesGroup) -> None:
+    def _fill_custom_group_with_header(self, group: Adw.PreferencesGroup) -> None:
         # "+ New action" row at the top (re-added on refresh)
-        new_row = Handy.ActionRow()
+        new_row = _plain(Adw.ActionRow())
         new_row.set_title("New action…")
         new_row.set_subtitle("Open URL · Run command · Notify · Transform clipboard")
-        add_btn = Gtk.Button.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON)
-        add_btn.set_valign(Gtk.Align.CENTER)
-        add_btn.get_style_context().add_class("suggested-action")
+        add_btn = _icon_button("list-add-symbolic")
+        add_btn.add_css_class("suggested-action")
         add_btn.connect("clicked", lambda *_: self._open_recipe_wizard())
-        new_row.add(add_btn)
+        new_row.add_suffix(add_btn)
         new_row.set_activatable_widget(add_btn)
-        group.add(new_row)
+        self._add_row(group, new_row)
         self._fill_custom_group(group)
 
-    def _open_recipe_wizard(self, existing: dict | None = None,
-                            existing_path: Path | None = None) -> None:
+    def _open_recipe_wizard(
+        self, existing: dict | None = None, existing_path: Path | None = None
+    ) -> None:
         from recipe_wizard import RecipeWizard
+
         parent = self._window
         wizard = RecipeWizard(parent=parent, recipe=existing, source_path=existing_path)
         new_recipe = wizard.run_and_get()
         if new_recipe is None:
             return
         import recipe_loader
+
         try:
             saved_path = recipe_loader.save_recipe(new_recipe, target_path=existing_path)
             print(f"[plugin_manager] saved recipe to {saved_path}")
@@ -722,6 +599,7 @@ class PluginManagerDialog:
 
     def _on_delete_recipe(self, _btn, path: Path) -> None:
         import recipe_loader
+
         recipe_loader.delete_recipe(path)
         self._refresh_custom_group()
         if self._on_changed:
@@ -731,6 +609,7 @@ class PluginManagerDialog:
         """Flip the recipe's 'enabled' field and reload the plugin layer
         so the popup picks up the change without a restart."""
         import recipe_loader
+
         recipe_loader.set_recipe_enabled(path, switch.get_active())
         # Don't repaint the whole group -- that would rebuild every row
         # and lose the switch animation feedback. Just trigger the
@@ -740,8 +619,8 @@ class PluginManagerDialog:
 
     # ---- order tab -----------------------------------------------------------
 
-    def _build_order_group(self) -> Handy.PreferencesGroup:
-        group = Handy.PreferencesGroup()
+    def _build_order_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
         group.set_title("Popup button order")
         group.set_description(
             "Drag-free reordering: ↑ and ↓ buttons move a plugin up or down. "
@@ -751,19 +630,21 @@ class PluginManagerDialog:
         self._fill_order_group(group)
         return group
 
-    def _fill_order_group(self, group: Handy.PreferencesGroup) -> None:
+    def _fill_order_group(self, group: Adw.PreferencesGroup) -> None:
         import plugin_loader
+
         try:
             from settings import get_settings
+
             settings = get_settings()
         except Exception:
             settings = None
 
         all_plugins = plugin_loader.all_plugins()
         if not all_plugins:
-            row = Handy.ActionRow()
+            row = _plain(Adw.ActionRow())
             row.set_title("No plugins loaded")
-            group.add(row)
+            self._add_row(group, row)
             return
 
         # Compute effective order: user list first, then unlisted by priority
@@ -771,48 +652,39 @@ class PluginManagerDialog:
         order_idx = {n: i for i, n in enumerate(order)}
         sorted_plugins = sorted(
             all_plugins,
-            key=lambda p: (
-                (0, order_idx[p.name]) if p.name in order_idx
-                else (1, p.priority),
-            ),
+            key=lambda p: ((0, order_idx[p.name]) if p.name in order_idx else (1, p.priority),),
         )
 
         for index, plugin in enumerate(sorted_plugins):
-            row = Handy.ActionRow()
+            row = _plain(Adw.ActionRow())
             row.set_title(plugin.tooltip or plugin.name)
             row.set_subtitle(plugin.name)
             try:
-                img = Gtk.Image.new_from_icon_name(plugin.icon, Gtk.IconSize.LARGE_TOOLBAR)
+                img = Gtk.Image.new_from_icon_name(plugin.icon)
                 img.set_pixel_size(20)
                 row.add_prefix(img)
             except Exception:
                 pass
 
-            up_btn = Gtk.Button.new_from_icon_name("go-up-symbolic", Gtk.IconSize.BUTTON)
-            up_btn.set_valign(Gtk.Align.CENTER)
+            up_btn = _icon_button("go-up-symbolic", "Move up")
+            up_btn.add_css_class("flat")
             up_btn.set_sensitive(index > 0)
-            up_btn.set_tooltip_text("Move up")
             up_btn.connect("clicked", self._on_move, index, -1, sorted_plugins)
-            row.add(up_btn)
+            row.add_suffix(up_btn)
 
-            down_btn = Gtk.Button.new_from_icon_name("go-down-symbolic", Gtk.IconSize.BUTTON)
-            down_btn.set_valign(Gtk.Align.CENTER)
+            down_btn = _icon_button("go-down-symbolic", "Move down")
+            down_btn.add_css_class("flat")
             down_btn.set_sensitive(index < len(sorted_plugins) - 1)
-            down_btn.set_tooltip_text("Move down")
             down_btn.connect("clicked", self._on_move, index, +1, sorted_plugins)
-            row.add(down_btn)
+            row.add_suffix(down_btn)
 
-            group.add(row)
+            self._add_row(group, row)
 
     def _refresh_order_group(self) -> None:
         if self._order_group is None:
             return
-        for child in list(self._order_group.get_children()):
-            self._order_group.remove(child)
-            child.destroy()
+        self._clear_group(self._order_group)
         self._fill_order_group(self._order_group)
-        self._order_group.show_all()
-        _unwrap_subtitle_labels(self._order_group)
 
     def _on_move(self, _btn, index: int, delta: int, sorted_plugins) -> None:
         """Swap index with index+delta; persist the new full ordering."""
@@ -821,10 +693,12 @@ class PluginManagerDialog:
             return
         ordered_names = [p.name for p in sorted_plugins]
         ordered_names[index], ordered_names[new_idx] = (
-            ordered_names[new_idx], ordered_names[index],
+            ordered_names[new_idx],
+            ordered_names[index],
         )
         try:
             from settings import get_settings
+
             s = get_settings()
             s.set("plugin_order", ordered_names)
             s.save()
@@ -840,16 +714,17 @@ class PluginManagerDialog:
         if page is None:
             return
         # Wipe every existing category group, then append fresh ones.
-        # HdyPreferencesPage exposes children via forall(), not get_children().
         old_groups = list(getattr(self, "_catalog_groups", []) or [])
         for g in old_groups:
-            parent = g.get_parent()
-            if parent is not None:
-                parent.remove(g)
+            page.remove(g)
         self._catalog_groups = []
         for group in self._build_catalog_groups():
             page.add(group)
-            group.show_all()
-            _unwrap_subtitle_labels(group)
             self._catalog_groups.append(group)
         self._catalog_group = self._catalog_groups[0] if self._catalog_groups else None
+
+
+if __name__ == "__main__":
+    _dlg = PluginManagerDialog()
+    _dlg.show()
+    gtk4_app.run_window(_dlg._window)

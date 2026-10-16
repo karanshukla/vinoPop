@@ -10,7 +10,7 @@ How it maps each piece of the X11 design onto Wayland/KDE:
 |---|---|
 | Read selection / clipboard | `wl-clipboard` (`wl-paste` / `wl-copy`) |
 | Auto-popup on selection | `wl-paste --primary --watch` |
-| Popup placement at cursor | `gtk-layer-shell` (anchor top-left + margins) |
+| Popup placement at cursor | `gtk4-layer-shell` (anchor top-left + margins); XWayland if it isn't installed |
 | Global cursor position | KWin scripting `workspace.cursorPos` over D-Bus |
 | Keystroke / paste injection | `wtype` |
 | Global hotkey | KGlobalAccel over D-Bus |
@@ -24,7 +24,7 @@ The backend is chosen automatically from `XDG_SESSION_TYPE`. Force it with
 ```sh
 sudo dnf install -y \
     python3 python3-gobject python3-dbus \
-    gtk3 gtk-layer-shell libhandy libappindicator-gtk3 \
+    gtk4 libadwaita gtk4-layer-shell \
     wl-clipboard wtype
 # optional: OCR + region capture
 sudo dnf install -y tesseract

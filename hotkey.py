@@ -4,14 +4,14 @@ Parses a hotkey string like "ctrl+alt+space" and grabs it on the X11
 root window. When pressed anywhere, fires a callback on the GTK main
 thread (via GLib.idle_add). Threaded so the GTK main loop is untouched.
 """
+
 from __future__ import annotations
 
 import threading
-from typing import Callable, Iterable, Optional
-
-from Xlib import X, XK, display, error
+from collections.abc import Callable, Iterable
 
 from gi.repository import GLib
+from Xlib import XK, X, display, error
 
 # Standard modifier names mapped to X11 modifier masks
 _MOD_NAMES = {
@@ -78,10 +78,10 @@ def _resolve_keysym(name: str) -> int:
     # X11 keysym names are case-sensitive and inconsistent: 'Return', 'space',
     # 'BackSpace', 'greater', 'Up'. Try the most likely variants in order.
     candidates = [
-        name,                              # as-given (e.g. 'greater', 'F5')
-        name.lower(),                      # 'greater'
-        name[:1].upper() + name[1:],       # 'Greater' (works for Return etc.)
-        name.upper(),                      # 'GREATER' (rare)
+        name,  # as-given (e.g. 'greater', 'F5')
+        name.lower(),  # 'greater'
+        name[:1].upper() + name[1:],  # 'Greater' (works for Return etc.)
+        name.upper(),  # 'GREATER' (rare)
     ]
     seen: set[str] = set()
     for cand in candidates:
@@ -118,11 +118,11 @@ class Hotkey:
         # ~25 ms median trigger latency. Off by default.
         self._use_polling = use_polling
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._mods: int = 0
         self._keycode: int = 0
         self._grabbed_combos: list[tuple[int, int]] = []  # (keycode, modmask)
-        self._dpy: Optional[display.Display] = None
+        self._dpy: display.Display | None = None
         self._root = None
 
     def start(self) -> None:
@@ -170,8 +170,9 @@ class Hotkey:
         # the escape hatch for hotkeys that fight with WM-level grabs
         # (Cinnamon Super-overview is the canonical example).
         if self._use_polling:
-            print(f"[hotkey] '{self._hotkey_str}' polling mode "
-                  f"(keycode={keycode}, mods=0x{mods:x})")
+            print(
+                f"[hotkey] '{self._hotkey_str}' polling mode (keycode={keycode}, mods=0x{mods:x})"
+            )
             self._poll_loop()
             try:
                 self._dpy.close()
@@ -210,11 +211,21 @@ class Hotkey:
             print(f"[hotkey] '{self._hotkey_str}' could not be grabbed - already in use")
             try:
                 import subprocess
+
                 subprocess.run(
-                    ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-u", "critical", "-i", "dialog-warning",
-                     "LinuxPop hotkey conflict",
-                     f"'{self._hotkey_str}' is already bound by another app. "
-                     "Pick a different combination in Settings."],
+                    [
+                        "notify-send",
+                        "--hint=byte:transient:1",
+                        "-t",
+                        "3000",
+                        "-u",
+                        "critical",
+                        "-i",
+                        "dialog-warning",
+                        "LinuxPop hotkey conflict",
+                        f"'{self._hotkey_str}' is already bound by another app. "
+                        "Pick a different combination in Settings.",
+                    ],
                     check=False,
                 )
             except Exception:
@@ -234,6 +245,7 @@ class Hotkey:
         while not self._stop.is_set():
             if self._dpy.pending_events() == 0:
                 import select
+
                 try:
                     select.select([self._dpy.fileno()], [], [], 1.0)
                 except OSError:
@@ -255,9 +267,11 @@ class Hotkey:
                     pass
                 new_keycode = self._dpy.keysym_to_keycode(keysym)
                 if new_keycode and new_keycode != keycode:
-                    print(f"[hotkey] '{self._hotkey_str}' keycode shifted "
-                          f"{keycode} -> {new_keycode} after MappingNotify; "
-                          f"re-grabbing")
+                    print(
+                        f"[hotkey] '{self._hotkey_str}' keycode shifted "
+                        f"{keycode} -> {new_keycode} after MappingNotify; "
+                        f"re-grabbing"
+                    )
                     # Ungrab the old combos, grab the new one
                     for old_kc, old_mask in list(self._grabbed_combos):
                         try:
@@ -270,8 +284,11 @@ class Hotkey:
                         catcher = error.CatchError(error.BadAccess)
                         try:
                             self._root.grab_key(
-                                new_keycode, mask, 1,
-                                X.GrabModeAsync, X.GrabModeAsync,
+                                new_keycode,
+                                mask,
+                                1,
+                                X.GrabModeAsync,
+                                X.GrabModeAsync,
                                 onerror=catcher,
                             )
                             self._dpy.sync()
@@ -287,13 +304,17 @@ class Hotkey:
                     X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
                 )
                 if effective == mods:
-                    print(f"[hotkey] '{self._hotkey_str}' fired -- "
-                          f"scheduling trigger on GTK main thread")
+                    print(
+                        f"[hotkey] '{self._hotkey_str}' fired -- "
+                        f"scheduling trigger on GTK main thread"
+                    )
                     GLib.idle_add(self._safe_trigger)
                 else:
-                    print(f"[hotkey] '{self._hotkey_str}' press ignored: "
-                          f"expected mods=0x{mods:x} got effective=0x{effective:x} "
-                          f"(full state=0x{event.state:x})")
+                    print(
+                        f"[hotkey] '{self._hotkey_str}' press ignored: "
+                        f"expected mods=0x{mods:x} got effective=0x{effective:x} "
+                        f"(full state=0x{event.state:x})"
+                    )
 
         # Cleanup
         for keycode, mask in self._grabbed_combos:
@@ -317,10 +338,10 @@ class Hotkey:
         query_keymap() - a 32-byte bitmap with one bit per keycode.
         """
         import time as _time
+
         keycode = self._keycode
         mods = self._mods
-        mod_mask = (X.ShiftMask | X.ControlMask
-                    | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask)
+        mod_mask = X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
         byte_idx = keycode // 8
         bit_idx = keycode % 8
         bit_val = 1 << bit_idx
@@ -341,8 +362,9 @@ class Hotkey:
                     data = self._root.query_pointer()
                     effective = data.mask & mod_mask
                     if effective == mods:
-                        print(f"[hotkey] '{self._hotkey_str}' fired "
-                              "(polling) -- scheduling trigger")
+                        print(
+                            f"[hotkey] '{self._hotkey_str}' fired (polling) -- scheduling trigger"
+                        )
                         GLib.idle_add(self._safe_trigger)
                 prev_pressed = pressed
             except Exception as exc:  # noqa: BLE001

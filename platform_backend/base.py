@@ -8,7 +8,7 @@ keystrokes, positioning the popup - goes through a `PlatformBackend`.
 Two concrete backends:
   - `x11.X11Backend`        - the original behaviour (xclip / Xlib / xdotool)
   - `wayland_kde.WaylandKdeBackend` - KDE Plasma 6 / Wayland (wl-clipboard /
-    KWin cursorPos over DBus / gtk-layer-shell / wtype / KGlobalAccel)
+    KWin cursorPos over DBus / gtk4-layer-shell / wtype / KGlobalAccel)
 
 `platform_backend.get_backend()` picks one at startup (see __init__.detect).
 The rest of the app talks only to the returned object and never imports Xlib /
@@ -18,11 +18,13 @@ Selection watchers and hotkeys are returned as live objects implementing the
 small protocols below - the same shape the original `watcher.SelectionWatcher`
 and `hotkey.Hotkey` already had, so callers barely change.
 """
+
 from __future__ import annotations
 
 import abc
 import subprocess
-from typing import Callable, Optional, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 # One-time notification per session when a key-injection backend is missing.
 # Keeps Cut/Paste/Backspace from failing completely silently.
@@ -36,8 +38,16 @@ def _warn_missing_injector(backend_name: str, message: str) -> None:
     _missing_injector_warned.add(backend_name)
     try:
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "6000",
-             "-i", "dialog-warning", "LinuxPop", message],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "6000",
+                "-i",
+                "dialog-warning",
+                "LinuxPop",
+                message,
+            ],
             check=False,
         )
     except Exception:
@@ -140,22 +150,35 @@ class PlatformBackend(abc.ABC):
 
     @abc.abstractmethod
     def make_hotkey(
-        self, hotkey_str: str, on_trigger: Callable[[], None],
+        self,
+        hotkey_str: str,
+        on_trigger: Callable[[], None],
         use_polling: bool = False,
     ) -> Hotkey: ...
 
     @abc.abstractmethod
     def make_double_click_watcher(
         self, on_double_click: Callable[[int, int], None]
-    ) -> Optional[DoubleClickWatcher]:
+    ) -> DoubleClickWatcher | None:
         """A global Ctrl+double-click watcher, or None if unsupported."""
 
     # ---- popup positioning ----------------------------------------------
+    # GTK 4 dropped Gtk.Window.move() / type hints / keep-above, so floating
+    # windows (the popup bar, AI bubble, ...) are placed only through these
+    # two calls. X11 (incl. XWayland): override-redirect + XMoveWindow via
+    # python-xlib. Wayland with wlr-layer-shell: gtk4-layer-shell margins.
     @abc.abstractmethod
+    def prepare_popup_window(self, win) -> None:
+        """Prepare a floating Gtk.Window for this backend. Called once, before
+        the window is first realized/presented (X11: override-redirect on
+        realize; Wayland: gtk4-layer-shell init)."""
+
     def init_popup_window(self, win) -> None:
-        """Prepare the popup GtkWindow for this backend. Called once, before
-        the window is first shown (X11: no-op; Wayland: layer-shell init)."""
+        """Old name of prepare_popup_window(), kept for callers that predate
+        the GTK 4 port."""
+        self.prepare_popup_window(win)
 
     @abc.abstractmethod
     def move_popup_window(self, win, x: int, y: int) -> None:
-        """Move the popup to logical coords (x, y)."""
+        """Move the popup to logical coords (x, y). May be called before the
+        window is realized; the position is then applied on realize."""

@@ -9,6 +9,7 @@ setting.
 
 Entry point: ``show_onboarding(settings, on_open_plugins=None, parent=None)``.
 """
+
 from __future__ import annotations
 
 import math
@@ -16,18 +17,20 @@ import math
 import cairo
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib, Pango  # noqa: E402
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 # ── brand palette (matches theme.py / the app icon) ──────────────────────────
-BLUE = (0.357, 0.490, 0.961)    # #5B7DF5
+BLUE = (0.357, 0.490, 0.961)  # #5B7DF5
 VIOLET = (0.486, 0.227, 0.929)  # #7C3AED
-PINK = (0.925, 0.282, 0.600)    # #EC4899
-GREEN = (0.204, 0.780, 0.349)   # #34C759
+PINK = (0.925, 0.282, 0.600)  # #EC4899
+GREEN = (0.204, 0.780, 0.349)  # #34C759
 AMBER = (0.97, 0.70, 0.30)
-INK = (0.105, 0.130, 0.184)     # #1c2231 - dark text on the light stage
+INK = (0.105, 0.130, 0.184)  # #1c2231 - dark text on the light stage
 MUTE = (0.62, 0.66, 0.74)
-STAGE = (0.985, 0.990, 1.0)     # near-white card the scenes sit on
+STAGE = (0.985, 0.990, 1.0)  # near-white card the scenes sit on
 STAGE_BORDER = (0.86, 0.88, 0.93)
 PANEL = (0.95, 0.96, 0.985)
 
@@ -44,23 +47,23 @@ def _seg(t, a, b):
     return _clamp((t - a) / (b - a)) if b > a else 0.0
 
 
-def _eo(x):           # ease-out cubic
+def _eo(x):  # ease-out cubic
     x = _clamp(x)
     return 1.0 - (1.0 - x) ** 3
 
 
-def _eio(x):          # ease-in-out cubic
+def _eio(x):  # ease-in-out cubic
     x = _clamp(x)
     return 4 * x * x * x if x < 0.5 else 1.0 - (-2 * x + 2) ** 3 / 2.0
 
 
-def _eob(x):          # ease-out-back (overshoot, for springy pops)
+def _eob(x):  # ease-out-back (overshoot, for springy pops)
     x = _clamp(x) - 1.0
     c1 = 1.70158
-    return 1.0 + (c1 + 1) * x ** 3 + c1 * x ** 2
+    return 1.0 + (c1 + 1) * x**3 + c1 * x**2
 
 
-def _bump(x):         # 0->1->0 hump
+def _bump(x):  # 0->1->0 hump
     return math.sin(_clamp(x) * math.pi)
 
 
@@ -81,8 +84,11 @@ def _bar(cr, x, y, w, h, rgb, a=1.0):
 
 
 def _text(cr, x, y, s, size, rgb, a=1.0, bold=False, center=False):
-    cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
-                        cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
+    cr.select_font_face(
+        "sans-serif",
+        cairo.FONT_SLANT_NORMAL,
+        cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL,
+    )
     cr.set_font_size(size)
     if center:
         ext = cr.text_extents(s)
@@ -116,8 +122,9 @@ def _blink_at(t, period=3.4):
     return _clamp(_bump(_seg(p, 0.0, 0.16))) if p < 0.16 else 0.0
 
 
-def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0,
-            mouth="smile", tilt=0.0, bob=0.0):
+def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0.0, bob=0.0):
+    if s <= 0.0:  # fully faded out; a zero scale would make cairo raise
+        return
     cr.save()
     cr.translate(cx, cy + bob)
     cr.rotate(tilt)
@@ -132,7 +139,7 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0,
     cr.restore()
     # body - a rounded blob with the brand gradient + a little popup-tail
     bw, bh = 31, 28
-    cr.move_to(0, bh + 9)                       # tail tip (popup pointer)
+    cr.move_to(0, bh + 9)  # tail tip (popup pointer)
     cr.line_to(-8, bh - 3)
     cr.line_to(8, bh - 3)
     cr.close_path()
@@ -156,7 +163,7 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0,
     for sgn in (-1, 1):
         cr.save()
         cr.translate(sgn * 12, -3)
-        if happy:                                # ^_^ curved-happy eyes
+        if happy:  # ^_^ curved-happy eyes
             cr.set_source_rgb(1, 1, 1)
             cr.set_line_width(2.6)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
@@ -196,8 +203,7 @@ def _speech(cr, x, y, text, a=1.0, tail_x=18):
     if a <= 0.01:
         return
     cr.save()
-    cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL,
-                        cairo.FONT_WEIGHT_BOLD)
+    cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
     cr.set_font_size(14)
     ext = cr.text_extents(text)
     pad = 12
@@ -261,8 +267,7 @@ def _appwin(cr, x, y, w, h):
     cr.set_source_rgb(0.945, 0.955, 0.975)
     cr.fill()
     cr.restore()
-    for i, c in enumerate([(0.96, 0.46, 0.45), (0.97, 0.78, 0.36),
-                           (0.40, 0.80, 0.46)]):
+    for i, c in enumerate([(0.96, 0.46, 0.45), (0.97, 0.78, 0.36), (0.40, 0.80, 0.46)]):
         cr.arc(x + 13 + i * 13, y + 11, 3.6, 0, 2 * math.pi)
         cr.set_source_rgb(*c)
         cr.fill()
@@ -281,7 +286,7 @@ def _popupbar(cr, x, y, n, a, icons=None):
     cr.stroke()
     for i in range(n):
         cxx = x + 24 + i * 40
-        appear = _eob(_clamp((a - 0.2) * 1.2) ) if a < 1 else 1.0
+        appear = _eob(_clamp((a - 0.2) * 1.2)) if a < 1 else 1.0
         cr.arc(cxx, y + h / 2, 12 * appear, 0, 2 * math.pi)
         cr.set_source_rgba(*_ACCENTS[i % 4], a)
         cr.fill()
@@ -307,8 +312,16 @@ def _keycap(cr, x, y, label, press, accent=BLUE):
     cr.set_source_rgba(*accent, 0.5)
     cr.set_line_width(1.4)
     cr.stroke()
-    _text(cr, x + kw / 2, y + dy + 26, label, 15,
-          (1, 1, 1) if press > 0.45 else INK, bold=True, center=True)
+    _text(
+        cr,
+        x + kw / 2,
+        y + dy + 26,
+        label,
+        15,
+        (1, 1, 1) if press > 0.45 else INK,
+        bold=True,
+        center=True,
+    )
     return kw
 
 
@@ -319,8 +332,7 @@ def _plugcard(cr, x, y, w, h, accent, name, a=1.0, lift=0.0, check=0.0):
     _rrect(cr, x, y, w, h, 12)
     cr.set_source_rgba(1, 1, 1, a)
     cr.fill_preserve()
-    cr.set_source_rgba(*(accent if lift > 0.5 else STAGE_BORDER),
-                       (0.7 if lift > 0.5 else 1.0) * a)
+    cr.set_source_rgba(*(accent if lift > 0.5 else STAGE_BORDER), (0.7 if lift > 0.5 else 1.0) * a)
     cr.set_line_width(1.0 + lift / 8)
     cr.stroke()
     cr.arc(x + 22, y + h / 2, 12, 0, 2 * math.pi)
@@ -395,7 +407,7 @@ def _draw_how(cr, w, h, t):
     lx = ax + 18
     ys = [ay + 40, ay + 66, ay + 92, ay + 118]
     wid = [aw - 56, aw - 38, aw - 74, aw - 30]
-    for yy, ww in zip(ys, wid):
+    for yy, ww in zip(ys, wid, strict=True):
         _bar(cr, lx, yy, ww, 9, (0.81, 0.84, 0.90), fade)
     # cursor glides in and drags a selection across line 2 (index 1)
     sel = _eio(_seg(lt, 0.9, 1.9))
@@ -407,7 +419,6 @@ def _draw_how(cr, w, h, t):
         _bar(cr, lx, ys[1], selw, 9, BLUE, fade)
     # popup springs up under the selection
     pa = _seg(lt, 2.0, 2.5)
-    popup_w = 0
     if pa > 0:
         spr = _eob(pa)
         px = lx - 6
@@ -416,7 +427,7 @@ def _draw_how(cr, w, h, t):
         cr.translate(px + 70, py + 20)
         cr.scale(0.6 + 0.4 * spr, 0.6 + 0.4 * spr)
         cr.translate(-(px + 70), -(py + 20))
-        popup_w = _popupbar(cr, px, py, 4, fade)
+        _popupbar(cr, px, py, 4, fade)
         cr.restore()
         # cursor moves onto first action and clicks
         click = _bump(_seg(lt, 3.6, 4.3))
@@ -441,16 +452,25 @@ def _draw_how(cr, w, h, t):
             _text(cr, px + 38, ry + 15, "done", 11, GREEN, fade, bold=True)
     # the guide enters from the right and points at the popup
     mx = sx + sw - 70
-    enter = _eo(_seg(lt, 2.3, 3.1))
     my = sy + sh / 2 - 6
     look = (-0.8, 0.2)
-    _mascot(cr, mx, my, 1.0 * fade if fade > 0 else 0.0,
-            look=look, blink=_blink_at(t),
-            mouth="open" if 3.0 < lt < 4.6 else "smile",
-            bob=2 * math.sin(t * 2.2), )
-    _speech(cr, mx - 150, my - 56,
-            "Pick anything!" if lt < 4.0 else "Nice!",
-            a=fade * _eo(_seg(lt, 3.0, 3.5)) * (1 - _seg(lt, T - 0.8, T)))
+    _mascot(
+        cr,
+        mx,
+        my,
+        1.0 * fade if fade > 0 else 0.0,
+        look=look,
+        blink=_blink_at(t),
+        mouth="open" if 3.0 < lt < 4.6 else "smile",
+        bob=2 * math.sin(t * 2.2),
+    )
+    _speech(
+        cr,
+        mx - 150,
+        my - 56,
+        "Pick anything!" if lt < 4.0 else "Nice!",
+        a=fade * _eo(_seg(lt, 3.0, 3.5)) * (1 - _seg(lt, T - 0.8, T)),
+    )
 
 
 # ── scene 2: summon it your way (hotkey + clipboard) ─────────────────────────
@@ -460,8 +480,8 @@ def _draw_summon(cr, w, h, t):
     keys2 = getattr(_draw_summon, "clip_keys", ["Ctrl", "Super", "V"])
     T = 12.0
     lt = t % T
-    seg = int(lt // 4.0)        # 0 popup hotkey, 1 clipboard, 2 snippets
-    base = lt - seg * 4.0       # 0..4 within the beat
+    seg = int(lt // 4.0)  # 0 popup hotkey, 1 clipboard, 2 snippets
+    base = lt - seg * 4.0  # 0..4 within the beat
     cx = sx + sw / 2 + 18
     cy = sy + 50
     if seg < 2:
@@ -473,8 +493,7 @@ def _draw_summon(cr, w, h, t):
         total = sum(widths) + 26 * (len(keys) - 1)
         x = cx - total / 2
         for i, k in enumerate(keys):
-            press = (_seg(base, 0.5 + i * 0.30, 0.72 + i * 0.30)
-                     - _seg(base, 1.5, 1.72))
+            press = _seg(base, 0.5 + i * 0.30, 0.72 + i * 0.30) - _seg(base, 1.5, 1.72)
             kw = _keycap(cr, x, cy, k, press, accent)
             if i < len(keys) - 1:
                 _text(cr, x + kw + 6, cy + 26, "+", 17, MUTE, center=False)
@@ -507,8 +526,7 @@ def _draw_summon(cr, w, h, t):
         # seg 2: snippets / text expansion - type a short trigger, it
         # expands into the whole text. Lives inside clipboard history.
         accent = PINK
-        _text(cr, cx, cy - 18, "Snippets & text expansion", 13, accent,
-              bold=True, center=True)
+        _text(cr, cx, cy - 18, "Snippets & text expansion", 13, accent, bold=True, center=True)
         fw, fh = 224, 46
         fx = cx - fw / 2
         fy = cy + 14
@@ -525,8 +543,7 @@ def _draw_summon(cr, w, h, t):
         if _seg(base, 2.0, 2.45) < 0.5:
             n = int(round(len(trigger) * _seg(base, 0.5, 1.8)))
             shown = trigger[:n]
-            _text(cr, fx + 16, ty, shown, 15, (0.20, 0.22, 0.28),
-                  center=False)
+            _text(cr, fx + 16, ty, shown, 15, (0.20, 0.22, 0.28), center=False)
             if int(t * 2) % 2 == 0:  # blinking caret
                 cw = fx + 16 + len(shown) * 8.6
                 cr.set_source_rgba(0.20, 0.22, 0.28, 0.8)
@@ -536,8 +553,7 @@ def _draw_summon(cr, w, h, t):
                 cr.stroke()
         else:
             a = _eo(_seg(base, 2.0, 2.7))
-            _text(cr, fx + 16, ty, expanded, 14, (0.20, 0.22, 0.28),
-                  a=a, center=False)
+            _text(cr, fx + 16, ty, expanded, 14, (0.20, 0.22, 0.28), a=a, center=False)
         spark = _bump(_seg(base, 1.95, 2.7))  # pop at the swap
         if spark > 0:
             scx, scy = fx + fw - 22, fy + fh / 2
@@ -549,21 +565,38 @@ def _draw_summon(cr, w, h, t):
                 cr.move_to(scx + 3 * math.cos(ang), scy + 3 * math.sin(ang))
                 cr.line_to(scx + rr * math.cos(ang), scy + rr * math.sin(ang))
                 cr.stroke()
-        _text(cr, cx, fy + fh + 22,
-              "Type a shortcut, get the whole text", 11, MUTE, center=True)
+        _text(cr, cx, fy + fh + 22, "Type a shortcut, get the whole text", 11, MUTE, center=True)
     # guide on the left, hops with the key presses
     hop = abs(math.sin(base * 3.0)) * 6 if base < 1.6 else 0
-    _mascot(cr, sx + 64, sy + sh / 2 + 6, 1.0,
-            look=(0.6, -0.2), blink=_blink_at(t),
-            mouth="open" if base < 1.8 else "smile", bob=-hop)
+    _mascot(
+        cr,
+        sx + 64,
+        sy + sh / 2 + 6,
+        1.0,
+        look=(0.6, -0.2),
+        blink=_blink_at(t),
+        mouth="open" if base < 1.8 else "smile",
+        bob=-hop,
+    )
     speeches = ["Press it!", "...or this one", "...and snippets!"]
-    _speech(cr, sx + 30, sy + 20, speeches[seg],
-            a=_eo(_seg(base, 0.2, 0.7)) * (1 - _seg(base, 3.4, 4.0)))
+    _speech(
+        cr,
+        sx + 30,
+        sy + 20,
+        speeches[seg],
+        a=_eo(_seg(base, 0.2, 0.7)) * (1 - _seg(base, 3.4, 4.0)),
+    )
 
 
 # ── scene 3: add ready-made plugins (a little store) ─────────────────────────
-_PLUGINS = [("Send to AI", BLUE), ("Clipboard", VIOLET), ("Transforms", PINK),
-            ("Word count", GREEN), ("QR code", AMBER), ("Search", BLUE)]
+_PLUGINS = [
+    ("Translate", BLUE),
+    ("Clipboard", VIOLET),
+    ("Transforms", PINK),
+    ("Word count", GREEN),
+    ("QR code", AMBER),
+    ("Search", BLUE),
+]
 
 
 def _draw_plugins(cr, w, h, t):
@@ -581,7 +614,7 @@ def _draw_plugins(cr, w, h, t):
     picks = [0, 3, 4]
     stagei = int(_clamp(lt / 2.4, 0, 2.999))
     pick = picks[stagei]
-    local = (lt - stagei * 2.4)
+    local = lt - stagei * 2.4
     installed_count = stagei + (1 if local > 1.9 else 0)
     for idx, (name, acc) in enumerate(_PLUGINS):
         r, c = divmod(idx, cols)
@@ -607,12 +640,10 @@ def _draw_plugins(cr, w, h, t):
             cr.translate(x + cw / 2, y + ch / 2)
             cr.scale(sc, sc)
             cr.translate(-(x + cw / 2), -(y + ch / 2))
-            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift,
-                      check=_seg(local, 1.7, 2.0))
+            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=_seg(local, 1.7, 2.0))
             cr.restore()
         else:
-            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift,
-                      check=0.0)
+            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=0.0)
     # installed tray
     tx, ty, tw, th = sx + sw - 130, sy + 28, 108, sh - 56
     _rrect(cr, tx, ty, tw, th, 12)
@@ -621,8 +652,7 @@ def _draw_plugins(cr, w, h, t):
     cr.set_source_rgba(*GREEN, 0.35)
     cr.set_line_width(1.2)
     cr.stroke()
-    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, GREEN, bold=True,
-          center=True)
+    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, GREEN, bold=True, center=True)
     for i in range(installed_count):
         iy = ty + 30 + i * 26
         acc = _PLUGINS[picks[i]][1]
@@ -634,13 +664,23 @@ def _draw_plugins(cr, w, h, t):
         cr.fill()
         _bar(cr, tx + 34, iy + 7, tw - 56, 6, (0.84, 0.86, 0.92))
     # guide shops along the shelf
-    mx = ox + (pick % cols) * (cw + gap) + cw / 2
-    my = oy - 30 + _bump(_seg(local, 0.0, 1.0)) * -4
-    _mascot(cr, sx + 40, sy + sh - 36, 0.92, look=(0.5, -0.4),
-            blink=_blink_at(t), mouth="open" if local > 1.6 else "smile",
-            bob=2 * math.sin(t * 2))
-    _speech(cr, sx + 18, sy + sh - 100, "One click!",
-            a=_eo(_seg(local, 1.6, 2.0)) * (1 - _seg(local, 2.2, 2.4)))
+    _mascot(
+        cr,
+        sx + 40,
+        sy + sh - 36,
+        0.92,
+        look=(0.5, -0.4),
+        blink=_blink_at(t),
+        mouth="open" if local > 1.6 else "smile",
+        bob=2 * math.sin(t * 2),
+    )
+    _speech(
+        cr,
+        sx + 18,
+        sy + sh - 100,
+        "One click!",
+        a=_eo(_seg(local, 1.6, 2.0)) * (1 - _seg(local, 2.2, 2.4)),
+    )
 
 
 # ── scene 4: build your own (recipe workshop) ────────────────────────────────
@@ -648,9 +688,11 @@ def _draw_recipe(cr, w, h, t):
     sx, sy, sw, sh = _stage(cr, w, h)
     T = 7.4
     lt = t % T
-    blocks = [("When", "text is a URL", BLUE),
-              ("Then", "open in browser", VIOLET),
-              ("Run", "your action", GREEN)]
+    blocks = [
+        ("When", "text is a URL", BLUE),
+        ("Then", "open in browser", VIOLET),
+        ("Run", "your action", GREEN),
+    ]
     bw, bh = 132, 56
     gap = 18
     total = len(blocks) * bw + (len(blocks) - 1) * gap
@@ -696,17 +738,29 @@ def _draw_recipe(cr, w, h, t):
     built = _seg(lt, 3.4, 4.0)
     if built > 0:
         py = by + bh + 26 + (1 - _eob(built)) * 14
-        pw = _popupbar(cr, sx + sw / 2 - 64, py, 3, built)
+        _popupbar(cr, sx + sw / 2 - 64, py, 3, built)
         # the new custom button glows
         glow = _bump(_seg(lt, 4.0, 5.4))
         cr.arc(sx + sw / 2 - 40, py + 20, 12 + 8 * glow, 0, 2 * math.pi)
         cr.set_source_rgba(*GREEN, 0.30 * glow)
         cr.fill()
-    _mascot(cr, sx + sw - 58, by + bh + 30, 0.92,
-            look=(-0.5, -0.3), blink=_blink_at(t),
-            mouth="happy" if lt > 3.6 else "smile", bob=2 * math.sin(t * 2.4))
-    _speech(cr, sx + sw - 218, by + bh - 4, "You built a plugin!",
-            a=_eo(_seg(lt, 3.8, 4.3)) * (1 - _seg(lt, T - 0.8, T)))
+    _mascot(
+        cr,
+        sx + sw - 58,
+        by + bh + 30,
+        0.92,
+        look=(-0.5, -0.3),
+        blink=_blink_at(t),
+        mouth="happy" if lt > 3.6 else "smile",
+        bob=2 * math.sin(t * 2.4),
+    )
+    _speech(
+        cr,
+        sx + sw - 218,
+        by + bh - 4,
+        "You built a plugin!",
+        a=_eo(_seg(lt, 3.8, 4.3)) * (1 - _seg(lt, T - 0.8, T)),
+    )
 
 
 # ── scene 5: you're all set ──────────────────────────────────────────────────
@@ -737,10 +791,18 @@ def _draw_done(cr, w, h, t):
     if t > 0.3:
         _confetti(cr, cx, cy - 6, t)
     wave = math.sin(t * 4) * 0.18
-    _mascot(cr, cx, cy, 1.5, look=(0, 0.05), blink=_blink_at(t),
-            mouth="happy", tilt=wave, bob=3 * math.sin(t * 2.2))
-    _text(cr, cx, cy + 68, "Now select some text and try it!", 14,
-          INK, bold=True, center=True)
+    _mascot(
+        cr,
+        cx,
+        cy,
+        1.5,
+        look=(0, 0.05),
+        blink=_blink_at(t),
+        mouth="happy",
+        tilt=wave,
+        bob=3 * math.sin(t * 2.2),
+    )
+    _text(cr, cx, cy + 68, "Now select some text and try it!", 14, INK, bold=True, center=True)
 
 
 def _build_pages(settings):
@@ -750,48 +812,84 @@ def _build_pages(settings):
             return v if v else d
         except Exception:
             return d
+
     popup_key = _g("hotkey", "super+shift+y")
     clip_key = _g("clipboard_hotkey", "ctrl+super+v")
 
     def _fmt(combo):
-        return "+".join(p.strip().capitalize()
-                        for p in combo.split("+") if p.strip())
+        return "+".join(p.strip().capitalize() for p in combo.split("+") if p.strip())
 
-    _draw_summon.keys = [p.strip().capitalize()
-                         for p in popup_key.split("+") if p.strip()]
-    _draw_summon.clip_keys = [p.strip().capitalize()
-                              for p in clip_key.split("+") if p.strip()]
+    _draw_summon.keys = [p.strip().capitalize() for p in popup_key.split("+") if p.strip()]
+    _draw_summon.clip_keys = [p.strip().capitalize() for p in clip_key.split("+") if p.strip()]
     return [
-        dict(title="Select text, get instant actions",
-             body="Highlight anything in any app - a link, an error, a "
-                  "paragraph - and LinuxPop pops up a little bar of actions "
-                  "made for what you picked.",
-             draw=_draw_how),
-        dict(title="Summon it your way",
-             body=f"It appears automatically when you select text. Or press "
-                  f"<b>{_fmt(popup_key)}</b> anywhere, and "
-                  f"<b>{_fmt(clip_key)}</b> for clipboard history - which "
-                  f"also keeps your snippets, so a short trigger expands "
-                  f"into the whole text as you type.",
-             draw=_draw_summon),
-        dict(title="Add ready-made plugins",
-             body="Open the tray icon → <b>Plugins</b> → <b>Available</b> and "
-                  "one-click install extras: send-to-AI, transforms, QR codes, "
-                  "word count, search shortcuts and more.",
-             draw=_draw_plugins),
-        dict(title="Build your own - no code needed",
-             body="In <b>Plugins → Custom</b>, the recipe builder lets you "
-                  "snap together your own action: match some text, then run a "
-                  "command or open a URL. That's a real plugin.",
-             draw=_draw_recipe),
-        dict(title="You're all set",
-             body="Everything lives in the tray icon (top-right): Settings, "
-                  "Plugins, and your own buttons. Off you go!",
-             draw=_draw_done),
+        dict(
+            title="Select text, get instant actions",
+            body="Highlight anything in any app - a link, an error, a "
+            "paragraph - and LinuxPop pops up a little bar of actions "
+            "made for what you picked.",
+            draw=_draw_how,
+        ),
+        dict(
+            title="Summon it your way",
+            body=f"It appears automatically when you select text. Or press "
+            f"<b>{_fmt(popup_key)}</b> anywhere, and "
+            f"<b>{_fmt(clip_key)}</b> for clipboard history - which "
+            f"also keeps your snippets, so a short trigger expands "
+            f"into the whole text as you type.",
+            draw=_draw_summon,
+        ),
+        dict(
+            title="Add ready-made plugins",
+            body="Open the tray icon → <b>Plugins</b> → <b>Available</b> and "
+            "one-click install extras: transforms, QR codes, "
+            "word count, search shortcuts and more.",
+            draw=_draw_plugins,
+        ),
+        dict(
+            title="Build your own - no code needed",
+            body="In <b>Plugins → Custom</b>, the recipe builder lets you "
+            "snap together your own action: match some text, then run a "
+            "command or open a URL. That's a real plugin.",
+            draw=_draw_recipe,
+        ),
+        dict(
+            title="You're all set",
+            body="Everything lives in the tray icon (top-right): Settings, "
+            "Plugins, and your own buttons. Off you go!",
+            draw=_draw_done,
+        ),
     ]
 
 
-class OnboardingWindow(Gtk.Window):
+# Window-local CSS: the scene stage keeps the brand look (it's a Cairo
+# drawing), and the page titles take the brand blue as a soft accent.
+_CSS = """
+.lp-onboarding-title {
+    color: #5B7DF5;
+}
+"""
+_css_installed = False
+
+
+def _install_css() -> None:
+    global _css_installed
+    if _css_installed:
+        return
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    provider = Gtk.CssProvider()
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(_CSS)
+    else:
+        provider.load_from_data(_CSS, -1)
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    _css_installed = True
+
+
+class OnboardingWindow(Adw.Window):
     def __init__(self, settings, on_open_plugins=None):
         super().__init__(title="Welcome to LinuxPop")
         self._settings = settings
@@ -799,10 +897,10 @@ class OnboardingWindow(Gtk.Window):
         self._pages = _build_pages(settings)
         self._index = 0
         self._t0 = GLib.get_monotonic_time()
+        _install_css()
 
         self.set_default_size(700, 600)
         self.set_resizable(False)
-        self.set_position(Gtk.WindowPosition.CENTER)
         try:
             self.set_icon_name("linuxpop")
         except Exception:
@@ -810,49 +908,47 @@ class OnboardingWindow(Gtk.Window):
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
+        # The animated scene: one Cairo stage, redrawn every frame, whose
+        # contents follow the current page.
         self._area = Gtk.DrawingArea()
-        self._area.set_size_request(-1, 280)
-        self._area.connect("draw", self._on_draw)
-        self._area.set_margin_top(16)
+        self._area.set_content_height(280)
+        self._area.set_draw_func(self._on_draw)
         self._area.set_margin_start(22)
         self._area.set_margin_end(22)
-        root.pack_start(self._area, False, False, 0)
+        root.append(self._area)
 
-        self._stack = Gtk.Stack()
-        self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self._stack.set_transition_duration(300)
-        self._stack.set_homogeneous(True)
-        for i, pg in enumerate(self._pages):
+        # Page texts live in an Adw.Carousel so they slide (and can be
+        # swiped / scrolled) between steps; the scene follows the carousel.
+        self._carousel = Adw.Carousel()
+        self._carousel.set_vexpand(True)
+        self._carousel.set_spacing(24)
+        self._carousel.set_allow_scroll_wheel(False)
+        for pg in self._pages:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            box.set_hexpand(True)
             box.set_margin_top(12)
             box.set_margin_start(44)
             box.set_margin_end(44)
-            title = Gtk.Label(xalign=0.5)
-            title.set_markup(
-                f"<span size='xx-large' weight='bold'>{pg['title']}</span>")
+            title = Gtk.Label(label=pg["title"], xalign=0.5)
+            title.add_css_class("title-1")
+            title.add_css_class("lp-onboarding-title")
             title.set_justify(Gtk.Justification.CENTER)
-            title.set_line_wrap(True)
-            box.pack_start(title, False, False, 0)
+            title.set_wrap(True)
+            box.append(title)
             body = Gtk.Label(xalign=0.5)
             body.set_markup(f"<span size='large'>{pg['body']}</span>")
             body.set_justify(Gtk.Justification.CENTER)
-            body.set_line_wrap(True)
+            body.set_wrap(True)
             body.set_max_width_chars(54)
-            box.pack_start(body, False, False, 0)
-            self._stack.add_named(box, f"p{i}")
-        root.pack_start(self._stack, True, True, 0)
+            box.append(body)
+            self._carousel.append(box)
+        self._carousel.connect("page-changed", self._on_page_changed)
+        root.append(self._carousel)
 
-        self._dots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._dots = Adw.CarouselIndicatorDots(carousel=self._carousel)
         self._dots.set_halign(Gtk.Align.CENTER)
-        self._dot_widgets = []
-        for _ in self._pages:
-            d = Gtk.DrawingArea()
-            d.set_size_request(9, 9)
-            d.connect("draw", self._draw_dot)
-            self._dot_widgets.append(d)
-            self._dots.pack_start(d, False, False, 0)
         self._dots.set_margin_top(6)
-        root.pack_start(self._dots, False, False, 0)
+        root.append(self._dots)
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         controls.set_margin_top(14)
@@ -860,52 +956,55 @@ class OnboardingWindow(Gtk.Window):
         controls.set_margin_start(22)
         controls.set_margin_end(22)
         self._dont = Gtk.CheckButton(label="Don't show this again")
-        controls.pack_start(self._dont, False, False, 0)
+        controls.append(self._dont)
         self._skip = Gtk.Button(label="Skip")
-        self._skip.get_style_context().add_class("flat")
+        self._skip.add_css_class("flat")
         self._skip.connect("clicked", lambda _b: self._finish(open_plugins=False))
-        controls.pack_start(self._skip, False, False, 0)
-        controls.pack_start(Gtk.Label(), True, True, 0)
+        controls.append(self._skip)
+        controls.append(Gtk.Box(hexpand=True))
         self._back = Gtk.Button(label="Back")
-        self._back.get_style_context().add_class("flat")
+        self._back.add_css_class("flat")
+        self._back.add_css_class("pill")
         self._back.connect("clicked", lambda _b: self._go(-1))
-        controls.pack_start(self._back, False, False, 0)
+        controls.append(self._back)
         self._next = Gtk.Button(label="Next")
-        self._next.get_style_context().add_class("suggested-action")
+        self._next.add_css_class("suggested-action")
+        self._next.add_css_class("pill")
         self._next.connect("clicked", lambda _b: self._go(1))
-        controls.pack_start(self._next, False, False, 0)
-        root.pack_start(controls, False, False, 0)
+        controls.append(self._next)
 
-        self.add(root)
+        # Flat, title-less header (just the close button) over the scene.
+        header = Adw.HeaderBar()
+        header.add_css_class("flat")
+        header.set_show_title(False)
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(root)
+        toolbar.add_bottom_bar(controls)
+        self.set_content(toolbar)
+
+        # Window-wide arrows / Enter / Space / Esc, caught in the capture
+        # phase so they work whichever widget has focus.
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
+
         self.connect("destroy", self._on_destroy)
-        self.connect("key-press-event", self._on_key)
-        self._timer = GLib.timeout_add(33, self._tick)
+        # Frame-clock driven animation (replaces the old 33 ms timeout)
+        self._timer = self._area.add_tick_callback(self._tick)
         self._update_controls()
-        self.show_all()
 
-    def _on_draw(self, area, cr):
-        w = area.get_allocated_width()
-        h = area.get_allocated_height()
+    def _on_draw(self, _area, cr, w, h):
         t = (GLib.get_monotonic_time() - self._t0) / 1_000_000.0
         try:
             self._pages[self._index]["draw"](cr, w, h, t)
         except Exception:
             pass
-        return False
 
-    def _tick(self):
+    def _tick(self, _widget, _clock):
         self._area.queue_draw()
-        return True
-
-    def _draw_dot(self, area, cr):
-        i = self._dot_widgets.index(area)
-        cr.arc(4.5, 4.5, 4.0, 0, 2 * math.pi)
-        if i == self._index:
-            cr.set_source_rgba(*BLUE, 1)
-        else:
-            cr.set_source_rgba(*MUTE, 0.5)
-        cr.fill()
-        return False
+        return GLib.SOURCE_CONTINUE
 
     def _go(self, delta):
         ni = self._index + delta
@@ -914,12 +1013,17 @@ class OnboardingWindow(Gtk.Window):
             return
         if ni < 0:
             return
-        self._stack.set_transition_type(
-            Gtk.StackTransitionType.SLIDE_LEFT if delta > 0
-            else Gtk.StackTransitionType.SLIDE_RIGHT)
+        self._set_index(ni)
+        self._carousel.scroll_to(self._carousel.get_nth_page(ni), True)
+
+    def _on_page_changed(self, _carousel, index):
+        # Also fires after a swipe, which bypasses _go().
+        if index != self._index:
+            self._set_index(index)
+
+    def _set_index(self, ni):
         self._index = ni
         self._t0 = GLib.get_monotonic_time()
-        self._stack.set_visible_child_name(f"p{ni}")
         self._update_controls()
 
     def _update_controls(self):
@@ -927,18 +1031,15 @@ class OnboardingWindow(Gtk.Window):
         self._back.set_sensitive(self._index > 0)
         self._next.set_label("Get started" if last else "Next")
         self._skip.set_visible(not last)
-        for d in self._dot_widgets:
-            d.queue_draw()
 
-    def _on_key(self, _w, ev):
-        from gi.repository import Gdk
-        if ev.keyval in (Gdk.KEY_Right, Gdk.KEY_Return, Gdk.KEY_space):
+    def _on_key(self, _ctrl, keyval, _code, _state):
+        if keyval in (Gdk.KEY_Right, Gdk.KEY_Return, Gdk.KEY_space):
             self._go(1)
             return True
-        if ev.keyval == Gdk.KEY_Left:
+        if keyval == Gdk.KEY_Left:
             self._go(-1)
             return True
-        if ev.keyval == Gdk.KEY_Escape:
+        if keyval == Gdk.KEY_Escape:
             self._finish(open_plugins=False)
             return True
         return False
@@ -951,7 +1052,7 @@ class OnboardingWindow(Gtk.Window):
             except Exception:
                 pass
         cb = self._on_open_plugins if (open_plugins and self._on_open_plugins) else None
-        self.destroy()
+        self.close()
         if cb:
             try:
                 cb()
@@ -961,7 +1062,7 @@ class OnboardingWindow(Gtk.Window):
     def _on_destroy(self, _w):
         if getattr(self, "_timer", None):
             try:
-                GLib.source_remove(self._timer)
+                self._area.remove_tick_callback(self._timer)
             except Exception:
                 pass
             self._timer = None
@@ -986,11 +1087,17 @@ def show_onboarding(settings, on_open_plugins=None, parent=None) -> bool:
 if __name__ == "__main__":  # standalone preview / replay
     import os
     import sys
+
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gtk4_app
+
+    gtk4_app.init()
     try:
         from settings import get_settings
+
         _s = get_settings()
     except Exception:
+
         class _Dummy(dict):
             def get(self, k, d=None):
                 return dict.get(self, k, d)
@@ -1000,13 +1107,14 @@ if __name__ == "__main__":  # standalone preview / replay
 
             def save(self):
                 pass
-        _s = _Dummy(show_welcome_dialog=True, hotkey="super+shift+y",
-                    clipboard_hotkey="ctrl+super+v")
+
+        _s = _Dummy(
+            show_welcome_dialog=True, hotkey="super+shift+y", clipboard_hotkey="ctrl+super+v"
+        )
     try:
         from theme import install_premium_theme
+
         install_premium_theme(_s.get("theme", "dark") or "dark")
     except Exception:
         pass
-    _w = OnboardingWindow(_s)
-    _w.connect("destroy", Gtk.main_quit)
-    Gtk.main()
+    gtk4_app.run_window(OnboardingWindow(_s))

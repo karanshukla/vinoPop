@@ -1,4 +1,5 @@
 """Speak the selection aloud via spd-say (speech-dispatcher) or espeak."""
+
 from __future__ import annotations
 
 import shutil
@@ -23,18 +24,28 @@ def _speak(text: str) -> None:
         subprocess.Popen(["espeak-ng", "--", text], start_new_session=True)
         return
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "dialog-error", "Speak",
-         "No text-to-speech engine is available."],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "3000",
+            "-i",
+            "dialog-error",
+            "Speak",
+            "No text-to-speech engine is available.",
+        ],
         check=False,
     )
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="speak-aloud",
-        icon="audio-speakers-symbolic",
-        tooltip="Speak aloud",
-        handler=_speak,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=210,
-    ))
+    register_plugin(
+        Plugin(
+            name="speak-aloud",
+            icon="audio-speakers-symbolic",
+            tooltip="Speak aloud",
+            handler=_speak,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=210,
+        )
+    )

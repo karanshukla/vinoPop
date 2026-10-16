@@ -7,6 +7,7 @@ MATE, Budgie, etc.).
 Used from the Settings dialog (Settings -> Activation -> Start at login)
 so the user doesn't have to know where the file lives or edit it by hand.
 """
+
 from __future__ import annotations
 
 import os
@@ -54,6 +55,7 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
             # (e.g. ~/My Code/linuxpop/) don't produce a broken Exec line
             # that the DE silently fails to launch.
             from shlex import quote as _q
+
             exec_line = f"/usr/bin/python3 {_q(str(main_py))}"
             AUTOSTART_FILE.write_text(
                 _desktop_file_contents(exec_line),

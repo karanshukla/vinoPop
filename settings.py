@@ -4,6 +4,7 @@ Lives at ~/.config/linuxpop/settings.json. Missing file or missing keys
 fall back to defaults. Unknown keys in the file are preserved on save so
 the user can hand-edit and add comments-as-keys.
 """
+
 from __future__ import annotations
 
 import json
@@ -115,43 +116,6 @@ DEFAULTS: dict[str, Any] = {
     # isn't available. Most modern X servers do support XFixes so
     # this rarely fires.
     "clipboard_poll_interval": 0.5,
-    # How the Send-to-AI buttons deliver the selection to the chat AI.
-    # "userscript" : DEFAULT. Open the chat website in your browser; a
-    #                Tampermonkey / Violentmonkey userscript talking to
-    #                a local HTTP bridge (127.0.0.1:ai_userscript_bridge_
-    #                port) fills the editor via document.execCommand(
-    #                "insertText"). Reliable on Claude / Gemini / ChatGPT
-    #                where paste-via-xdotool fights React contentEditable.
-    #                Auto-falls-back to plain "browser" mode per-service
-    #                when the userscript isn't installed yet, so the
-    #                buttons still do something useful on first launch.
-    # "browser"    : open the chat website with the prompt prefilled in
-    #                the URL where supported (ChatGPT / Perplexity /
-    #                Google AI Search), or paste-via-xdotool otherwise
-    #                (Claude / Gemini - fragile against Electron / React).
-    #                No setup needed but unreliable on the paste path.
-    # "api"        : send via REST with your own API key. Most reliable
-    #                but pay-as-you-go pricing. Requires the key set
-    #                below; falls back to browser mode without it.
-    # CLI mode was dropped 2026-05-29: it routed to vendor coding agents
-    # (Claude Code, Codex, Antigravity) rather than the chat assistants
-    # users expected from "Ask Claude". Anthropic banned OAuth-token
-    # reuse for subscription chat in Jan 2026, closing the only viable
-    # workaround.
-    "ai_send_method": "userscript",
-    # Per-service API keys for "api" send method. Stored as plain
-    # text in settings.json - the user is told this in the GUI; the
-    # alternative would be a system-keyring dependency we don't want
-    # to introduce just for this.
-    "ai_anthropic_api_key": "",
-    "ai_openai_api_key": "",
-    # Local HTTP bridge port for the userscript mode. The daemon binds
-    # 127.0.0.1:<port> only; the userscript fetches the queued prompt
-    # by UUID and inserts it into the editor. Default 8766 because the
-    # historic 8765 collides with a uvicorn install on Robert's box and
-    # likely with other dev tooling for users too. If the port is taken,
-    # the bridge tries the next 10 ports and saves whichever it bound.
-    "ai_userscript_bridge_port": 8766,
     # Shared snippet variables. Reusable values that snippets can pull
     # in via {var:NAME}. Define once (your email, signature, phone,
     # company name) and reference everywhere - change it here, every
@@ -173,6 +137,12 @@ DEFAULTS: dict[str, Any] = {
     # Target language for the Translate plugin (ISO code, e.g. "en", "no",
     # "de"). Changeable from the dropdown in the translation bubble itself.
     "translate_target_lang": "en",
+    # OpenVINO device for the offline AI actions: "auto" (LLM on the NPU,
+    # OCR on the iGPU, CPU as the fallback), or force "NPU", "GPU" or "CPU".
+    "ai_device": "auto",
+    # Local LLM for summarize / rewrite / explain / translate. Keys are in
+    # vino_ai/models.py: "phi-3.5-mini" (default) or "qwen2.5-1.5b".
+    "ai_llm_model": "phi-3.5-mini",
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.
@@ -254,19 +224,6 @@ DEFAULTS: dict[str, Any] = {
     # register time. Lets users keep "Paste" but hide "Paste & Enter"
     # without removing the editing_actions bundle, etc.
     "disabled_plugins": [],
-    # Which chat-AI services the send_to_ai plugin should expose as buttons.
-    # Recognised: "google_ai", "claude", "chatgpt", "gemini", "perplexity".
-    # Default is Google AI Search alone - it works without login or any
-    # subscription, opens in any browser, and auto-submits via URL. Add
-    # the others in Settings if you have accounts and want one-click
-    # routing to them.
-    "ai_services": ["google_ai"],
-    # Per-service strategy override. "url" prefills via ?q= (fast, but most
-    # services auto-submit). "paste" opens the page and pastes via xdotool
-    # (slower, lets you review before sending). Unset = use the service's
-    # default (see plugins_repo/send_to_ai.py _SERVICES table).
-    #   "ai_chatgpt_mode": "paste",
-    #   "ai_perplexity_mode": "paste",
     # If True, "Run in terminal" pops a confirmation dialog showing the exact
     # command before launching. Recommended - protects against highlighting
     # a malicious-looking string and clicking the wrong button.
@@ -285,7 +242,7 @@ DEFAULTS: dict[str, Any] = {
     # (each is independent - show only the ones you've actually set up).
     # Conventional defaults are pre-filled assuming the GitHub org name
     # matches the upstream repo; update or blank out as needed.
-    "support_paypal_url":   "https://paypal.me/gaimsdev",
+    "support_paypal_url": "https://paypal.me/gaimsdev",
     # 'Skip short auto-popup selections' filter. Off by default to
     # match PopClip out of the box (no minimum-size knob there). When
     # on, the watcher silently drops selections shorter than

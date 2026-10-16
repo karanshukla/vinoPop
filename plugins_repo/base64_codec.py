@@ -1,4 +1,5 @@
 """Base64 encode/decode: writes result to clipboard and shows a notification."""
+
 from __future__ import annotations
 
 import base64
@@ -31,7 +32,16 @@ def _looks_like_base64(text: str) -> bool:
 def _notify(title: str, body: str) -> None:
     try:
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "accessories-character-map", title, body[:300]],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "3000",
+                "-i",
+                "accessories-character-map",
+                title,
+                body[:300],
+            ],
             check=False,
         )
     except FileNotFoundError:
@@ -44,6 +54,7 @@ def _to_clipboard(text: str) -> None:
     transformation plugins should swap text in-place - clipboard fallback
     still works when the focus is read-only."""
     import actions
+
     actions.replace_selection(text)
 
 
@@ -73,27 +84,31 @@ def _worth_encoding(text: str) -> bool:
     if len(s) < 16:
         return False
     if "\n" in s:
-        return True   # multi-line selections often ARE data dumps
+        return True  # multi-line selections often ARE data dumps
     # Natural prose has lots of internal whitespace; data tends not to
     return s.count(" ") <= max(1, len(s) // 12)
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="base64-encode",
-        icon="linuxpop-base64-encode-symbolic",
-        tooltip="Base64 encode",
-        handler=_encode,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=60,
-        predicate=_worth_encoding,
-    ))
-    register_plugin(Plugin(
-        name="base64-decode",
-        icon="linuxpop-base64-decode-symbolic",
-        tooltip="Base64 decode",
-        handler=_decode,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=61,
-        predicate=_looks_like_base64,
-    ))
+    register_plugin(
+        Plugin(
+            name="base64-encode",
+            icon="linuxpop-base64-encode-symbolic",
+            tooltip="Base64 encode",
+            handler=_encode,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=60,
+            predicate=_worth_encoding,
+        )
+    )
+    register_plugin(
+        Plugin(
+            name="base64-decode",
+            icon="linuxpop-base64-decode-symbolic",
+            tooltip="Base64 decode",
+            handler=_decode,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=61,
+            predicate=_looks_like_base64,
+        )
+    )

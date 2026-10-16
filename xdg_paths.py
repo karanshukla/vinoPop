@@ -13,6 +13,7 @@ the sandbox wipes on exit, so settings, recipes, snippets and clipboard
 history all vanish on the next launch. Reading the variables is what
 makes the user's setup actually stick.
 """
+
 from __future__ import annotations
 
 import os

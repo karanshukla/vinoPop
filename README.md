@@ -4,7 +4,7 @@
 
 ![LinuxPop in action: select text, a popup of context actions appears, here translating the selection](docs/linuxpop-demo.gif)
 
-Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate it, run it as a command, send it to an AI, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
+Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
 
 It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and natively on KDE Plasma 6 / Wayland. Free, open source, and nothing phones home.
 
@@ -18,9 +18,9 @@ It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and nat
 - **Global hotkey** to pop the bar on your current selection from any app.
 - **Tray icon** for settings, the plugin manager, and a quick on/off toggle.
 - **Plugins are just `.py` files.** Drop one in `~/.config/linuxpop/plugins/`, or grab one from the built-in list.
-- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, in-place translate, send-to-AI, local Ollama, and run-in-terminal for things that look like commands.
+- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, a calculator, case conversion, slugify, QR codes, offline translate / summarize / rewrite / explain, and run-in-terminal for things that look like commands.
 - **Double-click a word** (while holding a modifier) to pop the bar. Works on real Wayland, not just XWayland.
-- **Your text stays on your machine** unless a plugin obviously sends it somewhere. The "Send to Claude" button, for example, hands off to Claude via its `claude://` link (or your browser if that isn't set up).
+- **Your text stays on your machine** unless you click something that obviously goes online, like web search or opening a link.
 
 ---
 
@@ -67,19 +67,55 @@ sudo dnf install linuxpop
 
 ```sh
 # Ubuntu / Linux Mint / Debian
-sudo apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
-    gir1.2-ayatanaappindicator3-0.1 xclip xdotool xdg-utils python3-xlib
+sudo apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
+    gir1.2-adw-1 xclip xdotool xdg-utils python3-xlib
 
 # Fedora
-sudo dnf install -y python3 python3-gobject gtk3 \
-    libayatana-appindicator-gtk3 xclip xdotool xdg-utils python3-xlib
+sudo dnf install -y python3 python3-gobject gtk4 libadwaita \
+    xclip xdotool xdg-utils python3-xlib
 
 # Arch
-sudo pacman -S python python-gobject gtk3 libayatana-appindicator \
+sudo pacman -S python python-gobject gtk4 libadwaita \
     xclip xdotool xdg-utils python-xlib
 ```
 
-Optional: `qrencode` for the QR plugin, `ollama` for the local-AI plugin.
+vinoPop uses GTK 4 (4.14 or newer) and libadwaita (1.5 or newer), so Ubuntu
+24.04, Fedora 40, Debian 13 or anything newer.
+
+Optional: `qrencode` for the QR plugin, and gtk4-layer-shell for native popup
+placement on KDE Plasma / wlroots Wayland (`gir1.2-gtk4layershell-1.0` on
+Debian 13 / Ubuntu 24.10+, `gtk4-layer-shell` on Fedora and Arch).
+
+On GNOME, vinoPop runs on XWayland automatically: mutter has no layer-shell,
+so a Wayland-native popup couldn't be placed at the selection. On KDE and
+wlroots compositors it uses gtk4-layer-shell when it is installed, and falls
+back to XWayland otherwise.
+
+#### Offline AI (OCR, summarize, rewrite, explain, translate)
+
+These run on your own machine through OpenVINO: the LLM on an Intel NPU when
+there is one, OCR on the iGPU, and the CPU otherwise. Install the Python side
+for the same Python that runs vinoPop:
+
+```sh
+pip install --user -r requirements-ai.txt
+```
+
+(On Debian/Ubuntu, whose system Python refuses `pip --user`, add
+`--break-system-packages` or run vinoPop from a venv created with
+`--system-site-packages` so it still sees PyGObject.)
+
+The first AI action downloads the model once (Phi-3.5 mini, about 2.2 GB, or
+set `"ai_llm_model": "qwen2.5-1.5b"` for a 1 GB one). After that nothing goes
+online. `"ai_device"` forces `"NPU"`, `"GPU"` or `"CPU"`.
+
+`python3 main.py --doctor` (add `--json` for a bug report) checks the AI
+packages, which devices OpenVINO sees and the order each model will try them
+in, and whether the model is downloaded. With
+[ovfetch](https://github.com/karanshukla/ovfetch) installed it also reports
+whether the pinned OpenVINO is inside the range Intel records for your NPU
+driver. Like vinoWhisper's doctor this is diagnosis only: the NPU is still
+tried, and falls back to GPU/CPU if it won't compile.
 
 #### 2. Install LinuxPop
 
@@ -142,18 +178,22 @@ A plugin file just needs a top-level `register(register_plugin)` function:
 from classifier import ContentType
 from plugin_base import Plugin
 
+
 def _handler(text: str) -> None:
     print("got:", text)
 
+
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="my-plugin",
-        icon="emblem-favorite",
-        tooltip="Do something",
-        handler=_handler,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=50,
-    ))
+    register_plugin(
+        Plugin(
+            name="my-plugin",
+            icon="emblem-favorite",
+            tooltip="Do something",
+            handler=_handler,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=50,
+        )
+    )
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
@@ -163,7 +203,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
 ## Known rough edges
 
 - **Mint / Cinnamon and X11 are beta in 0.9.0.** The recent work went into KDE Plasma 6 / Wayland. The X11 backend (Cinnamon, GNOME-on-X11, XFCE, MATE) still runs, but it didn't get a full pass on real hardware this cycle. Expect the odd glitch, and please file issues. It's the quickest path to a solid 1.0.
-- **Wayland support means KDE Plasma for now.** LinuxPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk-layer-shell`, cursor position through KWin's scripting API. Other compositors (GNOME, wlroots) drop back to the X11 path under XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), paste goes through `ydotool`, and the active-window blocklist isn't wired up yet. Popup placement, hover persistence, and click-outside dismissal all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
+- **Wayland support means KDE Plasma for now.** LinuxPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API. Other compositors (GNOME, wlroots) drop back to the X11 path under XWayland; GNOME's mutter has no layer-shell, so there it always runs on XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), paste goes through `ydotool`, and the active-window blocklist isn't wired up yet. Popup placement, hover persistence, and click-outside dismissal all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
 - **HiDPI** works, but I've mostly tested it at 2× scaling. File an issue if the popup lands in the wrong spot on your setup.
 - **The odd input grab.** If another app is holding an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.
 

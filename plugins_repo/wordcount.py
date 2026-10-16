@@ -1,4 +1,5 @@
 """Show word, character and line counts of the selected text via notification."""
+
 from __future__ import annotations
 
 import subprocess
@@ -12,13 +13,19 @@ def _count(text: str) -> None:
     chars = len(text)
     chars_no_ws = len(text.replace(" ", "").replace("\n", "").replace("\t", ""))
     lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
-    body = (
-        f"{words} words, {chars} chars "
-        f"({chars_no_ws} without whitespace), {lines} lines"
-    )
+    body = f"{words} words, {chars} chars ({chars_no_ws} without whitespace), {lines} lines"
     try:
         subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "accessories-text-editor", "LinuxPop wordcount", body],
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                "3000",
+                "-i",
+                "accessories-text-editor",
+                "LinuxPop wordcount",
+                body,
+            ],
             check=False,
         )
     except FileNotFoundError:
@@ -26,11 +33,13 @@ def _count(text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    register_plugin(Plugin(
-        name="wordcount",
-        icon="linuxpop-wordcount-symbolic",
-        tooltip="Word & char count",
-        handler=_count,
-        content_types=(ContentType.PLAIN_TEXT,),
-        priority=50,
-    ))
+    register_plugin(
+        Plugin(
+            name="wordcount",
+            icon="linuxpop-wordcount-symbolic",
+            tooltip="Word & char count",
+            handler=_count,
+            content_types=(ContentType.PLAIN_TEXT,),
+            priority=50,
+        )
+    )

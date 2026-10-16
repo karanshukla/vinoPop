@@ -1,0 +1,98 @@
+[project]
+name = "vinopop"
+dynamic = ["version"]
+description = "A PopClip-style action popup for Linux, with offline AI on OpenVINO"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Karan Shukla" }]
+requires-python = ">=3.11"
+# The app itself runs on the distro's PyGObject/GTK (system packages, see
+# README), so only pure-pip runtime deps are listed here.
+dependencies = [
+    "python-xlib>=0.33",
+]
+
+[project.optional-dependencies]
+# Offline AI, pinned like requirements-ai.txt (keep the two in step)
+ai = [
+    "openvino==2026.4.1",
+    "openvino-genai==2026.4.1.0",
+    "openvino-tokenizers==2026.4.1.0",
+    "rapidocr>=3.10",
+    "huggingface_hub>=0.30",
+]
+
+# ── uv ────────────────────────────────────────────────────────────────────────
+
+[dependency-groups]
+# Installable alone, so CI never downloads OpenVINO or needs GTK
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "poethepoet>=0.27",
+]
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+
+[tool.poe.tasks]
+lint  = "ruff check ."
+fmt   = "ruff format --check ."
+types = "mypy"
+test  = "pytest -v --tb=short"
+fix.sequence = [{ cmd = "ruff check --fix ." }, { cmd = "ruff format ." }]
+security.cmd = "uvx --from bandit[toml]==1.9.4 bandit -c pyproject.toml -r ."
+security.help = "the same Bandit scan the Bandit workflow runs"
+check.sequence = ["lint", "fmt", "types", "test"]
+check.help = "everything CI runs, locally"
+doctor = "python main.py --doctor"
+
+# ── Ruff ──────────────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["docs/design", "packaging/flatpak/shared-modules"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # line length is the formatter's job
+    "E402",   # gi.require_version() has to run before `from gi.repository import ...`
+    "SIM105", # try/except/pass is the house style around best-effort desktop calls
+    "SIM102", # nested ifs often carry a comment per condition
+    "SIM108", # ternary-instead-of-if is often less readable
+]
+
+# ── Mypy ──────────────────────────────────────────────────────────────────────
+
+[tool.mypy]
+# New code is typed from the start; the GTK3 modules get added as they're ported
+files = ["vino_ai", "classifier.py", "xdg_paths.py"]
+ignore_missing_imports = true
+warn_unused_ignores = false
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+pythonpath = ["."]
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+[tool.coverage.report]
+show_missing = true
+
+# ── Bandit ────────────────────────────────────────────────────────────────────
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", ".git", "build", "dist", "docs", "packaging"]
+skips = [
+    "B404",  # import subprocess: launching desktop tools is the app's job
+    "B603",  # subprocess without shell
+    "B607",  # partial executable path: tools are resolved from PATH on purpose
+]

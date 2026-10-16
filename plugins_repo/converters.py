@@ -1,4 +1,5 @@
 """Two practical converters: Unix timestamp ↔ ISO date, and color formats."""
+
 from __future__ import annotations
 
 import datetime as dt
@@ -14,9 +15,19 @@ def _copy(text: str, label: str) -> None:
     # it on the clipboard. Fallback (read-only context): the
     # clipboard still has it so the user can paste manually.
     import actions
+
     actions.replace_selection(text)
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "2500",  "-i", "preferences-system-time-symbolic", label, text[:200]],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "2500",
+            "-i",
+            "preferences-system-time-symbolic",
+            label,
+            text[:200],
+        ],
         check=False,
     )
 
@@ -40,8 +51,14 @@ def _timestamp_convert(text: str) -> None:
     except (ValueError, OSError, OverflowError):
         pass
     # Try as ISO date / RFC-ish
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
-                "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%d.%m.%Y",
+        "%d/%m/%Y",
+    ):
         try:
             when = dt.datetime.strptime(s, fmt)
             if when.tzinfo is None:
@@ -51,8 +68,16 @@ def _timestamp_convert(text: str) -> None:
         except ValueError:
             continue
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "dialog-error", "Timestamp converter",
-         f"Couldn't parse {s!r} as a timestamp or epoch"],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "3000",
+            "-i",
+            "dialog-error",
+            "Timestamp converter",
+            f"Couldn't parse {s!r} as a timestamp or epoch",
+        ],
         check=False,
     )
 
@@ -109,20 +134,44 @@ def _color_convert(text: str) -> None:
     m = _RGB_RE.match(s)
     if m:
         r, g, b = (max(0, min(255, int(v))) for v in m.groups())
-        _copy(f"#{r:02x}{g:02x}{b:02x}", f"rgb → hex")
+        _copy(f"#{r:02x}{g:02x}{b:02x}", "rgb → hex")
         return
     subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", "3000",  "-i", "dialog-error", "Color converter",
-         "Couldn't recognise as #hex or rgb(r,g,b)"],
+        [
+            "notify-send",
+            "--hint=byte:transient:1",
+            "-t",
+            "3000",
+            "-i",
+            "dialog-error",
+            "Color converter",
+            "Couldn't recognise as #hex or rgb(r,g,b)",
+        ],
         check=False,
     )
 
 
 def register(register_plugin) -> None:
     types = (ContentType.PLAIN_TEXT,)
-    register_plugin(Plugin(name="timestamp-convert", icon="preferences-system-time-symbolic",
-        tooltip="Timestamp ↔ ISO", handler=_timestamp_convert, content_types=types, priority=170,
-        predicate=_looks_like_timestamp))
-    register_plugin(Plugin(name="color-convert", icon="preferences-color-symbolic",
-        tooltip="Color hex ↔ rgb", handler=_color_convert, content_types=types, priority=171,
-        predicate=_looks_like_color))
+    register_plugin(
+        Plugin(
+            name="timestamp-convert",
+            icon="preferences-system-time-symbolic",
+            tooltip="Timestamp ↔ ISO",
+            handler=_timestamp_convert,
+            content_types=types,
+            priority=170,
+            predicate=_looks_like_timestamp,
+        )
+    )
+    register_plugin(
+        Plugin(
+            name="color-convert",
+            icon="preferences-color-symbolic",
+            tooltip="Color hex ↔ rgb",
+            handler=_color_convert,
+            content_types=types,
+            priority=171,
+            predicate=_looks_like_color,
+        )
+    )
