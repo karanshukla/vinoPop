@@ -55,6 +55,8 @@ text → popup shows your new button.
 | `handler` | `Callable[[str], None]` | Called with the selected text when clicked |
 | `content_types` | `Iterable[ContentType]` | `()` for all types, or specific values |
 | `priority` | `int` | Lower numbers appear first in the popup (default 100) |
+| `predicate` | `Callable[[str], bool] \| None` | Optional selection-text check; the button is hidden when it returns false |
+| `requires_editable` | `bool` | Hide the button when the focused widget is not editable (default false) |
 
 `ContentType` values: `COMMAND`, `URL`, `EMAIL`, `PATH`, `PLAIN_TEXT`. See
 `classifier.py` for the classification rules.
