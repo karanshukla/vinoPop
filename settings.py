@@ -237,12 +237,6 @@ DEFAULTS: dict[str, Any] = {
     # replaced with the URL-encoded selection. Example for searx:
     #   "https://searx.example.com/search?q={q}"
     "search_engine_custom_url": "",
-    # Support / donation URLs surfaced in the welcome dialog, the About
-    # dialog, and the tray menu. Leave empty to hide that button entirely
-    # (each is independent - show only the ones you've actually set up).
-    # Conventional defaults are pre-filled assuming the GitHub org name
-    # matches the upstream repo; update or blank out as needed.
-    "support_paypal_url": "https://paypal.me/gaimsdev",
     # 'Skip short auto-popup selections' filter. Off by default to
     # match PopClip out of the box (no minimum-size knob there). When
     # on, the watcher silently drops selections shorter than
@@ -257,7 +251,7 @@ DEFAULTS: dict[str, Any] = {
     # covers the main use case and AT-SPI was correlated with a
     # Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw
     # ATK_IS_STATE_SET assertions, cinnamon dereferenced a freed
-    # GObject and crashed the panel - see knowledge/vinopop.md).
+    # GObject and crashed the panel).
     # Stays here as a hidden settings.json knob for the rare user who
     # explicitly wants AT-SPI back on. Default off.
     "editable_atspi_listener_enabled": False,

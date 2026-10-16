@@ -378,9 +378,6 @@ class SettingsDialog:
         page.add(self._build_search_group())
         page.add(self._build_terminal_group())
         page.add(self._build_advanced_group())
-        # Donation entry-points live in the tray menu, the About dialog
-        # and the first-run welcome - see welcome.open_support_picker.
-        # Settings stays focused on configuration.
 
         win.add(page)
         self._decorate_badges(page)

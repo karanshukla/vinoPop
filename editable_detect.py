@@ -184,7 +184,7 @@ def _start_focus_listener() -> None:
 
     Gated on the 'editable_atspi_listener_enabled' setting, which
     defaults off. Registration was correlated with a Cinnamon panel
-    segfault on 2026-05-25 - see knowledge/vinopop.md. Falling back
+    segfault on 2026-05-25. Falling back
     to the synchronous tree-walk + WM_CLASS path is safe; users who
     want the Electron-specific smartness can opt in.
     """

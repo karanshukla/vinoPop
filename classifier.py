@@ -635,8 +635,7 @@ def classify(text: str) -> ContentType:
     # shell-prompt prefix doesn't hide the actual command underneath.
     if _looks_like_command(stripped):
         return ContentType.COMMAND
-    # Robert preferred "fires one time too many" over "misses real
-    # commands". Cap raised to 4000 chars (was 500) so multi-line
+    # Prefer "fires one time too many" over "misses real commands". Cap raised to 4000 chars (was 500) so multi-line
     # snippets and pasted scripts with shell metacharacters still
     # classify as COMMAND. Pure prose almost never hits these
     # patterns - the only false positives come from technical writing

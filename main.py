@@ -630,18 +630,9 @@ class App:
             on_open_settings=self.open_settings,
             on_open_plugins=self.open_plugins,
             on_open_about=self.open_about,
-            on_open_support=self.open_support,
             on_quit=self.quit,
         )
         GLib.timeout_add(200, self._poll_tray)
-
-    def open_support(self) -> None:
-        try:
-            from welcome import open_support_picker
-
-            open_support_picker(self.settings)
-        except Exception:
-            log.exception("support picker crashed")
 
     def open_settings(self) -> None:
         log.info("opening settings dialog…")
@@ -765,18 +756,6 @@ class App:
         project_url = os.environ.get("VINOPOP_PROJECT_URL")
         if project_url:
             about.set_website(project_url)
-        # A "Support" link so the donation flow is one click away from the
-        # canonical "About" surface. AboutDialog only takes links, so a
-        # private URI is intercepted in activate-link and opens our picker.
-        about.add_link("Support vinoPop…", "vinopop:support")
-
-        def _on_link(_dlg, uri):
-            if uri == "vinopop:support":
-                self.open_support()
-                return True
-            return False
-
-        about.connect("activate-link", _on_link)
         about.present(None)
 
     # ---- first-run experience ------------------------------------------------
@@ -787,9 +766,8 @@ class App:
         FIRST_RUN_MARKER.parent.mkdir(parents=True, exist_ok=True)
         FIRST_RUN_MARKER.touch()
 
-        # Welcome dialog (one-time): explains usage + offers an optional
-        # support link. Falls back to notify-send if GTK can't construct
-        # the dialog for some reason.
+        # Welcome dialog (one-time): explains usage. Falls back to
+        # notify-send if GTK can't construct the dialog for some reason.
         def _open_welcome():
             try:
                 from onboarding import show_onboarding

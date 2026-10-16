@@ -216,8 +216,6 @@ class TrayQt:
         a.triggered.connect(lambda: self._emit("plugins", None))
         a = self._menu.addAction("About vinoPop")
         a.triggered.connect(lambda: self._emit("about", None))
-        a = self._menu.addAction("Support vinoPop…")
-        a.triggered.connect(lambda: self._emit("support", None))
         self._menu.addSeparator()
         a = self._menu.addAction("Quit vinoPop")
         a.triggered.connect(lambda: self._emit("quit", None))

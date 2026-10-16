@@ -92,7 +92,6 @@ class Tray:
         on_open_plugins: Callable[[], None],
         on_open_about: Callable[[], None],
         on_quit: Callable[[], None],
-        on_open_support: Callable[[], None] | None = None,
     ) -> None:
         self._on_toggle_watcher = on_toggle_watcher
         self._get_watcher_active = get_watcher_active
@@ -101,7 +100,6 @@ class Tray:
         self._on_open_plugins = on_open_plugins
         self._on_open_about = on_open_about
         self._on_quit = on_quit
-        self._on_open_support = on_open_support
 
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
@@ -182,9 +180,6 @@ class Tray:
             self._on_open_plugins()
         elif event == "about":
             self._on_open_about()
-        elif event == "support":
-            if self._on_open_support:
-                self._on_open_support()
         elif event == "quit":
             self._on_quit()
         elif event == "pong":
