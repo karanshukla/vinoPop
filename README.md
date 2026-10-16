@@ -173,6 +173,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
 
 ---
 
+## Credits
+
+vinoPop is a fork of [LinuxPop](https://github.com/GaimsDevSoftware/linuxpop)
+by Robert Berge. Thanks for the original project!
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -756,6 +756,12 @@ class App:
         project_url = os.environ.get("VINOPOP_PROJECT_URL")
         if project_url:
             about.set_website(project_url)
+        about.set_developer_name("Karan Shukla")
+        # vinoPop is a fork of LinuxPop; credit the original project.
+        about.add_credit_section(
+            "Based on LinuxPop by",
+            ["Robert Berge https://github.com/GaimsDevSoftware/linuxpop"],
+        )
         about.present(None)
 
     # ---- first-run experience ------------------------------------------------
