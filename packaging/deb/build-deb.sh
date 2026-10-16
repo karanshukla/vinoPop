@@ -43,8 +43,8 @@ Section: utils
 Priority: optional
 Architecture: all
 Maintainer: GaimsDev <raakanin@gmail.com>
-Depends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, python3-xlib, xdotool, xclip, xdg-utils
-Recommends: wl-clipboard, ydotool, qrencode, espeak-ng
+Depends: python3, python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1, python3-xlib, xdotool, xclip, xdg-utils
+Recommends: gir1.2-gtk4layershell-1.0, wl-clipboard, ydotool, qrencode, espeak-ng
 Homepage: https://github.com/GaimsDevSoftware/linuxpop
 Description: PopClip-style popup of context-aware actions for selected text
  Floating popup of context-aware actions above selected text - search, open

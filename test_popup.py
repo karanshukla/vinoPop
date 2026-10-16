@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """Tester at popup-vinduet vises korrekt uten å trenge X11-watcher."""
 
-import gi
-
-gi.require_version("Gtk", "3.0")
 import sys
 
-from gi.repository import GLib, Gtk
+import gi
+
+gi.require_version("Gtk", "4.0")
+from gi.repository import GLib  # noqa: E402
 
 sys.path.insert(0, ".")
-import plugin_loader
-from classifier import ContentType
-from popup import PopupWindow
+import gtk4_app  # noqa: E402
+import plugin_loader  # noqa: E402
+import theme  # noqa: E402
+from classifier import ContentType  # noqa: E402
+from popup import PopupWindow  # noqa: E402
 
 
 def main():
+    gtk4_app.init()
+    theme.install_premium_theme("dark")
     plugin_loader.load_all()
     popup = PopupWindow()
 
@@ -29,7 +33,7 @@ def main():
     def show_next():
         if index[0] >= len(test_cases):
             print("Alle tester vist - avslutter")
-            Gtk.main_quit()
+            gtk4_app.quit()
             return False
         text, ctype, x, y = test_cases[index[0]]
         print(f"Viser: [{ctype.value}] {text[:50]}")
@@ -45,7 +49,7 @@ def main():
 
     popup.win.connect("hide", on_hide)
 
-    Gtk.main()
+    gtk4_app.run()
 
 
 if __name__ == "__main__":

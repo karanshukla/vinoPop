@@ -22,8 +22,8 @@ import tempfile
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
@@ -99,6 +99,20 @@ def _capture_fullscreen() -> str | None:
     return None
 
 
+def _layer_shell():
+    """The gtk4-layer-shell module if it is installed AND usable on this
+    display (it needs a wlr-layer-shell compositor), else None."""
+    try:
+        gi.require_version("Gtk4LayerShell", "1.0")
+        from gi.repository import Gtk4LayerShell as L
+    except (ValueError, ImportError):
+        return None
+    try:
+        return L if L.is_supported() else None
+    except Exception:
+        return None
+
+
 class _Selector(Gtk.Window):
     def __init__(self, shot_path: str, callback) -> None:
         super().__init__()
@@ -108,41 +122,36 @@ class _Selector(Gtk.Window):
         self._shot_path = shot_path
         self._start = None
         self._cur = None
+        self._scaled = None  # screenshot scaled to the window, cached per size
 
         self.set_decorated(False)
-        self.set_app_paintable(True)
-        self.set_keep_above(True)
 
         if not self._init_layer_shell():
-            # X11 / non-layer-shell fallback: a fullscreen always-on-top window.
+            # X11 / non-layer-shell fallback: a fullscreen window.
             self.fullscreen()
 
         area = Gtk.DrawingArea()
-        area.add_events(
-            Gdk.EventMask.BUTTON_PRESS_MASK
-            | Gdk.EventMask.BUTTON_RELEASE_MASK
-            | Gdk.EventMask.POINTER_MOTION_MASK
-            | Gdk.EventMask.KEY_PRESS_MASK
-        )
-        area.connect("draw", self._on_draw)
-        self.add(area)
+        area.set_hexpand(True)
+        area.set_vexpand(True)
+        area.set_draw_func(self._on_draw)
+        area.set_cursor_from_name("crosshair")
+        self.set_child(area)
         self._area = area
 
-        self.connect("button-press-event", self._on_press)
-        self.connect("button-release-event", self._on_release)
-        self.connect("motion-notify-event", self._on_motion)
-        self.connect("key-press-event", self._on_key)
-        try:
-            crosshair = Gdk.Cursor.new_from_name(self.get_display(), "crosshair")
-            self.connect("realize", lambda w: w.get_window().set_cursor(crosshair))
-        except Exception:
-            pass
+        drag = Gtk.GestureDrag()
+        drag.set_button(Gdk.BUTTON_PRIMARY)
+        drag.connect("drag-begin", self._on_drag_begin)
+        drag.connect("drag-update", self._on_drag_update)
+        drag.connect("drag-end", self._on_drag_end)
+        area.add_controller(drag)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
 
     def _init_layer_shell(self) -> bool:
-        try:
-            gi.require_version("GtkLayerShell", "0.1")
-            from gi.repository import GtkLayerShell as L
-        except Exception:
+        L = _layer_shell()
+        if L is None:
             return False
         try:
             L.init_for_window(self)
@@ -156,11 +165,13 @@ class _Selector(Gtk.Window):
             return False
 
     # ----- drawing -----
-    def _on_draw(self, _area, cr) -> bool:
-        w = self.get_allocated_width()
-        h = self.get_allocated_height()
+    def _on_draw(self, _area, cr, w: int, h: int) -> None:
         # Dimmed screenshot as the backdrop, scaled to the window.
-        scaled = self._pb.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
+        if self._scaled is None or self._scaled.get_width() != w or self._scaled.get_height() != h:
+            self._scaled = self._pb.scale_simple(
+                max(1, w), max(1, h), GdkPixbuf.InterpType.BILINEAR
+            )
+        scaled = self._scaled
         Gdk.cairo_set_source_pixbuf(cr, scaled, 0, 0)
         cr.paint()
         cr.set_source_rgba(0, 0, 0, 0.45)
@@ -182,31 +193,26 @@ class _Selector(Gtk.Window):
                 cr.set_line_width(2)
                 cr.rectangle(rx, ry, rw, rh)
                 cr.stroke()
-        return False
 
     # ----- input -----
-    def _on_press(self, _w, ev) -> bool:
-        if ev.button == 1:
-            self._start = (ev.x, ev.y)
-            self._cur = (ev.x, ev.y)
-        return True
+    def _on_drag_begin(self, _g, x: float, y: float) -> None:
+        self._start = (x, y)
+        self._cur = (x, y)
 
-    def _on_motion(self, _w, ev) -> bool:
+    def _on_drag_update(self, _g, dx: float, dy: float) -> None:
         if self._start:
-            self._cur = (ev.x, ev.y)
+            self._cur = (self._start[0] + dx, self._start[1] + dy)
             self._area.queue_draw()
-        return True
 
-    def _on_release(self, _w, ev) -> bool:
-        if ev.button != 1 or not self._start:
-            return True
+    def _on_drag_end(self, _g, dx: float, dy: float) -> None:
+        if not self._start:
+            return
         x0, y0 = self._start
-        x1, y1 = ev.x, ev.y
+        x1, y1 = x0 + dx, y0 + dy
         self._finish((min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
-        return True
 
-    def _on_key(self, _w, ev) -> bool:
-        if ev.keyval == Gdk.KEY_Escape:
+    def _on_key(self, _c, keyval: int, _code: int, _state) -> bool:
+        if keyval == Gdk.KEY_Escape:
             self._finish(None)
         return True
 
@@ -221,8 +227,8 @@ class _Selector(Gtk.Window):
                 if rw >= 4 and rh >= 4:
                     # Window coords are logical; the screenshot is at device
                     # resolution. Scale the rectangle up to pixbuf pixels.
-                    sx = self._pb.get_width() / max(1, self.get_allocated_width())
-                    sy = self._pb.get_height() / max(1, self.get_allocated_height())
+                    sx = self._pb.get_width() / max(1, self._area.get_width())
+                    sy = self._pb.get_height() / max(1, self._area.get_height())
                     px = max(0, int(rx * sx))
                     py = max(0, int(ry * sy))
                     pw = min(self._pb.get_width() - px, int(rw * sx))
@@ -253,7 +259,6 @@ def select_and_capture(callback) -> bool:
     if not shot:
         return False
     sel = _Selector(shot, callback)
-    sel.show_all()
     sel.present()
     return False  # idle_add: run once
 
@@ -263,11 +268,11 @@ def available() -> bool:
     In Flatpak the grabber is checked on the host (flatpak-spawn)."""
     if not _grabber():
         return False
-    try:
-        gi.require_version("GtkLayerShell", "0.1")
-        from gi.repository import GtkLayerShell  # noqa: F401
-
+    if _layer_shell() is not None:
         return True
-    except Exception:
-        # No layer-shell: only safe to overlay on X11.
-        return bool(os.environ.get("DISPLAY")) and not os.environ.get("WAYLAND_DISPLAY")
+    # No layer-shell: only safe to overlay on X11 (or XWayland, where GDK
+    # was forced onto the X11 backend).
+    if bool(os.environ.get("DISPLAY")) and not os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    display = Gdk.Display.get_default()
+    return display is not None and type(display).__name__ == "X11Display"

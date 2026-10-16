@@ -6,8 +6,8 @@ text in as it is generated, with Copy (and, for rewrite, Replace) chips.
 The bubble never takes keyboard focus, so the source app keeps its
 selection and Replace can paste straight over it.
 
-Placement uses gtk-layer-shell where the compositor has it (KDE, wlroots)
-and plain window moves under X11/XWayland.
+Placement goes through the platform backend: gtk4-layer-shell where the
+compositor has it (KDE, wlroots) and X11 window moves under X11/XWayland.
 """
 
 from __future__ import annotations
@@ -17,12 +17,13 @@ from collections.abc import Callable
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 log = logging.getLogger("linuxpop")
 
-_CSS = b"""
+_CSS = """
 window.linuxpop-ai {
     background-color: transparent;
 }
@@ -58,11 +59,14 @@ def _install_css() -> None:
     if _css_installed:
         return
     provider = Gtk.CssProvider()
-    provider.load_from_data(_CSS)
-    screen = Gdk.Screen.get_default()
-    if screen is not None:
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(_CSS)
+    else:
+        provider.load_from_data(_CSS.encode(), -1)
+    display = Gdk.Display.get_default()
+    if display is not None:
+        Gtk.StyleContext.add_provider_for_display(
+            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
     _css_installed = True
 
@@ -74,6 +78,32 @@ def pointer_position() -> tuple[int, int]:
         return get_backend().pointer_position()
     except Exception:
         return 0, 0
+
+
+def _backend():
+    try:
+        from platform_backend import get_backend
+
+        return get_backend()
+    except Exception:
+        log.exception("[ai_bubble] no platform backend for placement")
+        return None
+
+
+def _monitor_geometry(x: int, y: int) -> Gdk.Rectangle | None:
+    """Geometry of the monitor holding (x, y); GTK 4 has no
+    get_monitor_at_point, so walk the display's monitor list."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return None
+    monitors = display.get_monitors()
+    first = None
+    for i in range(monitors.get_n_items()):
+        geom = monitors.get_item(i).get_geometry()
+        first = first or geom
+        if geom.x <= x < geom.x + geom.width and geom.y <= y < geom.y + geom.height:
+            return geom
+    return first
 
 
 class ResultBubble:
@@ -101,101 +131,77 @@ class ResultBubble:
         self._dead = False
 
         _install_css()
-        self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.win = Gtk.Window()
         self.win.set_title(f"vinoPop - {title}")
         self.win.set_decorated(False)
-        self.win.set_accept_focus(False)
-        self.win.set_app_paintable(True)
-        self.win.get_style_context().add_class("linuxpop-ai")
-        screen = self.win.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None and screen.is_composited():
-            self.win.set_visual(visual)
+        self.win.set_resizable(False)
+        self.win.add_css_class("linuxpop-ai")
 
-        self._layer_init()
-
-        ev = self.win.get_events()
-        self.win.set_events(ev | Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        self.win.connect("enter-notify-event", self._on_enter)
-        self.win.connect("leave-notify-event", self._on_leave)
+        # "leave" only fires when the pointer leaves the whole window, so
+        # crossings between child widgets need no filtering.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", self._on_enter)
+        motion.connect("leave", self._on_leave)
+        self.win.add_controller(motion)
 
         bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        bubble.get_style_context().add_class("linuxpop-ai-bubble")
+        bubble.add_css_class("linuxpop-ai-bubble")
         bubble.set_size_request(300, -1)
-        self.win.add(bubble)
+        self.win.set_child(bubble)
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self._title_lbl = Gtk.Label(label=title, xalign=0)
-        self._title_lbl.get_style_context().add_class("linuxpop-ai-title")
-        header.pack_start(self._title_lbl, False, False, 0)
+        self._title_lbl.add_css_class("linuxpop-ai-title")
+        header.append(self._title_lbl)
         if header_widget is not None:
-            header.pack_start(header_widget, False, False, 0)
-        header.pack_start(Gtk.Label(), True, True, 0)  # spacer
+            header.append(header_widget)
+        spacer = Gtk.Label()
+        spacer.set_hexpand(True)
+        header.append(spacer)
 
         self._copy_btn = self._chip("Copy", self._on_copy)
-        header.pack_start(self._copy_btn, False, False, 0)
+        header.append(self._copy_btn)
         self._replace_btn = None
         if on_replace is not None:
             self._replace_btn = self._chip("Replace", lambda *_: on_replace(self._text))
-            header.pack_start(self._replace_btn, False, False, 0)
-        header.pack_start(self._chip("✕", lambda *_: self.dismiss()), False, False, 0)
-        bubble.pack_start(header, False, False, 0)
+            header.append(self._replace_btn)
+        header.append(self._chip("✕", lambda *_: self.dismiss()))
+        bubble.append(header)
 
         self._text_lbl = Gtk.Label(xalign=0, yalign=0)
-        self._text_lbl.set_line_wrap(True)
+        self._text_lbl.set_wrap(True)
         self._text_lbl.set_max_width_chars(48)
         self._text_lbl.set_selectable(True)
-        self._text_lbl.get_style_context().add_class("linuxpop-ai-text")
-        bubble.pack_start(self._text_lbl, True, True, 0)
+        # A selectable label is focusable; keep it from grabbing focus.
+        self._text_lbl.set_focusable(False)
+        self._text_lbl.add_css_class("linuxpop-ai-text")
+        self._text_lbl.set_vexpand(True)
+        bubble.append(self._text_lbl)
 
         self._set_status("…")
 
     def _chip(self, label: str, cb) -> Gtk.Button:
         btn = Gtk.Button(label=label)
-        btn.get_style_context().add_class("linuxpop-ai-chip")
+        btn.add_css_class("linuxpop-ai-chip")
+        btn.set_focusable(False)
         btn.connect("clicked", cb)
         return btn
 
-    # ---- layer-shell placement (Wayland) --------------------------------
-    def _layer_init(self) -> None:
-        try:
-            gi.require_version("GtkLayerShell", "0.1")
-            from gi.repository import GtkLayerShell as L
-        except (ValueError, ImportError):
-            self._L = None
-            return
-        self._L = L
-        L.init_for_window(self.win)
-        L.set_layer(self.win, L.Layer.OVERLAY)
-        try:
-            L.set_keyboard_mode(self.win, L.KeyboardMode.NONE)
-        except Exception as exc:  # older gtk-layer-shell: focus default is fine
-            log.debug("[ai_bubble] set_keyboard_mode unavailable: %s", exc)
-        L.set_anchor(self.win, L.Edge.LEFT, True)
-        L.set_anchor(self.win, L.Edge.TOP, True)
-
-    def _move(self, x: int, y: int) -> None:
-        if self._L is not None:
-            self._L.set_margin(self.win, self._L.Edge.LEFT, int(x))
-            self._L.set_margin(self.win, self._L.Edge.TOP, int(y))
-        else:
-            self.win.move(int(x), int(y))
-
+    # ---- placement (via platform_backend) --------------------------------
     def present(self) -> None:
-        # Measure off-screen first so we can clamp to the monitor.
-        self._move(-10000, -10000)
-        self.win.show_all()
-        self.win.realize()
-        self._place()
+        backend = _backend()
+        if backend is not None:
+            backend.prepare_popup_window(self.win)
+        # GTK 4 measures unrealized windows, so place before mapping.
+        self._place(backend)
         self.win.present()
         self._pointer_in_bubble = False
         self._start_click_watcher()
 
-    def _place(self) -> None:
+    def _place(self, backend) -> None:
         _, nat = self.win.get_preferred_size()
         w, h = max(nat.width, 1), max(nat.height, 1)
-        mon = self.win.get_display().get_monitor_at_point(self._x, self._y)
-        geom = mon.get_geometry() if mon else None
+        geom = _monitor_geometry(self._x, self._y)
         tx = int(self._x - w / 2)
         ty = int(self._y + 24)
         if geom is not None:
@@ -203,7 +209,8 @@ class ResultBubble:
             if ty + h > geom.y + geom.height - 4:
                 ty = int(self._y - h - 24)
             ty = max(geom.y + 4, ty)
-        self._move(tx, ty)
+        if backend is not None:
+            backend.move_popup_window(self.win, tx, ty)
 
     def _start_click_watcher(self) -> None:
         try:
@@ -213,15 +220,11 @@ class ResultBubble:
         self._click_watcher = _ClickWatcher(self._on_global_click)
         self._click_watcher.start()
 
-    def _on_enter(self, _w, event):
-        if event.detail != Gdk.NotifyType.INFERIOR:
-            self._pointer_in_bubble = True
-        return False
+    def _on_enter(self, _ctrl, _x, _y) -> None:
+        self._pointer_in_bubble = True
 
-    def _on_leave(self, _w, event):
-        if event.detail != Gdk.NotifyType.INFERIOR:
-            self._pointer_in_bubble = False
-        return False
+    def _on_leave(self, _ctrl) -> None:
+        self._pointer_in_bubble = False
 
     def _on_global_click(self) -> bool:
         if not self.keep_open and not self._pointer_in_bubble:

@@ -1,9 +1,9 @@
 """Step-by-step assistant for building a custom LinuxPop button (recipe).
 
-Uses Gtk.Assistant so the user gets one decision per page, with a live
-popup-mockup updating as they go. Each page hides the underlying
-"recipe JSON" jargon and uses plain-language buttons (e.g. "Use selected
-text" instead of "{text_url}").
+Uses an Adw.NavigationView so the user gets one decision per page (with
+the usual Adwaita back button / swipe), with a live popup-mockup updating
+as they go. Each page hides the underlying "recipe JSON" jargon and uses
+plain-language buttons (e.g. "Use selected text" instead of "{text_url}").
 
 Same external interface as before - plugin_manager calls run_and_get()
 and gets a recipe dict back (or None if cancelled).
@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, Pango  # noqa: E402
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
-import recipe_loader
-from icon_picker import IconPicker
+import recipe_loader  # noqa: E402
+from icon_picker import IconPicker  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Action catalog -- the four building blocks of any custom button.
@@ -170,8 +172,11 @@ _COMMON_ICONS = [
 _SAMPLE_SELECTION = "hello world"
 
 
-# Wizard-local CSS for the live popup mockup. Loaded once per process.
-_MOCK_CSS = b"""
+# Wizard-local CSS. The live popup mockup keeps the dark premium-popup look
+# on purpose (it imitates the real popup); everything else sits on stock
+# Adwaita cards and colors so it follows the light/dark style. Loaded once
+# per process.
+_MOCK_CSS = """
 .lp-mock-popup {
     background-image: linear-gradient(to bottom, #1d2230, #161a24);
     border: 1px solid #2c3346;
@@ -194,21 +199,14 @@ _MOCK_CSS = b"""
     box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35);
 }
 .lp-step-tile {
-    background-color: #161a24;
-    border: 1px solid #262c3a;
-    border-radius: 12px;
     padding: 16px;
-    transition: border-color 120ms ease, background-color 120ms ease;
 }
-.lp-step-tile:hover {
-    border-color: #5B7DF5;
-    background-color: #1d2230;
+button.card.lp-action-tile {
+    padding: 14px 16px;
 }
-.lp-step-tile.lp-selected {
-    border-color: #7C3AED;
-    background-image: linear-gradient(135deg,
-        rgba(91, 125, 245, 0.10),
-        rgba(124, 58, 237, 0.10));
+button.card.lp-action-tile:checked {
+    background-color: alpha(@accent_bg_color, 0.12);
+    box-shadow: inset 0 0 0 2px @accent_bg_color;
 }
 .lp-step-number {
     background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
@@ -219,37 +217,14 @@ _MOCK_CSS = b"""
     font-weight: 700;
 }
 .lp-warning {
-    background-color: rgba(220, 38, 38, 0.12);
-    border: 1px solid rgba(220, 38, 38, 0.4);
+    background-color: alpha(@error_color, 0.12);
+    border: 1px solid alpha(@error_color, 0.4);
     border-radius: 8px;
     padding: 8px 12px;
-    color: #fca5a5;
+    color: @error_color;
 }
 .lp-preview-card {
-    background-color: #14171f;
-    border: 1px solid #262c3a;
-    border-radius: 10px;
     padding: 12px;
-}
-.lp-preview-result {
-    font-family: monospace;
-    color: #a5b4fc;
-}
-/* The step tiles and preview cards are dark by design (they echo the
-   premium popup mockup), so their text/icons must be light explicitly -
-   otherwise in the LIGHT app theme the labels inherit dark text and end
-   up dark-on-dark / unreadable. */
-.lp-step-tile label,
-.lp-preview-card label {
-    color: #e8ecf4;
-}
-.lp-step-tile .dim-label,
-.lp-preview-card .dim-label {
-    color: #aeb6c7;
-}
-.lp-step-tile image,
-.lp-preview-card image {
-    color: #c7cedd;
 }
 """
 _css_installed = False
@@ -260,24 +235,63 @@ def _install_mock_css() -> None:
     if _css_installed:
         return
     try:
-        from gi.repository import Gdk
-
-        screen = Gdk.Screen.get_default()
-        if screen is None:
+        display = Gdk.Display.get_default()
+        if display is None:
             return
         provider = Gtk.CssProvider()
-        provider.load_from_data(_MOCK_CSS)
-        Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        if hasattr(provider, "load_from_string"):  # GTK 4.12+
+            provider.load_from_string(_MOCK_CSS)
+        else:
+            provider.load_from_data(_MOCK_CSS, -1)
+        Gtk.StyleContext.add_provider_for_display(
+            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         _css_installed = True
     except Exception:
         pass
 
 
+def _icon(name: str, size: int) -> Gtk.Image:
+    img = Gtk.Image.new_from_icon_name(name)
+    img.set_pixel_size(size)
+    return img
+
+
+def _label(text: str = "", *classes: str, markup: bool = False, wrap: bool = False) -> Gtk.Label:
+    lbl = Gtk.Label(xalign=0)
+    if markup:
+        lbl.set_markup(text)
+    else:
+        lbl.set_text(text)
+    for c in classes:
+        lbl.add_css_class(c)
+    if wrap:
+        lbl.set_wrap(True)
+        lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+    return lbl
+
+
+def _clear(box: Gtk.Box) -> None:
+    child = box.get_first_child()
+    while child is not None:
+        nxt = child.get_next_sibling()
+        box.remove(child)
+        child = nxt
+
+
 # --------------------------------------------------------------------------
 # RecipeWizard
 # --------------------------------------------------------------------------
+
+# (tag, page title) in navigation order
+_STEPS = [
+    ("intro", "Welcome"),
+    ("action", "Pick action"),
+    ("label", "Name + icon"),
+    ("detail", "Details"),
+    ("filter", "When to show"),
+    ("confirm", "Done"),
+]
 
 
 class RecipeWizard:
@@ -299,67 +313,146 @@ class RecipeWizard:
         )
         self._editing = bool(recipe)
         self._result: dict | None = None
-        self._assistant: Gtk.Assistant | None = None
+        self._window: Adw.Window | None = None
+        self._nav: Adw.NavigationView | None = None
+        self._loop: GLib.MainLoop | None = None
+        self._next_buttons: dict[str, Gtk.Button] = {}
         self._mock_button: Gtk.Button | None = None
         self._mock_label: Gtk.Label | None = None
 
     # ---- public entry point -------------------------------------------------
 
     def run_and_get(self) -> dict | None:
+        """Show the wizard modally and block (nested main loop) until it is
+        applied or cancelled. Returns the recipe dict or None."""
         _install_mock_css()
-        a = Gtk.Assistant()
-        a.set_title("Edit custom button" if self._editing else "New custom button")
-        a.set_default_size(720, 560)
-        a.set_modal(True)
-        if self._parent is not None:
-            a.set_transient_for(self._parent)
-        a.set_icon_name("linuxpop")
-        self._assistant = a
+        win = Adw.Window(modal=True)
+        win.set_title("Edit custom button" if self._editing else "New custom button")
+        win.set_default_size(720, 560)
+        if isinstance(self._parent, Gtk.Window):
+            win.set_transient_for(self._parent)
+        win.set_icon_name("linuxpop")
+        self._window = win
 
-        # Build pages in order. add_page returns the index.
-        self._add_intro_page(a)
-        self._add_action_page(a)
-        self._add_label_page(a)
-        self._add_detail_page(a)
-        self._add_filter_page(a)
-        self._add_confirm_page(a)
+        self._nav = Adw.NavigationView()
+        builders = {
+            "intro": self._add_intro_page,
+            "action": self._add_action_page,
+            "label": self._add_label_page,
+            "detail": self._add_detail_page,
+            "filter": self._add_filter_page,
+            "confirm": self._add_confirm_page,
+        }
+        # Build pages in order; each returns (content, initially-complete).
+        for i, (tag, title) in enumerate(_STEPS):
+            content, complete = builders[tag]()
+            self._nav.add(self._wrap_page(i, tag, title, content))
+            self._set_page_complete(tag, complete)
+        win.set_content(self._nav)
 
-        a.connect("apply", self._on_apply)
-        a.connect("cancel", lambda *_: a.destroy())
-        a.connect("close", lambda *_: a.destroy())
-        a.connect("destroy", lambda *_: Gtk.main_quit())
+        # Esc cancels, like the old assistant
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        win.add_controller(keys)
 
-        a.show_all()
-        Gtk.main()
+        self._loop = GLib.MainLoop()
+        win.connect("close-request", self._on_close_request)
+        win.present()
+        self._loop.run()
+        self._loop = None
         return self._result
+
+    def _wrap_page(self, i: int, tag: str, title: str, content: Gtk.Widget) -> Adw.NavigationPage:
+        """One navigation step: header (step counter + auto back button),
+        scrollable content, and a bottom bar with Cancel / Next (or Apply)."""
+        header = Adw.HeaderBar()
+        header.set_title_widget(
+            Adw.WindowTitle(
+                title=self._window.get_title(),
+                subtitle=f"Step {i + 1} of {len(_STEPS)} · {title}",
+            )
+        )
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_vexpand(True)
+        scroll.set_child(content)
+
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bottom.set_margin_top(8)
+        bottom.set_margin_bottom(10)
+        bottom.set_margin_start(12)
+        bottom.set_margin_end(12)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda _b: self._window.close())
+        bottom.append(cancel)
+        bottom.append(Gtk.Box(hexpand=True))
+        last = i == len(_STEPS) - 1
+        nxt = Gtk.Button(label="Apply" if last else "Next")
+        nxt.add_css_class("suggested-action")
+        nxt.add_css_class("pill")
+        if last:
+            nxt.connect("clicked", self._on_apply)
+        else:
+            nxt.connect("clicked", lambda _b, t=_STEPS[i + 1][0]: self._nav.push_by_tag(t))
+        bottom.append(nxt)
+        self._next_buttons[tag] = nxt
+
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(scroll)
+        toolbar.add_bottom_bar(bottom)
+        page = Adw.NavigationPage(title=title, tag=tag)
+        page.set_child(toolbar)
+        return page
+
+    def _set_page_complete(self, tag: str, complete: bool) -> None:
+        btn = self._next_buttons.get(tag)
+        if btn is not None:
+            btn.set_sensitive(bool(complete))
+
+    def _on_key(self, _ctrl, keyval, _code, _state) -> bool:
+        if keyval == Gdk.KEY_Escape and self._window is not None:
+            self._window.close()
+            return True
+        return False
+
+    def _on_close_request(self, _win) -> bool:
+        if self._loop is not None and self._loop.is_running():
+            self._loop.quit()
+        return False  # let the window close
+
+    @staticmethod
+    def _page_box(spacing: int, orientation=Gtk.Orientation.VERTICAL, hmargin: int = 28) -> Gtk.Box:
+        return Gtk.Box(
+            orientation=orientation,
+            spacing=spacing,
+            margin_top=20,
+            margin_bottom=20,
+            margin_start=hmargin,
+            margin_end=hmargin,
+        )
 
     # ---- page 1: intro ------------------------------------------------------
 
-    def _add_intro_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=18,
-            margin_top=24,
-            margin_bottom=24,
-            margin_start=32,
-            margin_end=32,
-        )
+    def _add_intro_page(self):
+        page = self._page_box(18, hmargin=32)
+        page.set_margin_top(24)
+        page.set_margin_bottom(24)
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='xx-large' weight='bold'>Make your own LinuxPop button</span>")
-        page.pack_start(title, False, False, 0)
-
-        subtitle = Gtk.Label(xalign=0)
-        subtitle.set_markup(
-            "<span foreground='#9aa3b8'>Custom buttons turn any text you "
-            "select into an action. We'll set yours up in a few short "
-            "steps -- no coding needed.</span>"
+        page.append(_label("Make your own LinuxPop button", "title-1", wrap=True))
+        page.append(
+            _label(
+                "Custom buttons turn any text you select into an action. We'll "
+                "set yours up in a few short steps -- no coding needed.",
+                "dim-label",
+                wrap=True,
+            )
         )
-        subtitle.set_line_wrap(True)
-        page.pack_start(subtitle, False, False, 0)
 
         # 3-step visual flow
         flow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14, margin_top=18)
+        flow.set_homogeneous(True)
         for n, icon, head, body in [
             (1, "edit-select-all-symbolic", "Select", "Highlight any text\nin any app."),
             (
@@ -375,189 +468,142 @@ class RecipeWizard:
                 "Whatever you set up\nhappens. Open a URL,\nrun a command -- you choose.",
             ),
         ]:
-            tile = self._build_step_tile(n, icon, head, body)
-            flow.pack_start(tile, True, True, 0)
-        page.pack_start(flow, False, False, 0)
+            flow.append(self._build_step_tile(n, icon, head, body))
+        page.append(flow)
 
-        hint = Gtk.Label(xalign=0)
-        hint.set_markup(
-            "<span foreground='#9aa3b8' size='small'>"
-            "Click <b>Next</b> when you're ready. You can go back at any point.</span>"
+        hint = _label(
+            "Click <b>Next</b> when you're ready. You can go back at any point.",
+            "dim-label",
+            "caption",
+            markup=True,
         )
         hint.set_margin_top(10)
-        page.pack_start(hint, False, False, 0)
-
-        a.append_page(page)
-        a.set_page_type(page, Gtk.AssistantPageType.INTRO)
-        a.set_page_title(page, "Welcome")
-        a.set_page_complete(page, True)
+        page.append(hint)
+        return page, True
 
     def _build_step_tile(self, n: int, icon_name: str, head: str, body: str) -> Gtk.Widget:
         tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        tile.get_style_context().add_class("lp-step-tile")
+        tile.add_css_class("card")
+        tile.add_css_class("lp-step-tile")
 
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         num = Gtk.Label(label=str(n))
-        num.get_style_context().add_class("lp-step-number")
+        num.add_css_class("lp-step-number")
         num.set_xalign(0.5)
         num.set_yalign(0.5)
-        top.pack_start(num, False, False, 0)
-        img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DIALOG)
-        top.pack_start(img, False, False, 0)
-        tile.pack_start(top, False, False, 0)
+        num.set_valign(Gtk.Align.CENTER)
+        top.append(num)
+        top.append(_icon(icon_name, 48))
+        tile.append(top)
 
-        h = Gtk.Label(xalign=0)
-        h.set_markup(f"<b>{head}</b>")
-        tile.pack_start(h, False, False, 0)
-
-        b = Gtk.Label(label=body, xalign=0)
-        b.set_line_wrap(True)
-        b.get_style_context().add_class("dim-label")
-        tile.pack_start(b, False, False, 0)
+        tile.append(_label(head, "heading"))
+        tile.append(_label(body, "dim-label", wrap=True))
         return tile
 
     # ---- page 2: choose action type -----------------------------------------
 
-    def _add_action_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=14,
-            margin_top=20,
-            margin_bottom=20,
-            margin_start=28,
-            margin_end=28,
-        )
+    def _add_action_page(self):
+        page = self._page_box(14)
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='x-large' weight='bold'>What should your button do?</span>")
-        page.pack_start(title, False, False, 0)
-
-        subtitle = Gtk.Label(xalign=0)
-        subtitle.set_markup(
-            "<span foreground='#9aa3b8'>Pick one. You can change it later if you "
-            "want to try something else.</span>"
+        page.append(_label("What should your button do?", "title-2", wrap=True))
+        page.append(
+            _label(
+                "Pick one. You can change it later if you want to try something else.",
+                "dim-label",
+                wrap=True,
+            )
         )
-        page.pack_start(subtitle, False, False, 0)
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin_top=8)
         grid.set_column_homogeneous(True)
         grid.set_row_homogeneous(True)
 
-        self._action_tiles: dict[str, Gtk.Widget] = {}
+        # Toggle-button cards in one group: clicking (or Space/Enter on a
+        # focused card) selects it, exactly one is selected at a time.
+        self._action_tiles: dict[str, Gtk.ToggleButton] = {}
+        group = None
         for i, spec in enumerate(_ACTIONS):
             tile = self._build_action_tile(spec)
+            if group is None:
+                group = tile
+            else:
+                tile.set_group(group)
             grid.attach(tile, i % 2, i // 2, 1, 1)
             self._action_tiles[spec["key"]] = tile
 
-        page.pack_start(grid, True, True, 0)
+        page.append(grid)
         self._reflect_action_selection()
+        return page, bool(self._state["action_type"])
 
-        a.append_page(page)
-        a.set_page_title(page, "Pick action")
-        a.set_page_complete(page, bool(self._state["action_type"]))
-
-    def _build_action_tile(self, spec: dict) -> Gtk.Widget:
-        # An EventBox-wrapped tile that becomes "selected" when clicked.
-        ev = Gtk.EventBox()
-        ev.set_above_child(False)
-        box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=6,
-            margin_top=14,
-            margin_bottom=14,
-            margin_start=16,
-            margin_end=16,
-        )
-        box.get_style_context().add_class("lp-step-tile")
+    def _build_action_tile(self, spec: dict) -> Gtk.ToggleButton:
+        tile = Gtk.ToggleButton()
+        tile.add_css_class("card")
+        tile.add_css_class("lp-action-tile")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        img = Gtk.Image.new_from_icon_name(spec["icon"], Gtk.IconSize.DIALOG)
-        row.pack_start(img, False, False, 0)
-        head = Gtk.Label(xalign=0)
-        head.set_markup(f"<span size='large' weight='bold'>{spec['title']}</span>")
-        row.pack_start(head, False, False, 0)
-        box.pack_start(row, False, False, 0)
+        row.append(_icon(spec["icon"], 48))
+        title = _label(spec["title"], "title-4", wrap=True)
+        title.set_hexpand(True)
+        row.append(title)
+        box.append(row)
 
-        blurb = Gtk.Label(label=spec["blurb"], xalign=0)
-        blurb.set_line_wrap(True)
-        box.pack_start(blurb, False, False, 0)
+        box.append(_label(spec["blurb"], wrap=True))
+        box.append(_label(f"Example: {spec['example']}", "dim-label", "caption", wrap=True))
+        tile.set_child(box)
 
-        eg = Gtk.Label(xalign=0)
-        eg.set_markup(f"<span foreground='#9aa3b8' size='small'>Example: {spec['example']}</span>")
-        eg.set_line_wrap(True)
-        box.pack_start(eg, False, False, 0)
-
-        ev.add(box)
-
-        def on_click(_w, _e):
+        def on_toggled(btn):
+            if not btn.get_active():
+                return
+            if self._state["action_type"] == spec["key"]:
+                return
             self._state["action_type"] = spec["key"]
-            self._reflect_action_selection()
             # Refresh detail page since contents depend on chosen action
             self._refresh_detail_page()
             self._refresh_confirm_page()
-            if self._assistant is not None:
-                current_page = self._assistant.get_nth_page(self._assistant.get_current_page())
-                self._assistant.set_page_complete(current_page, True)
-            return False
+            self._refresh_mock_label()
+            self._set_page_complete("action", True)
 
-        ev.connect("button-press-event", on_click)
-        # Keyboard activation too
-        ev.set_can_focus(True)
-        return ev
+        tile.connect("toggled", on_toggled)
+        return tile
 
     def _reflect_action_selection(self) -> None:
         chosen = self._state["action_type"]
-        for key, tile in (self._action_tiles if hasattr(self, "_action_tiles") else {}).items():
-            box = tile.get_child()
-            ctx = box.get_style_context()
-            if key == chosen:
-                ctx.add_class("lp-selected")
-            else:
-                ctx.remove_class("lp-selected")
+        tile = getattr(self, "_action_tiles", {}).get(chosen)
+        if tile is not None:
+            tile.set_active(True)
 
     # ---- page 3: name & icon ------------------------------------------------
 
-    def _add_label_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=16,
-            margin_top=20,
-            margin_bottom=20,
-            margin_start=24,
-            margin_end=24,
-        )
+    def _add_label_page(self):
+        page = self._page_box(16, Gtk.Orientation.HORIZONTAL, hmargin=24)
 
         # ---- LEFT column: inputs ----
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        left.set_hexpand(True)
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='x-large' weight='bold'>Name it and pick an icon</span>")
-        left.pack_start(title, False, False, 0)
-
-        subtitle = Gtk.Label(xalign=0)
-        subtitle.set_markup(
-            "<span foreground='#9aa3b8'>The icon is what shows up in the popup. "
-            "The label is the tooltip when you hover.</span>"
+        left.append(_label("Name it and pick an icon", "title-2", wrap=True))
+        left.append(
+            _label(
+                "The icon is what shows up in the popup. The label is the tooltip when you hover.",
+                "dim-label",
+                wrap=True,
+            )
         )
-        subtitle.set_line_wrap(True)
-        left.pack_start(subtitle, False, False, 0)
 
         # Tooltip / button label
-        lbl = Gtk.Label(xalign=0)
-        lbl.set_markup("<b>What's the button called?</b>")
-        left.pack_start(lbl, False, False, 0)
+        left.append(_label("What's the button called?", "heading"))
 
         self._tooltip_entry = Gtk.Entry()
         self._tooltip_entry.set_text(self._state.get("tooltip") or "")
         self._tooltip_entry.set_placeholder_text("e.g. Search Wikipedia")
         self._tooltip_entry.connect("changed", self._on_label_input)
-        left.pack_start(self._tooltip_entry, False, False, 0)
+        left.append(self._tooltip_entry)
 
         # Icon picker chips + browse button
-        ilbl = Gtk.Label(xalign=0)
-        ilbl.set_markup("<b>Pick an icon</b>")
+        ilbl = _label("Pick an icon", "heading")
         ilbl.set_margin_top(6)
-        left.pack_start(ilbl, False, False, 0)
+        left.append(ilbl)
 
         chips_scroll = Gtk.ScrolledWindow()
         chips_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -566,83 +612,74 @@ class RecipeWizard:
         chips_flow.set_selection_mode(Gtk.SelectionMode.NONE)
         chips_flow.set_max_children_per_line(7)
         chips_flow.set_homogeneous(True)
+        chips_flow.set_valign(Gtk.Align.START)
         for name in _COMMON_ICONS:
             btn = Gtk.Button()
-            btn.set_relief(Gtk.ReliefStyle.NONE)
-            btn.add(Gtk.Image.new_from_icon_name(name, Gtk.IconSize.DND))
+            btn.add_css_class("flat")
+            btn.set_child(_icon(name, 32))
             btn.set_tooltip_text(name)
             btn.connect("clicked", self._on_icon_chip, name)
-            chips_flow.add(btn)
-        chips_scroll.add(chips_flow)
-        left.pack_start(chips_scroll, False, False, 0)
+            chips_flow.append(btn)
+        chips_scroll.set_child(chips_flow)
+        left.append(chips_scroll)
 
         browse_btn = Gtk.Button(label="Browse all icons...")
         browse_btn.connect("clicked", self._on_browse_icons)
-        left.pack_start(browse_btn, False, False, 0)
+        left.append(browse_btn)
 
-        page.pack_start(left, True, True, 0)
+        page.append(left)
 
         # ---- RIGHT column: live preview ----
         right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         right.set_size_request(280, -1)
 
-        plbl = Gtk.Label(xalign=0)
-        plbl.set_markup("<b>Live preview</b>")
-        right.pack_start(plbl, False, False, 0)
-
-        explain = Gtk.Label(xalign=0)
-        explain.set_markup(
-            "<span foreground='#9aa3b8' size='small'>"
-            "This is roughly how your button will appear in the LinuxPop popup, "
-            "next to the built-in ones.</span>"
+        right.append(_label("Live preview", "heading"))
+        right.append(
+            _label(
+                "This is roughly how your button will appear in the LinuxPop popup, "
+                "next to the built-in ones.",
+                "dim-label",
+                "caption",
+                wrap=True,
+            )
         )
-        explain.set_line_wrap(True)
-        right.pack_start(explain, False, False, 0)
 
         # Mock popup bar
         mock = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        mock.get_style_context().add_class("lp-mock-popup")
+        mock.set_halign(Gtk.Align.START)
+        mock.add_css_class("lp-mock-popup")
         # A couple of dummy buttons + the new one (highlighted)
         for icon_name, tip in [
             ("edit-copy-symbolic", "Copy"),
             ("system-search-symbolic", "Search"),
         ]:
             b = Gtk.Button()
-            b.set_relief(Gtk.ReliefStyle.NONE)
-            b.add(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR))
+            b.set_child(_icon(icon_name, 24))
             b.set_tooltip_text(tip)
             b.set_can_focus(False)
-            mock.pack_start(b, False, False, 0)
+            mock.append(b)
         # The user's button (highlighted)
         self._mock_button = Gtk.Button()
-        self._mock_button.set_relief(Gtk.ReliefStyle.NONE)
-        self._mock_button.get_style_context().add_class("lp-mock-new")
+        self._mock_button.add_css_class("lp-mock-new")
         self._mock_button.set_can_focus(False)
         self._refresh_mock_button()
-        mock.pack_start(self._mock_button, False, False, 0)
+        mock.append(self._mock_button)
 
-        right.pack_start(mock, False, False, 0)
+        right.append(mock)
 
-        self._mock_label = Gtk.Label(xalign=0)
-        self._mock_label.set_line_wrap(True)
-        self._mock_label.get_style_context().add_class("dim-label")
+        self._mock_label = _label("", "dim-label", wrap=True)
         self._refresh_mock_label()
-        right.pack_start(self._mock_label, False, False, 0)
+        right.append(self._mock_label)
 
-        page.pack_start(right, False, False, 0)
-
-        a.append_page(page)
-        a.set_page_title(page, "Name + icon")
-        a.set_page_complete(page, self._label_page_complete())
+        page.append(right)
+        return page, self._label_page_complete()
 
     def _label_page_complete(self) -> bool:
         return bool((self._state.get("tooltip") or "").strip())
 
     def _on_label_input(self, _entry) -> None:
         self._state["tooltip"] = self._tooltip_entry.get_text()
-        if self._assistant is not None:
-            page = self._assistant.get_nth_page(self._assistant.get_current_page())
-            self._assistant.set_page_complete(page, self._label_page_complete())
+        self._set_page_complete("label", self._label_page_complete())
         self._refresh_mock_button()
         self._refresh_mock_label()
         self._refresh_confirm_page()
@@ -654,7 +691,7 @@ class RecipeWizard:
 
     def _on_browse_icons(self, _btn) -> None:
         picker = IconPicker(
-            parent=self._assistant, initial=self._state.get("icon") or "applications-other"
+            parent=self._window, initial=self._state.get("icon") or "applications-other"
         )
         chosen = picker.run()
         if chosen:
@@ -665,12 +702,9 @@ class RecipeWizard:
     def _refresh_mock_button(self) -> None:
         if self._mock_button is None:
             return
-        for ch in self._mock_button.get_children():
-            self._mock_button.remove(ch)
         icon_name = self._state.get("icon") or "applications-other"
-        self._mock_button.add(Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR))
+        self._mock_button.set_child(_icon(icon_name, 24))
         self._mock_button.set_tooltip_text(self._state.get("tooltip") or "Your button")
-        self._mock_button.show_all()
 
     def _refresh_mock_label(self) -> None:
         if self._mock_label is None:
@@ -684,21 +718,12 @@ class RecipeWizard:
 
     # ---- page 4: action details --------------------------------------------
 
-    def _add_detail_page(self, a: Gtk.Assistant) -> None:
+    def _add_detail_page(self):
         # We hold a reference to the outer container so we can wipe and
         # rebuild it when the user changes action type on page 2.
-        self._detail_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=12,
-            margin_top=20,
-            margin_bottom=20,
-            margin_start=28,
-            margin_end=28,
-        )
+        self._detail_container = self._page_box(12)
         self._refresh_detail_page()
-        a.append_page(self._detail_container)
-        a.set_page_title(self._detail_container, "Details")
-        a.set_page_complete(self._detail_container, self._detail_page_complete())
+        return self._detail_container, self._detail_page_complete()
 
     def _detail_page_complete(self) -> bool:
         # Pre-filled placeholder text doesn't count - only actual user
@@ -712,29 +737,26 @@ class RecipeWizard:
         if not hasattr(self, "_detail_container"):
             return
         # Wipe existing children
-        for ch in list(self._detail_container.get_children()):
-            self._detail_container.remove(ch)
+        _clear(self._detail_container)
 
         spec = _ACTION_BY_KEY[self._state["action_type"]]
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup(f"<span size='x-large' weight='bold'>{spec['title']}</span>")
-        self._detail_container.pack_start(title, False, False, 0)
-
-        prompt = Gtk.Label(xalign=0)
-        prompt.set_markup(f"<b>{spec['detail_prompt']}</b>")
-        self._detail_container.pack_start(prompt, False, False, 0)
+        self._detail_container.append(_label(spec["title"], "title-2", wrap=True))
+        self._detail_container.append(_label(spec["detail_prompt"], "heading", wrap=True))
 
         # Template editor
         tmpl_scroll = Gtk.ScrolledWindow()
         tmpl_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         tmpl_scroll.set_min_content_height(70)
-        tmpl_scroll.set_shadow_type(Gtk.ShadowType.IN)
+        tmpl_scroll.set_has_frame(True)
         self._template_view = Gtk.TextView()
         self._template_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        self._template_view.override_font(Pango.FontDescription("monospace 11"))
-        # Visible input-field background so the user can see it's editable.
-        self._template_view.get_style_context().add_class("lp-cmd-edit")
+        # Monospace via Adwaita's style class (override_font is gone in GTK 4)
+        self._template_view.add_css_class("monospace")
+        self._template_view.set_top_margin(8)
+        self._template_view.set_bottom_margin(8)
+        self._template_view.set_left_margin(8)
+        self._template_view.set_right_margin(8)
         self._template_buffer = self._template_view.get_buffer()
 
         # Style tag for the dimmed sample text. Has to live on the
@@ -742,7 +764,7 @@ class RecipeWizard:
         # rebuild the whole detail container when action type changes.
         self._placeholder_tag = self._template_buffer.create_tag(
             "lp-placeholder",
-            foreground="#6b7080",  # muted grey vs the normal #e8ecf4
+            foreground="#6b7080",  # muted grey, readable on light and dark
             style=Pango.Style.ITALIC,
         )
 
@@ -766,25 +788,39 @@ class RecipeWizard:
         # Connect AFTER the initial set_text so the seed itself doesn't
         # trip the change handler and clobber _placeholder_active.
         self._template_buffer.connect("changed", self._on_template_changed)
-        # Wipe the dim sample as soon as the user clicks into the field -
-        # avoids the weird state where their typing lands next to greyed
-        # placeholder content.
-        self._template_view.connect("focus-in-event", self._on_template_focus_in)
-        tmpl_scroll.add(self._template_view)
-        self._detail_container.pack_start(tmpl_scroll, False, False, 0)
+        # Wipe the dim sample as soon as the user clicks into the field or
+        # starts typing - avoids the weird state where their typing lands
+        # next to greyed placeholder content. (Not on plain focus-in: the
+        # navigation view focuses the field when the page opens, which
+        # would wipe the sample before the user ever saw it.)
+        click = Gtk.GestureClick()
+        click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        click.connect("pressed", lambda *_: self._on_template_focus_in())
+        self._template_view.add_controller(click)
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self._on_template_key)
+        self._template_view.add_controller(keys)
+        tmpl_scroll.set_child(self._template_view)
+        self._detail_container.append(tmpl_scroll)
 
         # Inserter row -- plain-language buttons that drop the right token in
-        inserter_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         if spec["key"] == "copy_transformed":
-            # Several flavor options
+            # Several flavor options (wrap onto more lines when narrow)
+            inserter_row = Gtk.FlowBox()
+            inserter_row.set_selection_mode(Gtk.SelectionMode.NONE)
+            inserter_row.set_max_children_per_line(6)
+            inserter_row.set_column_spacing(8)
+            inserter_row.set_row_spacing(8)
             for label, token in _TRANSFORM_INSERTERS:
                 btn = Gtk.Button(label=f"Insert {label}")
                 btn.set_tooltip_text("Click to drop this into your template at the cursor.")
                 btn.connect("clicked", self._on_insert, token)
-                inserter_row.pack_start(btn, False, False, 0)
+                inserter_row.append(btn)
         else:
+            inserter_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             btn = Gtk.Button(label=spec["insert_label"])
-            btn.get_style_context().add_class("suggested-action")
+            btn.add_css_class("suggested-action")
             btn.set_tooltip_text(
                 "Click to drop the selected text into your "
                 + (
@@ -797,23 +833,24 @@ class RecipeWizard:
                 + " at the cursor."
             )
             btn.connect("clicked", self._on_insert, spec["insert_token"])
-            inserter_row.pack_start(btn, False, False, 0)
-        self._detail_container.pack_start(inserter_row, False, False, 0)
+            inserter_row.append(btn)
+        self._detail_container.append(inserter_row)
 
         # More-placeholders chip row: dynamic tokens recipes pick up
         # from the snippet engine. Inserting one of these drops a tag
         # like {date} or {clipboard} into the template at the cursor;
         # it gets resolved when the button is actually clicked, not now.
-        extra_label = Gtk.Label(xalign=0)
-        extra_label.set_markup(
-            "<span foreground='#9aa3b8' size='small'>"
-            "Or insert a dynamic value (filled in when the button runs):</span>"
+        extra_label = _label(
+            "Or insert a dynamic value (filled in when the button runs):",
+            "dim-label",
+            "caption",
+            wrap=True,
         )
         extra_label.set_margin_top(6)
-        self._detail_container.pack_start(extra_label, False, False, 0)
+        self._detail_container.append(extra_label)
         extra_flow = Gtk.FlowBox()
         extra_flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        extra_flow.set_max_children_per_line(6)
+        extra_flow.set_max_children_per_line(7)
         extra_flow.set_column_spacing(4)
         extra_flow.set_row_spacing(4)
         for chip_label, chip_token, chip_tip in [
@@ -828,21 +865,19 @@ class RecipeWizard:
             chip = Gtk.Button(label=chip_label)
             chip.set_tooltip_text(chip_tip)
             chip.connect("clicked", lambda _b, t=chip_token: self._on_insert(None, t))
-            extra_flow.add(chip)
-        self._detail_container.pack_start(extra_flow, False, False, 0)
+            extra_flow.append(chip)
+        self._detail_container.append(extra_flow)
 
         # "Try also" chip row - replaces the template with a known-good
         # example. Saves the user from having to invent valid patterns
         # by hand the first time they meet an action type.
         examples = spec.get("examples") or []
         if examples:
-            ex_label = Gtk.Label(xalign=0)
-            ex_label.set_markup(
-                "<span foreground='#9aa3b8' size='small'>"
-                "Try one of these - click to fill the box above:</span>"
+            ex_label = _label(
+                "Try one of these - click to fill the box above:", "dim-label", "caption", wrap=True
             )
             ex_label.set_margin_top(4)
-            self._detail_container.pack_start(ex_label, False, False, 0)
+            self._detail_container.append(ex_label)
 
             ex_flow = Gtk.FlowBox()
             ex_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -852,38 +887,34 @@ class RecipeWizard:
             ex_flow.set_column_spacing(4)
             for label, template in examples:
                 btn = Gtk.Button(label=label)
-                btn.set_relief(Gtk.ReliefStyle.NORMAL)
                 btn.set_tooltip_text(template)
                 btn.connect("clicked", self._on_example_pick, template)
-                ex_flow.add(btn)
-            self._detail_container.pack_start(ex_flow, False, False, 0)
+                ex_flow.append(btn)
+            self._detail_container.append(ex_flow)
 
         # Warning (run_command)
         if spec.get("warning"):
-            warn = Gtk.Label(xalign=0)
-            warn.set_markup("<b>Heads up:</b> " + GLib.markup_escape_text(spec["warning"]))
-            warn.set_line_wrap(True)
-            warn.get_style_context().add_class("lp-warning")
-            self._detail_container.pack_start(warn, False, False, 0)
+            warn = _label(
+                "<b>Heads up:</b> " + GLib.markup_escape_text(spec["warning"]),
+                "lp-warning",
+                markup=True,
+                wrap=True,
+            )
+            self._detail_container.append(warn)
 
         # Preview card
         prev_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        prev_card.get_style_context().add_class("lp-preview-card")
-        p_head = Gtk.Label(xalign=0)
-        p_head.set_markup(f"<b>{spec['preview_label']}</b>")
-        prev_card.pack_start(p_head, False, False, 0)
-        p_verb = Gtk.Label(xalign=0)
-        p_verb.set_markup(f"<span foreground='#9aa3b8' size='small'>{spec['preview_verb']}</span>")
-        prev_card.pack_start(p_verb, False, False, 0)
-        self._preview_result = Gtk.Label(xalign=0)
-        self._preview_result.set_line_wrap(True)
+        prev_card.add_css_class("card")
+        prev_card.add_css_class("lp-preview-card")
+        prev_card.append(_label(spec["preview_label"], "heading", wrap=True))
+        prev_card.append(_label(spec["preview_verb"], "dim-label", "caption", wrap=True))
+        self._preview_result = _label("", "monospace", "accent", wrap=True)
         self._preview_result.set_selectable(True)
-        self._preview_result.get_style_context().add_class("lp-preview-result")
         self._refresh_preview_result()
-        prev_card.pack_start(self._preview_result, False, False, 0)
-        self._detail_container.pack_start(prev_card, False, False, 0)
+        prev_card.append(self._preview_result)
+        self._detail_container.append(prev_card)
 
-        self._detail_container.show_all()
+        self._set_page_complete("detail", self._detail_page_complete())
 
     def _on_template_changed(self, buf: Gtk.TextBuffer) -> None:
         # Any actual buffer mutation means the sample text is no longer
@@ -895,19 +926,35 @@ class RecipeWizard:
             buf.remove_tag(self._placeholder_tag, start, end)
         start, end = buf.get_start_iter(), buf.get_end_iter()
         self._state["template"] = buf.get_text(start, end, True)
-        if self._assistant is not None:
-            page = self._detail_container
-            self._assistant.set_page_complete(page, self._detail_page_complete())
+        self._set_page_complete("detail", self._detail_page_complete())
         self._refresh_preview_result()
         self._refresh_confirm_page()
 
-    def _on_template_focus_in(self, _view, _event) -> bool:
-        """Clear the dim placeholder on first focus so the user types into
-        an empty field, not into the middle of the sample."""
+    def _on_template_focus_in(self) -> None:
+        """Clear the dim placeholder on first click/keypress so the user
+        types into an empty field, not into the middle of the sample."""
         if getattr(self, "_placeholder_active", False):
             self._placeholder_active = False
             self._template_buffer.set_text("")
-        return False  # don't intercept default focus handling
+
+    _NON_EDIT_KEYS = {
+        Gdk.KEY_Tab,
+        Gdk.KEY_ISO_Left_Tab,
+        Gdk.KEY_Escape,
+        Gdk.KEY_Shift_L,
+        Gdk.KEY_Shift_R,
+        Gdk.KEY_Control_L,
+        Gdk.KEY_Control_R,
+        Gdk.KEY_Alt_L,
+        Gdk.KEY_Alt_R,
+        Gdk.KEY_Super_L,
+        Gdk.KEY_Super_R,
+    }
+
+    def _on_template_key(self, _ctrl, keyval, _code, _state) -> bool:
+        if keyval not in self._NON_EDIT_KEYS:
+            self._on_template_focus_in()
+        return False  # let the text view handle the key as usual
 
     def _on_insert(self, _btn, token: str) -> None:
         # If the sample text is still on screen, replace it wholesale
@@ -958,37 +1005,25 @@ class RecipeWizard:
 
     # ---- page 5: when to show -----------------------------------------------
 
-    def _add_filter_page(self, a: Gtk.Assistant) -> None:
-        page = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=12,
-            margin_top=20,
-            margin_bottom=20,
-            margin_start=28,
-            margin_end=28,
+    def _add_filter_page(self):
+        page = self._page_box(12)
+
+        page.append(_label("When should it show up?", "title-2", wrap=True))
+        page.append(
+            _label("You can leave this as 'always' -- most people do.", "dim-label", wrap=True)
         )
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='x-large' weight='bold'>When should it show up?</span>")
-        page.pack_start(title, False, False, 0)
+        # Radio-style check buttons (Gtk.RadioButton is gone in GTK 4)
+        self._always_radio = Gtk.CheckButton(label="Always -- show on any selected text")
+        page.append(self._always_radio)
 
-        subtitle = Gtk.Label(xalign=0)
-        subtitle.set_markup(
-            "<span foreground='#9aa3b8'>You can leave this as 'always' -- most people do.</span>"
-        )
-        page.pack_start(subtitle, False, False, 0)
-
-        self._always_radio = Gtk.RadioButton.new_with_label_from_widget(
-            None, "Always -- show on any selected text"
-        )
-        self._always_radio.set_active(not self._state["content_types"])
-        page.pack_start(self._always_radio, False, False, 0)
-
-        self._only_radio = Gtk.RadioButton.new_with_label_from_widget(
-            self._always_radio, "Only when I've selected one of these:"
-        )
-        self._only_radio.set_active(bool(self._state["content_types"]))
-        page.pack_start(self._only_radio, False, False, 0)
+        self._only_radio = Gtk.CheckButton(label="Only when I've selected one of these:")
+        self._only_radio.set_group(self._always_radio)
+        page.append(self._only_radio)
+        if self._state["content_types"]:
+            self._only_radio.set_active(True)
+        else:
+            self._always_radio.set_active(True)
 
         # Indented checkboxes
         cb_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4, margin_start=28)
@@ -997,9 +1032,9 @@ class RecipeWizard:
             cb = Gtk.CheckButton(label=label)
             cb.set_active(key in self._state["content_types"])
             cb.connect("toggled", self._on_filter_changed)
-            cb_box.pack_start(cb, False, False, 0)
+            cb_box.append(cb)
             self._type_checks[key] = cb
-        page.pack_start(cb_box, False, False, 0)
+        page.append(cb_box)
 
         # Wire radios so checkboxes only matter when "Only" is active
         def sync(*_):
@@ -1010,10 +1045,7 @@ class RecipeWizard:
         self._always_radio.connect("toggled", sync)
         self._only_radio.connect("toggled", sync)
         sync()
-
-        a.append_page(page)
-        a.set_page_title(page, "When to show")
-        a.set_page_complete(page, True)
+        return page, True
 
     def _on_filter_changed(self, *_):
         if self._only_radio.get_active():
@@ -1026,107 +1058,83 @@ class RecipeWizard:
 
     # ---- page 6: confirm ----------------------------------------------------
 
-    def _add_confirm_page(self, a: Gtk.Assistant) -> None:
-        self._confirm_container = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=14,
-            margin_top=20,
-            margin_bottom=20,
-            margin_start=28,
-            margin_end=28,
-        )
+    def _add_confirm_page(self):
+        self._confirm_container = self._page_box(14)
         self._refresh_confirm_page()
-        a.append_page(self._confirm_container)
-        a.set_page_type(self._confirm_container, Gtk.AssistantPageType.CONFIRM)
-        a.set_page_title(self._confirm_container, "Done")
-        a.set_page_complete(self._confirm_container, True)
+        return self._confirm_container, True
 
     def _refresh_confirm_page(self) -> None:
         if not hasattr(self, "_confirm_container"):
             return
-        for ch in list(self._confirm_container.get_children()):
-            self._confirm_container.remove(ch)
+        _clear(self._confirm_container)
 
         spec = _ACTION_BY_KEY[self._state["action_type"]]
 
-        title = Gtk.Label(xalign=0)
-        title.set_markup("<span size='x-large' weight='bold'>Looks good?</span>")
-        self._confirm_container.pack_start(title, False, False, 0)
-
-        sub = Gtk.Label(xalign=0)
-        sub.set_markup(
-            "<span foreground='#9aa3b8'>Press <b>Apply</b> to save. You can "
-            "edit or delete this button later from the Plugin Manager.</span>"
+        self._confirm_container.append(_label("Looks good?", "title-2"))
+        self._confirm_container.append(
+            _label(
+                "Press <b>Apply</b> to save. You can edit or delete this "
+                "button later from the Plugin Manager.",
+                "dim-label",
+                markup=True,
+                wrap=True,
+            )
         )
-        sub.set_line_wrap(True)
-        self._confirm_container.pack_start(sub, False, False, 0)
 
         # Summary card
         card = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        card.get_style_context().add_class("lp-preview-card")
+        card.add_css_class("card")
+        card.add_css_class("lp-preview-card")
 
-        icon_img = Gtk.Image.new_from_icon_name(
-            self._state.get("icon") or "applications-other", Gtk.IconSize.DIALOG
-        )
-        card.pack_start(icon_img, False, False, 0)
+        icon_img = _icon(self._state.get("icon") or "applications-other", 48)
+        icon_img.set_valign(Gtk.Align.START)
+        card.append(icon_img)
 
         info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        info.set_hexpand(True)
         name = (self._state.get("tooltip") or "").strip() or "(unnamed)"
-        nlbl = Gtk.Label(xalign=0)
-        nlbl.set_markup(f"<span size='large' weight='bold'>{GLib.markup_escape_text(name)}</span>")
-        info.pack_start(nlbl, False, False, 0)
-
-        action_descr = Gtk.Label(xalign=0)
-        action_descr.set_markup(
-            f"<span foreground='#9aa3b8'>{GLib.markup_escape_text(spec['blurb'])}</span>"
-        )
-        action_descr.set_line_wrap(True)
-        info.pack_start(action_descr, False, False, 0)
+        info.append(_label(name, "title-4", wrap=True))
+        info.append(_label(spec["blurb"], "dim-label", wrap=True))
 
         # Render the actual outcome for the sample selection
         rendered = recipe_loader._render(self._state.get("template") or "", _SAMPLE_SELECTION)
-        verb_lbl = Gtk.Label(xalign=0)
-        verb_lbl.set_markup(
-            f"<span size='small'>When you select "
-            f'<b>"{_SAMPLE_SELECTION}"</b> and click it:</span>'
+        info.append(
+            _label(
+                f'When you select <b>"{_SAMPLE_SELECTION}"</b> and click it:',
+                "caption",
+                markup=True,
+            )
         )
-        info.pack_start(verb_lbl, False, False, 0)
 
-        result_lbl = Gtk.Label(xalign=0)
-        result_lbl.set_line_wrap(True)
+        result_lbl = _label("", "monospace", "accent", wrap=True)
         result_lbl.set_selectable(True)
-        result_lbl.get_style_context().add_class("lp-preview-result")
         if spec["key"] == "run_command":
             result_lbl.set_text("$ " + rendered.strip())
         else:
             result_lbl.set_text(rendered.strip() or "(empty)")
-        info.pack_start(result_lbl, False, False, 0)
+        info.append(result_lbl)
 
         # When to show
         when = (
             ", ".join(label for k, label in _CONTENT_TYPES if k in self._state["content_types"])
             or "any selected text"
         )
-        when_lbl = Gtk.Label(xalign=0)
-        when_lbl.set_markup(
-            f"<span size='small' foreground='#9aa3b8'>"
-            f"Shows on: {GLib.markup_escape_text(when)}</span>"
-        )
-        info.pack_start(when_lbl, False, False, 0)
+        info.append(_label(f"Shows on: {when}", "dim-label", "caption", wrap=True))
 
-        card.pack_start(info, True, True, 0)
-        self._confirm_container.pack_start(card, False, False, 0)
+        card.append(info)
+        self._confirm_container.append(card)
 
         # Validation hint if something's missing
         provisional = self._build_recipe_dict()
         errors = recipe_loader.validate(provisional)
         if errors:
-            warn = Gtk.Label(xalign=0)
-            warn.set_markup("<b>One more thing:</b> " + GLib.markup_escape_text(errors[0]))
-            warn.set_line_wrap(True)
-            warn.get_style_context().add_class("lp-warning")
-            self._confirm_container.pack_start(warn, False, False, 0)
-        self._confirm_container.show_all()
+            warn = _label(
+                "<b>One more thing:</b> " + GLib.markup_escape_text(errors[0]),
+                "lp-warning",
+                markup=True,
+                wrap=True,
+            )
+            self._confirm_container.append(warn)
 
     # ---- save ---------------------------------------------------------------
 
@@ -1145,29 +1153,18 @@ class RecipeWizard:
             ),
         )
 
-    def _on_apply(self, a: Gtk.Assistant) -> None:
+    def _on_apply(self, _btn) -> None:
         recipe = self._build_recipe_dict()
         errors = recipe_loader.validate(recipe)
         if errors:
-            msg = Gtk.MessageDialog(
-                transient_for=a,
-                modal=True,
-                message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.OK,
-                text="Couldn't save just yet",
-            )
-            msg.format_secondary_text("\n".join(errors))
-            msg.run()
-            msg.destroy()
+            msg = Adw.AlertDialog(heading="Couldn't save just yet", body="\n".join(errors))
+            msg.add_response("ok", "OK")
+            msg.set_default_response("ok")
+            msg.present(self._window)
             return
         self._result = recipe
-        # IMPORTANT: don't destroy the assistant from inside the 'apply'
-        # signal handler -- GtkAssistant fires 'apply' immediately followed
-        # by 'close' on a confirm-page, and tearing the widget down mid-
-        # cascade crashes when the 'close' emission lands on a half-freed
-        # object. Defer to the next idle so the signal cascade finishes
-        # first, then destroy cleanly.
-        GLib.idle_add(a.destroy)
+        # Closing ends the nested main loop in run_and_get().
+        self._window.close()
 
 
 def _slugify(name: str) -> str:

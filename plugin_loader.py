@@ -111,13 +111,12 @@ def _install_all_icons() -> None:
     # Tell the running GTK process about our icon dir AND refresh the cache.
     # Without this, GTK has already scanned its theme dirs before we copied,
     # and falls back to the "image-missing" icon for our linuxpop-* names.
+    # (GTK 4 re-checks its theme directories on its own; adding the search
+    # path is all that's needed in-process.)
     try:
-        from gi.repository import Gtk
-
-        theme = Gtk.IconTheme.get_default()
-        if theme is not None:
-            theme.append_search_path(str(ICONS_DIR))
-            theme.rescan_if_needed()
+        theme = _icon_theme()
+        if theme is not None and str(ICONS_DIR) not in (theme.get_search_path() or []):
+            theme.add_search_path(str(ICONS_DIR))
     except Exception as exc:  # noqa: BLE001
         print(f"[plugin_loader] could not refresh icon theme: {exc}")
 
@@ -127,7 +126,7 @@ def _install_all_icons() -> None:
         # 3-6 seconds on machines with large icon dirs - blocking the GTK
         # main thread during startup. Detach to a daemon thread; the
         # in-process icon theme has already been refreshed via the
-        # rescan_if_needed() call above, so the daemon doesn't need this
+        # search-path update above, so the daemon doesn't need this
         # to finish to function.
         import subprocess
         import threading as _threading
@@ -160,6 +159,19 @@ def _install_all_icons() -> None:
     _icon_sync_cache["done"] = True  # type: ignore[assignment]
 
 
+def _icon_theme():
+    """The GTK 4 icon theme for the default display, or None when GTK isn't
+    loaded / has no display (e.g. tests, --doctor)."""
+    import sys
+
+    if "gi.repository.Gtk" not in sys.modules:
+        return None
+    from gi.repository import Gdk, Gtk
+
+    display = Gdk.Display.get_default()
+    return Gtk.IconTheme.get_for_display(display) if display is not None else None
+
+
 def _sync_user_icons() -> None:
     user_icons_dir = Path.home() / ".config/linuxpop/icons"
     user_icons_dir.mkdir(parents=True, exist_ok=True)
@@ -173,14 +185,8 @@ def _sync_user_icons() -> None:
             except OSError as exc:
                 print(f"[plugin_loader] user icon copy failed for {src.name}: {exc}")
     if user_copied:
-        try:
-            from gi.repository import Gtk
-
-            theme = Gtk.IconTheme.get_default()
-            if theme is not None:
-                theme.rescan_if_needed()
-        except Exception:
-            pass
+        # GTK 4's icon theme notices the new hicolor files on its own
+        # (no rescan_if_needed() any more).
         print(f"[plugin_loader] synced user icons from {user_icons_dir}")
 
 

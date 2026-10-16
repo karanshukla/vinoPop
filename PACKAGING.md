@@ -37,7 +37,7 @@ What still needs human action before the first Flathub PR:
 - [ ] Install `flatpak-builder`: `sudo apt install flatpak-builder`
       (only `flatpak` is currently installed on this machine).
 - [ ] Install the GNOME runtime + SDK:
-      `flatpak install flathub org.gnome.Platform//46 org.gnome.Sdk//46`
+      `flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50`
 - [ ] Build the Flatpak end-to-end:
       `flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.GaimsDevSoftware.LinuxPop.yml`
       and smoke-test: tray icon appears, hotkey works, popup appears on
@@ -52,7 +52,7 @@ What still needs human action before the first Flathub PR:
 
 ```sh
 sudo apt install flatpak flatpak-builder appstream-util
-flatpak install flathub org.gnome.Platform//46 org.gnome.Sdk//46
+flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50
 ```
 
 ### 2. Local build
@@ -124,9 +124,9 @@ pkgdesc="Floating popup of context-aware actions for selected text"
 arch=('any')
 url="https://github.com/GaimsDevSoftware/linuxpop"
 license=('MIT')
-depends=('python' 'gtk3' 'libhandy' 'libayatana-appindicator'
+depends=('python' 'python-gobject' 'gtk4' 'libadwaita'
          'python-xlib' 'xdotool' 'xclip' 'wmctrl')
-optdepends=('gtk-layer-shell: native popup placement on Wayland/KDE'
+optdepends=('gtk4-layer-shell: native popup placement on Wayland/KDE'
             'wl-clipboard: selection capture on Wayland'
             'ydotool: key injection (paste) on Wayland/KDE'
             'at-spi2-core: anchor popup to the selected-text rectangle'
@@ -161,16 +161,18 @@ above install to the same paths under `$pkgdir`. Build with
 LinuxPop runs on **both X11 and KDE Plasma 6 / Wayland**. The codebase
 uses a `platform_backend/` package that selects an X11 backend
 (`xdotool`/`xclip`/python-xlib, raw root pointer queries, XGrabKey) or a
-native Wayland/KDE backend (`wl-clipboard`, `gtk-layer-shell` popup
+native Wayland/KDE backend (`wl-clipboard`, `gtk4-layer-shell` popup
 placement, KWin scripting for cursor position + active window,
 KGlobalAccel for global hotkeys, `ydotool` for key injection) at runtime.
-Other Wayland compositors (GNOME, wlroots) fall back to the X11 path under
-XWayland. See `docs/FEDORA-KDE.md`.
+GNOME's mutter has no layer-shell, so on GNOME vinoPop runs on XWayland
+automatically; on KDE/wlroots it uses `gtk4-layer-shell` when installed and
+XWayland otherwise. See `docs/FEDORA-KDE.md`.
 
 Packaging implication: a fully self-contained Flatpak must bundle the
-Wayland tools too (`wl-clipboard`, `ydotool`, the `gtk-layer-shell`
-typelib) since none ship in GNOME Platform 46 - see the TODO in the
-Flatpak manifest. Native packages (`.deb`, AUR) should list them as
+Wayland tools too (`wl-clipboard`, `ydotool`, and eventually the
+`gtk4-layer-shell` typelib) since none ship in the GNOME Platform - see the
+commented-out module in the Flatpak manifest. GTK 4 and libadwaita come from
+the GNOME runtime itself. Native packages (`.deb`, AUR) should list them as
 runtime/optional deps (see the PKGBUILD below).
 
 ## What's intentionally not supported

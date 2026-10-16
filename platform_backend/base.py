@@ -8,7 +8,7 @@ keystrokes, positioning the popup - goes through a `PlatformBackend`.
 Two concrete backends:
   - `x11.X11Backend`        - the original behaviour (xclip / Xlib / xdotool)
   - `wayland_kde.WaylandKdeBackend` - KDE Plasma 6 / Wayland (wl-clipboard /
-    KWin cursorPos over DBus / gtk-layer-shell / wtype / KGlobalAccel)
+    KWin cursorPos over DBus / gtk4-layer-shell / wtype / KGlobalAccel)
 
 `platform_backend.get_backend()` picks one at startup (see __init__.detect).
 The rest of the app talks only to the returned object and never imports Xlib /
@@ -163,11 +163,22 @@ class PlatformBackend(abc.ABC):
         """A global Ctrl+double-click watcher, or None if unsupported."""
 
     # ---- popup positioning ----------------------------------------------
+    # GTK 4 dropped Gtk.Window.move() / type hints / keep-above, so floating
+    # windows (the popup bar, AI bubble, ...) are placed only through these
+    # two calls. X11 (incl. XWayland): override-redirect + XMoveWindow via
+    # python-xlib. Wayland with wlr-layer-shell: gtk4-layer-shell margins.
     @abc.abstractmethod
+    def prepare_popup_window(self, win) -> None:
+        """Prepare a floating Gtk.Window for this backend. Called once, before
+        the window is first realized/presented (X11: override-redirect on
+        realize; Wayland: gtk4-layer-shell init)."""
+
     def init_popup_window(self, win) -> None:
-        """Prepare the popup GtkWindow for this backend. Called once, before
-        the window is first shown (X11: no-op; Wayland: layer-shell init)."""
+        """Old name of prepare_popup_window(), kept for callers that predate
+        the GTK 4 port."""
+        self.prepare_popup_window(win)
 
     @abc.abstractmethod
     def move_popup_window(self, win, x: int, y: int) -> None:
-        """Move the popup to logical coords (x, y)."""
+        """Move the popup to logical coords (x, y). May be called before the
+        window is realized; the position is then applied on realize."""

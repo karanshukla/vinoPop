@@ -12,13 +12,14 @@ BuildArch:      noarch
 
 Requires:       python3
 Requires:       python3-gobject
-Requires:       gtk3
-Requires:       libayatana-appindicator-gtk3
+Requires:       gtk4
+Requires:       libadwaita
 Requires:       python3-xlib
 Requires:       xdotool
 Requires:       xclip
 Requires:       xdg-utils
 # Optional features - present on most desktops, pulled in when available:
+Recommends:     gtk4-layer-shell
 Recommends:     wl-clipboard
 Recommends:     ydotool
 Recommends:     qrencode

@@ -13,9 +13,9 @@ from collections.abc import Callable
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 try:
     from Xlib import XK, X  # noqa: E402
@@ -29,8 +29,13 @@ from classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
 
 _CSS = b"""
+/* The window itself is invisible; only the rounded bar paints. GTK 4 needs
+ * no RGBA visual for this - a transparent window background is enough. */
 window.linuxpop-popup {
+    background: none;
     background-color: rgba(0, 0, 0, 0);
+    box-shadow: none;
+    border: none;
 }
 
 box.linuxpop-bar {
@@ -46,6 +51,7 @@ box.linuxpop-bar {
 button.linuxpop-action {
     background: transparent;
     border: none;
+    box-shadow: none;
     border-radius: __BTN_RADIUS__px;
     padding: __PAD_V__px __PAD_H__px;
     margin: 0;
@@ -86,20 +92,53 @@ button.linuxpop-overflow:hover {
 """
 
 
-def _shift_held_in_current_event() -> bool:
-    """Return True if Shift was held when the GTK event currently being
-    dispatched was generated. Read inside a 'clicked' callback to know
-    whether the user shift-clicked the button. Falls back to False if
-    GTK didn't surface an event state (rare - happens for
-    programmatically-fired clicks).
-    """
+def _monitor_for_point(display, x: float, y: float, is_logical: bool = True):
+    """The Gdk.Monitor containing (x, y), or the first monitor. GTK 4 has no
+    get_monitor_at_point(); monitor geometry is logical, so physical X11 root
+    coords are scaled down by each monitor's own factor before the test."""
     try:
-        ok, state = Gtk.get_current_event_state()
+        monitors = display.get_monitors()
+        first = None
+        for i in range(monitors.get_n_items()):
+            m = monitors.get_item(i)
+            if first is None:
+                first = m
+            g = m.get_geometry()
+            s = 1 if is_logical else max(1, m.get_scale_factor())
+            lx, ly = x / s, y / s
+            if g.x <= lx < g.x + g.width and g.y <= ly < g.y + g.height:
+                return m
+        return first
     except Exception:
-        return False
-    if not ok:
-        return False
-    return bool(state & Gdk.ModifierType.SHIFT_MASK)
+        return None
+
+
+def _texture_from_cairo(surf):
+    """Wrap a cairo ARGB32 ImageSurface as a Gdk.Texture (GTK 4 dropped
+    Gtk.Image.new_from_surface)."""
+    surf.flush()
+    return Gdk.MemoryTexture.new(
+        surf.get_width(),
+        surf.get_height(),
+        Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED,
+        GLib.Bytes.new(bytes(surf.get_data())),
+        surf.get_stride(),
+    )
+
+
+def _icon_file(icon_name: str, icon_px: int, scale: int) -> str | None:
+    """On-disk path of a themed icon, or None (missing / resource-only)."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return None
+    theme = Gtk.IconTheme.get_for_display(display)
+    if not theme.has_icon(icon_name):
+        return None
+    paintable = theme.lookup_icon(
+        icon_name, None, icon_px, scale, Gtk.TextDirection.NONE, Gtk.IconLookupFlags(0)
+    )
+    f = paintable.get_file() if paintable is not None else None
+    return f.get_path() if f is not None else None
 
 
 _BUTTON_SIZE_MIN = 16  # symbolic icons go muddy below this on every screen
@@ -176,20 +215,26 @@ def _install_css() -> None:
     button-size setting. Safe to call repeatedly; the old provider is
     removed before the new one is added."""
     global _popup_css_provider
-    screen = Gdk.Screen.get_default()
-    if screen is None:
+    display = Gdk.Display.get_default()
+    if display is None:
         return
     if _popup_css_provider is not None:
         try:
-            Gtk.StyleContext.remove_provider_for_screen(screen, _popup_css_provider)
+            Gtk.StyleContext.remove_provider_for_display(display, _popup_css_provider)
         except Exception:
             pass
     provider = Gtk.CssProvider()
-    provider.load_from_data(_build_css(_resolve_button_size()))
-    Gtk.StyleContext.add_provider_for_screen(
-        screen,
+    css = _build_css(_resolve_button_size())
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(css.decode("utf-8"))
+    else:
+        provider.load_from_data(css, -1)
+    # +1 over APPLICATION so the bar wins over theme.py's own
+    # APPLICATION-priority accents (both sit above libadwaita's stylesheet).
+    Gtk.StyleContext.add_provider_for_display(
+        display,
         provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
     )
     _popup_css_provider = provider
 
@@ -228,8 +273,6 @@ class _ClickWatcher:
         import os
         import select as _sel
         import struct
-
-        from gi.repository import GLib
 
         EV_KEY = 0x01
         BTNS = {0x110, 0x111, 0x112}  # BTN_LEFT / RIGHT / MIDDLE
@@ -284,41 +327,28 @@ class PopupWindow:
         self._on_open_plugin_order = on_open_plugin_order
         _install_css()
 
-        # TOPLEVEL (not POPUP) so the WM actually stacks us above other
-        # LinuxPop dialogs like Settings / Plugin Manager. Override-
-        # redirect POPUP windows bypass WM stacking, which on Cinnamon
-        # caused the popup to silently end up *under* an already-visible
-        # Settings or Plugin Manager window -- clicks went to the wrong
-        # window. TOPLEVEL + decorated=False + POPUP_MENU type-hint
-        # gives us a borderless on-top window the WM handles correctly.
-        self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        self.win.set_decorated(False)
-        self.win.set_resizable(False)
-        self.win.set_keep_above(True)
-        self.win.set_skip_taskbar_hint(True)
-        self.win.set_skip_pager_hint(True)
-        # accept_focus=False prevents the popup from stealing keyboard
-        # focus from the text-source app (so paste still goes there).
+        # GTK 4 has no window types, type hints, keep-above or accept-focus,
+        # so a plain undecorated Gtk.Window is handed to the platform backend,
+        # which owns stacking/placement/focus: on X11 it becomes an
+        # override-redirect window (never focused, so paste still goes to the
+        # text-source app; re-raised on every move so it can't end up under
+        # an open Settings / Plugin Manager window, the old Cinnamon bug the
+        # GTK 3 TOPLEVEL + POPUP_MENU hint worked around); on Wayland a
+        # gtk4-layer-shell OVERLAY surface with keyboard mode NONE.
         # Esc-to-dismiss is handled via the Xlib keymap poll in _tick(),
         # not via GTK key events, so we don't lose that flow.
-        self.win.set_accept_focus(False)
-        self.win.set_focus_on_map(False)
-        self.win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
-        self.win.get_style_context().add_class("linuxpop-popup")
+        self.win = Gtk.Window()
+        self.win.set_decorated(False)
+        self.win.set_resizable(False)
+        self.win.set_title("LinuxPop")
+        self.win.add_css_class("linuxpop-popup")
 
         # Let the platform backend prepare the window before it's ever shown
-        # (X11: no-op; Wayland/KDE: gtk-layer-shell init for free positioning).
+        # (X11: override-redirect on realize; Wayland/KDE: gtk4-layer-shell).
         try:
-            get_backend().init_popup_window(self.win)
+            get_backend().prepare_popup_window(self.win)
         except Exception as exc:  # noqa: BLE001
             print(f"[popup] backend window init failed: {exc}")
-
-        # Transparent background so the rounded corners of the inner bar show through
-        screen = self.win.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None and screen.is_composited():
-            self.win.set_visual(visual)
-        self.win.set_app_paintable(True)
 
         # Outer container so the rounded HBox has breathing room from window edges
         self._outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -326,39 +356,49 @@ class PopupWindow:
         self._outer.set_margin_bottom(1)
         self._outer.set_margin_start(1)
         self._outer.set_margin_end(1)
-        self.win.add(self._outer)
+        self.win.set_child(self._outer)
 
         # _bar is the rounded pill background. It stacks one or two
         # rows vertically depending on how many actions matched.
         self._bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self._bar.get_style_context().add_class("linuxpop-bar")
-        self._outer.pack_start(self._bar, True, True, 0)
+        self._bar.add_css_class("linuxpop-bar")
+        self._bar.set_hexpand(True)
+        self._outer.append(self._bar)
         self._row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self._bar.pack_start(self._row1, False, False, 0)
-        self._bar.pack_start(self._row2, False, False, 0)
+        self._bar.append(self._row1)
+        self._bar.append(self._row2)
         # Row 2 stays out of the layout entirely until needed; without
         # this it would leave a faint baseline gap below row 1 even when
         # empty.
-        self._row2.set_no_show_all(True)
+        self._row2.set_visible(False)
 
-        # Track enter/leave + button-press for outside-click detection
-        ev = self.win.get_events()
-        self.win.set_events(
-            ev
-            | Gdk.EventMask.ENTER_NOTIFY_MASK
-            | Gdk.EventMask.LEAVE_NOTIFY_MASK
-            | Gdk.EventMask.BUTTON_PRESS_MASK
-            | Gdk.EventMask.KEY_PRESS_MASK
-        )
-
-        self.win.connect("focus-out-event", self._on_focus_out)
-        self.win.connect("key-press-event", self._on_key_press)
-        self.win.connect("button-press-event", self._on_button_press)
-        self.win.connect("enter-notify-event", self._on_enter)
-        self.win.connect("leave-notify-event", self._on_leave)
+        # Enter/leave + key + click tracking via GTK 4 event controllers.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", self._on_enter)
+        motion.connect("leave", self._on_leave)
+        self.win.add_controller(motion)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_press)
+        self.win.add_controller(keys)
+        # Capture-phase click gesture: sees every press before the button
+        # under it, records the modifier state (for Shift-click = copy) and
+        # handles presses that land outside the bar. Never claims, so the
+        # buttons still get their clicks.
+        click = Gtk.GestureClick()
+        click.set_button(0)
+        click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        click.connect("pressed", self._on_button_press)
+        self.win.add_controller(click)
+        self._last_press_state = Gdk.ModifierType(0)
+        # Focus loss (GTK 3's focus-out-event). The backend keeps the popup
+        # unfocused, so this only fires if a WM focused it anyway.
+        self.win.connect("notify::is-active", self._on_active_changed)
 
         self._current_text: str = ""
+        # Raw (backend-space) coords the popup is anchored to; used to pick
+        # the monitor for row sizing / icon scale before the window maps.
+        self._anchor: tuple[int, int] = (0, 0)
         self._hide_timeout_id: int | None = None
         self._tracker_id: int | None = None
         # Absolute ceiling on time the popup will linger if the user
@@ -397,17 +437,17 @@ class PopupWindow:
         self._pointer_in_popup = False
 
     def _clear_buttons(self) -> None:
-        # destroy() drops the GTK refcount to 0, which releases the button's
-        # signal-handler GClosures and its child image. remove() alone would
-        # rely on Python GC noticing the orphan; this is the belt-and-
-        # suspenders form.
+        # remove() drops the box's (only) GTK reference, which releases the
+        # button's signal-handler GClosures and its child image. GTK 4 has no
+        # Gtk.Widget.destroy(); unparenting is the whole teardown.
         for row in (self._row1, self._row2):
-            for child in list(row.get_children()):
+            child = row.get_first_child()
+            while child is not None:
+                nxt = child.get_next_sibling()
                 row.remove(child)
-                child.destroy()
+                child = nxt
         # Collapse row 2 until something gets added to it.
-        self._row2.hide()
-        self._row2.set_no_show_all(True)
+        self._row2.set_visible(False)
 
     def _add_button(
         self,
@@ -418,17 +458,16 @@ class PopupWindow:
     ) -> None:
         target = row if row is not None else self._row1
         btn = Gtk.Button()
-        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.add_css_class("flat")
+        btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
-        btn.get_style_context().add_class("linuxpop-action")
-        image = self._make_icon_image(icon_name)
-        btn.set_image(image)
-        btn.set_always_show_image(True)
+        btn.add_css_class("linuxpop-action")
+        btn.set_child(self._make_icon_image(icon_name))
         btn.connect("clicked", on_click)
-        target.pack_start(btn, False, False, 0)
+        target.append(btn)
         if target is self._row2:
             # Once anything lands in row 2, allow it to show.
-            self._row2.set_no_show_all(False)
+            self._row2.set_visible(True)
 
     def _force_all_held(self) -> bool:
         """True if the popup_force_all_modifier setting names a modifier
@@ -467,7 +506,7 @@ class PopupWindow:
             return False
         return bool(mask & bit)
 
-    def _max_per_row(self) -> int:
+    def _max_per_row(self, anchor: tuple[int, int] | None = None) -> int:
         """How many buttons fit in a single row before we wrap.
 
         Uses logical pixels and the user's chosen button size, capped by
@@ -479,11 +518,15 @@ class PopupWindow:
         # (kept in sync with linuxpop.css). Slight overestimate so we
         # don't push a button half-off the line by one pixel.
         approx_button_width = size + 14
+        # GTK 4 can't query the global pointer, so size against the monitor
+        # under the popup's anchor (the selection / pointer coords we got).
+        if anchor is None:
+            anchor = self._anchor
         try:
-            screen = self.win.get_screen()
-            display = screen.get_display()
-            cx, cy, _ = display.get_default_seat().get_pointer().get_position()
-            monitor = display.get_monitor_at_point(cx, cy)
+            display = self.win.get_display()
+            monitor = _monitor_for_point(
+                display, anchor[0], anchor[1], get_backend().pointer_is_logical
+            )
             monitor_w = monitor.get_geometry().width if monitor else 1920
         except Exception:
             monitor_w = 1920
@@ -497,11 +540,13 @@ class PopupWindow:
         try:
             display = Gdk.Display.get_default()
             monitor = None
-            win = self.win.get_window() if self.win is not None else None
-            if win is not None:
-                monitor = display.get_monitor_at_window(win)
+            surface = self.win.get_surface() if self.win is not None else None
+            if surface is not None and self.win.get_mapped():
+                monitor = display.get_monitor_at_surface(surface)
             if monitor is None:
-                monitor = display.get_primary_monitor() or display.get_monitor(0)
+                monitor = _monitor_for_point(
+                    display, self._anchor[0], self._anchor[1], get_backend().pointer_is_logical
+                )
             return monitor.get_scale_factor() if monitor else 1
         except Exception:
             return 1
@@ -515,12 +560,14 @@ class PopupWindow:
             import math
 
             import cairo
+            from gi.repository import GdkPixbuf
 
             scale = self._device_scale()
             dev = max(12, icon_px * scale)
-            pb = Gtk.IconTheme.get_default().load_icon(
-                icon_name, dev, Gtk.IconLookupFlags.FORCE_SIZE
-            )
+            path = _icon_file(icon_name, icon_px, scale)
+            if not path:
+                return None
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, dev, dev, False)
             if pb is None:
                 return None
             surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, dev, dev)
@@ -541,8 +588,11 @@ class PopupWindow:
             cr.set_line_width(lw)
             cr.set_source_rgba(0, 0, 0, 0.6)
             cr.stroke()
-            surf.set_device_scale(scale, scale)
-            return Gtk.Image.new_from_surface(surf)
+            # Texture holds device pixels; pixel_size is logical, so GTK draws
+            # it 1:1 on a scale-`scale` monitor (crisp on HiDPI).
+            image = Gtk.Image.new_from_paintable(_texture_from_cairo(surf))
+            image.set_pixel_size(icon_px)
+            return image
         except Exception:
             return None
 
@@ -572,14 +622,9 @@ class PopupWindow:
         them ourselves at load time instead. Returns None on any failure so the
         caller can fall back to the plain icon-name path."""
         try:
-            from gi.repository import GdkPixbuf, Gio, GLib
+            from gi.repository import GdkPixbuf, Gio
 
-            info = Gtk.IconTheme.get_default().lookup_icon(
-                icon_name, icon_px, Gtk.IconLookupFlags.FORCE_SIZE
-            )
-            if info is None:
-                return None
-            path = info.get_filename()
+            path = _icon_file(icon_name, icon_px, 1)
             if not path or not path.endswith(".svg"):
                 return None
             with open(path, "rb") as fh:
@@ -605,9 +650,9 @@ class PopupWindow:
             pb = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream, dev, dev, True, None)
             if pb is None:
                 return None
-            surf = Gdk.cairo_surface_create_from_pixbuf(pb, 1, None)
-            surf.set_device_scale(scale, scale)
-            return Gtk.Image.new_from_surface(surf)
+            image = Gtk.Image.new_from_paintable(Gdk.Texture.new_for_pixbuf(pb))
+            image.set_pixel_size(icon_px)
+            return image
         except Exception:
             return None
 
@@ -638,7 +683,7 @@ class PopupWindow:
             img = self._glyph_image(icon_name, icon_px)
             if img is not None:
                 return img
-        image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        image = Gtk.Image.new_from_icon_name(icon_name)
         image.set_pixel_size(icon_px)
         return image
 
@@ -652,6 +697,7 @@ class PopupWindow:
         rect: tuple[int, int, int, int] | None = None,
     ) -> None:
         self._current_text = text
+        self._anchor = (int(x), int(y))
         self._clear_buttons()
 
         # Force-all escape hatch: when the user is holding the configured
@@ -727,7 +773,7 @@ class PopupWindow:
                 # actions.replace_selection() for an in-place
                 # transform. Plugins that don't paste are
                 # unaffected by the flag.
-                shift_held = _shift_held_in_current_event()
+                shift_held = self._shift_held()
 
                 def _worker():
                     try:
@@ -795,15 +841,16 @@ class PopupWindow:
                     print(f"[popup] open plugin order failed: {exc}")
 
         btn = Gtk.Button(label=f"+{hidden}")
-        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.add_css_class("flat")
+        btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
-        btn.get_style_context().add_class("linuxpop-action")
-        btn.get_style_context().add_class("linuxpop-overflow")
+        btn.add_css_class("linuxpop-action")
+        btn.add_css_class("linuxpop-overflow")
         btn.connect("clicked", _on_click)
         target = row if row is not None else self._row1
-        target.pack_start(btn, False, False, 0)
+        target.append(btn)
         if target is self._row2:
-            self._row2.set_no_show_all(False)
+            self._row2.set_visible(True)
 
     # ---- overflow layout --------------------------------------------------
     def _overflow_mode(self) -> str:
@@ -856,17 +903,17 @@ class PopupWindow:
         actions that didn't fit on the first line ('expand' overflow mode)."""
         count = len(rest) + hidden_count
         btn = Gtk.Button()
-        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.add_css_class("flat")
+        btn.set_focus_on_click(False)
         btn.set_tooltip_text(f"Show {count} more action{'s' if count != 1 else ''}")
-        btn.get_style_context().add_class("linuxpop-action")
-        btn.get_style_context().add_class("linuxpop-overflow")
-        img = Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.MENU)
+        btn.add_css_class("linuxpop-action")
+        btn.add_css_class("linuxpop-overflow")
+        img = Gtk.Image.new_from_icon_name("pan-down-symbolic")
         img.set_pixel_size(max(12, int(_resolve_button_size() * 0.6)))
-        btn.set_image(img)
-        btn.set_always_show_image(True)
+        btn.set_child(img)
 
         def _expand(_b):
-            _b.destroy()
+            self._row1.remove(_b)
             per_row = self._max_per_row()
             shown2 = min(len(rest), per_row)
             for icon, tip, h in rest[:shown2]:
@@ -874,15 +921,14 @@ class PopupWindow:
             extra = (len(rest) - shown2) + hidden_count
             if extra > 0:
                 self._add_overflow_chip(extra, max_btns, row=self._row2)
-            self._row2.set_no_show_all(False)
-            self._row2.show_all()
+            self._row2.set_visible(True)
             try:
                 self.win.queue_resize()
             except Exception:
                 pass
 
         btn.connect("clicked", _expand)
-        self._row1.pack_start(btn, False, False, 0)
+        self._row1.append(btn)
 
     def show_actions(
         self,
@@ -900,6 +946,7 @@ class PopupWindow:
         on a worker thread so a slow handler can't freeze the GTK loop.
         """
         self._current_text = ""
+        self._anchor = (int(x), int(y))
         self._clear_buttons()
         if not items:
             return
@@ -944,16 +991,13 @@ class PopupWindow:
         (dropping below the bottom edge when there's no room above),
         instead of being placed relative to the mouse pointer. Falls back
         to the (x, y) pointer behaviour when `rect` is None."""
-        self._bar.show_all()
-        self._outer.show_all()
-
-        # Map the window off-screen first so GTK performs a full layout pass
-        # and get_preferred_size() returns the real size. We never return to
-        # the GLib main loop before setting the real position, so the
-        # compositor never renders a frame at (-10000, -10000) - the first
-        # visible frame is already at the correct position.
+        # Park the window off-screen and realize it so the backend has its
+        # surface (X11: override-redirect set) and GTK can do a full layout
+        # pass: get_preferred_size() then returns the real size. Nothing is
+        # mapped until the real position is set below, so the compositor
+        # never renders a frame at (-10000, -10000) - the first visible
+        # frame is already at the correct position.
         get_backend().move_popup_window(self.win, -10000, -10000)
-        self.win.show_all()
         self.win.realize()
 
         _, natural = self.win.get_preferred_size()
@@ -966,8 +1010,7 @@ class PopupWindow:
         # (same space as the monitor geometry), so don't divide by scale -
         # doing so would place the popup at half the real position.
         is_logical = get_backend().pointer_is_logical
-        screen = self.win.get_screen()
-        display = screen.get_display()
+        display = self.win.get_display()
 
         # Anchor point: the selection centre when we have its rect,
         # otherwise the mouse pointer.
@@ -976,7 +1019,7 @@ class PopupWindow:
             anchor_x, anchor_y = rx + rw / 2, ry + rh / 2
         else:
             anchor_x, anchor_y = x, y
-        monitor = display.get_monitor_at_point(int(anchor_x), int(anchor_y))
+        monitor = _monitor_for_point(display, anchor_x, anchor_y, is_logical)
         scale = monitor.get_scale_factor() if monitor else 1
 
         def _lg(v: float) -> float:
@@ -1025,12 +1068,15 @@ class PopupWindow:
                 target_y = below_y
             target_y = min(target_y, geom.y + geom.height - h - 4)
 
-        # Move to the real position. The window is already mapped (off-screen);
-        # this updates the layer-shell margins. The compositor applies the new
-        # position on the next Wayland commit, which happens when the main loop
-        # returns - so the window appears directly at the correct spot.
+        # Move to the real position, then map. X11: XMoveWindow on the
+        # still-unmapped override-redirect window; Wayland: layer-shell
+        # margins, applied with the first commit - so the window appears
+        # directly at the correct spot. set_visible() rather than present():
+        # present() also asks for keyboard focus, which the popup must not
+        # take. Already visible (re-shown for a new selection): the move
+        # alone repositions it and GTK resizes it to the new buttons.
         get_backend().move_popup_window(self.win, target_x, target_y)
-        self.win.present()
+        self.win.set_visible(True)
         # Fresh show: the pointer is at the selection, not on the popup yet.
         # Reset so a stale True from a prior show can't suppress dismissal.
         self._pointer_in_popup = False
@@ -1075,14 +1121,12 @@ class PopupWindow:
         self._cancel_hide_timeout()
         self._cancel_initial_hide()
         self._stop_tracking()
-        self.win.hide()
+        self.win.set_visible(False)
 
     def _arm_initial_hide(self) -> None:
         self._cancel_initial_hide()
         if self._initial_grace_ms <= 0:
             return
-        from gi.repository import GLib
-
         self._initial_hide_id = GLib.timeout_add(
             self._initial_grace_ms,
             self._on_initial_timeout,
@@ -1090,8 +1134,6 @@ class PopupWindow:
 
     def _cancel_initial_hide(self) -> None:
         if self._initial_hide_id is not None:
-            from gi.repository import GLib
-
             GLib.source_remove(self._initial_hide_id)
             self._initial_hide_id = None
 
@@ -1109,14 +1151,10 @@ class PopupWindow:
 
     def _arm_hide_timeout(self, ms: int) -> None:
         self._cancel_hide_timeout()
-        from gi.repository import GLib
-
         self._hide_timeout_id = GLib.timeout_add(ms, self._on_hide_timeout)
 
     def _cancel_hide_timeout(self) -> None:
         if self._hide_timeout_id is not None:
-            from gi.repository import GLib
-
             GLib.source_remove(self._hide_timeout_id)
             self._hide_timeout_id = None
 
@@ -1131,8 +1169,6 @@ class PopupWindow:
 
     def _start_tracking(self) -> None:
         self._stop_tracking()
-        from gi.repository import GLib
-
         self._tracker_id = GLib.timeout_add(150, self._tick)
         # Wayland has no Xlib button poll, so watch the mouse via /dev/input to
         # dismiss the popup the moment the user clicks anywhere outside it.
@@ -1142,8 +1178,6 @@ class PopupWindow:
 
     def _stop_tracking(self) -> None:
         if self._tracker_id is not None:
-            from gi.repository import GLib
-
             GLib.source_remove(self._tracker_id)
             self._tracker_id = None
         cw = getattr(self, "_click_watcher", None)
@@ -1174,11 +1208,9 @@ class PopupWindow:
             self._tracker_id = None
             return False
 
-        # Logical-pixel pointer position via GDK seat (handles HiDPI correctly)
-        display = self.win.get_display()
-        seat = display.get_default_seat()
-        pointer = seat.get_pointer()
-        _screen, px, py = pointer.get_position()
+        # GTK 4 can't query the global pointer; on X11 it comes from the
+        # Xlib poll below (physical root coords -> logical via the scale).
+        px = py = None
 
         # Poll physical button state + Esc via Xlib (works even when GTK seat-grab
         # is denied by ibus/cinnamon). Edge-detect 0→1 transitions.
@@ -1190,6 +1222,7 @@ class PopupWindow:
                 phys_x, phys_y = data.root_x, data.root_y
                 click_lx = phys_x / self._scale
                 click_ly = phys_y / self._scale
+                px, py = click_lx, click_ly
                 if pressed and not self._prev_button_pressed:
                     if not self._point_in_popup(click_lx, click_ly):
                         self._prev_button_pressed = pressed
@@ -1215,7 +1248,7 @@ class PopupWindow:
         # the popup while the cursor is right on it). Persistence there is
         # driven entirely by enter/leave (_pointer_in_popup + _on_leave's
         # grace), so skip this block.
-        if self._xdpy is None:
+        if self._xdpy is None or px is None:
             return True
         in_safe = self._in_safe_zone(px, py)
         if in_safe:
@@ -1262,23 +1295,36 @@ class PopupWindow:
         hi_y = max(oy, cy) + pad
         return lo_x <= px <= hi_x and lo_y <= py <= hi_y
 
-    def _on_focus_out(self, *_):
-        self.hide()
+    def _shift_held(self) -> bool:
+        """True if Shift was held for the press that triggered the current
+        'clicked'. GTK 4 has no Gtk.get_current_event_state(); the capture-
+        phase gesture stores the press's modifier state, and on X11 the
+        live pointer mask is checked as well (covers synthetic clicks)."""
+        if self._last_press_state & Gdk.ModifierType.SHIFT_MASK:
+            return True
+        if self._xdpy is not None:
+            try:
+                return bool(self._xdpy.screen().root.query_pointer().mask & X.ShiftMask)
+            except Exception:
+                return False
         return False
 
-    def _on_enter(self, _widget, event):
-        if event.detail == Gdk.NotifyType.INFERIOR:
-            return False
+    def _on_active_changed(self, win, _pspec) -> None:
+        # Hide when the popup loses focus (it normally never has it).
+        if not win.is_active() and getattr(self, "_was_active", False):
+            self.hide()
+        self._was_active = win.is_active()
+
+    def _on_enter(self, _controller, _x, _y) -> None:
+        # The motion controller only reports crossings of the window as a
+        # whole (GTK 3 needed the NotifyType.INFERIOR filter for that).
         # User reached the popup - it must not auto-hide while they're on
         # it. Cancel BOTH the initial-grace and any leave-grace countdown.
         self._pointer_in_popup = True
         self._cancel_initial_hide()
         self._cancel_hide_timeout()
-        return False
 
-    def _on_leave(self, _widget, event):
-        if event.detail == Gdk.NotifyType.INFERIOR:
-            return False
+    def _on_leave(self, _controller) -> None:
         self._pointer_in_popup = False
         # On X11 the tracker tick (screen-space safe-zone) governs hiding,
         # so leaving the popup alone isn't enough - the cursor may still be
@@ -1287,21 +1333,19 @@ class PopupWindow:
         # cursor that's still very near) then hides.
         if self._xdpy is None and self.win.get_visible():
             self._arm_hide_timeout(self._leave_grace_ms)
-        return False
 
-    def _on_key_press(self, _widget, event):
-        if event.keyval == Gdk.KEY_Escape:
+    def _on_key_press(self, _controller, keyval, _keycode, _state) -> bool:
+        if keyval == Gdk.KEY_Escape:
             self.hide()
             return True
         return False
 
-    def _on_button_press(self, _widget, event):
-        # With seat-grab + owner_events, clicks outside the popup come here.
-        # Clicks on our own buttons go through normal child dispatch.
-        win_w = self.win.get_allocated_width()
-        win_h = self.win.get_allocated_height()
-        # event.x/y are relative to the popup window's origin
-        if event.x < 0 or event.y < 0 or event.x > win_w or event.y > win_h:
+    def _on_button_press(self, gesture, _n_press, x, y) -> None:
+        self._last_press_state = gesture.get_current_event_state()
+        # Clicks on our own buttons go through normal child dispatch; a
+        # press reported outside the window's bounds dismisses.
+        win_w = self.win.get_width()
+        win_h = self.win.get_height()
+        # x/y are relative to the popup window's origin
+        if x < 0 or y < 0 or x > win_w or y > win_h:
             self.hide()
-            return True
-        return False

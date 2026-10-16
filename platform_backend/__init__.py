@@ -4,6 +4,10 @@
   - KDE Plasma Wayland  -> WaylandKdeBackend
   - everything else      -> X11Backend (the original behaviour)
 
+main.py may set LINUXPOP_BACKEND=x11 (and GDK_BACKEND=x11) before this runs:
+on mutter-based Wayland desktops, which have no wlr-layer-shell, the whole
+process runs on XWayland.
+
 The package is named `platform_backend`, not `platform`, to avoid shadowing
 Python's stdlib `platform` module (imported by gi and others).
 """

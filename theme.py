@@ -1,169 +1,71 @@
-"""Premium theme for LinuxPop -- one CSS provider for every window.
+"""Theme for LinuxPop on GTK 4 + libadwaita -- one CSS provider for every window.
 
-The base CSS is the dark palette tuned to the LinuxPop app icon (deep
-cobalt base + blue->violet->magenta accent gradient). A light variant
-is generated at runtime by remapping the surface / text hex values
-while keeping the accent gradient intact (it reads well on both).
+libadwaita's own stylesheet is the base, so windows look native on GNOME and
+follow its light/dark handling everywhere else. install_premium_theme() maps
+the user's "dark" / "light" / "system" choice onto Adw.StyleManager's colour
+scheme (FORCE_DARK / FORCE_LIGHT / DEFAULT) and layers a small brand layer on
+top: the accent colour (cobalt blue -> royal violet -> magenta pink, from the
+app icon), the gradient on suggested-action buttons, and LinuxPop's own helper
+classes (.lp-*). Everything else - header bars, rows, entries, switches,
+popovers - is left to Adwaita.
 
-Mode resolution:
-  - "dark"   -> always dark
-  - "light"  -> always light
-  - "system" -> ask Gtk.Settings whether the user's system theme is dark
-                (gtk-application-prefer-dark-theme, or the theme-name
-                containing "dark"). Falls back to dark if uncertain.
+The floating popup bar is styled by popup.py. It keeps its fixed dark brand
+palette and uses _LIGHT_REMAP / _apply_remap() below to swap it to a light
+variant when the resolved mode is light.
 
 The installer is idempotent and hot-reloadable: calling it again with a
-different mode swaps the active provider without restarting.
+different mode swaps the colour scheme without restarting.
 """
 
 from __future__ import annotations
 
-import os
-
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
-_PREMIUM_CSS = b"""
+# Brand layer. Uses libadwaita's named colours (@window_bg_color, @card_bg_color,
+# @accent_bg_color, ...) so one stylesheet serves light and dark.
+_BRAND_CSS = """
 /* ============================================================
-   LinuxPop -- premium dark theme
-   palette:
-     base       #0e1118  (deep cobalt)
-     surface    #1c2231  (cards / list rows -- lifted for contrast)
-     elevated   #262d3f  (hover / selected)
-     border     #3a4258  (visible at a glance, not hairline)
-     text       #f0f3fa
-     muted      #b8c0d4  (higher contrast for dim labels)
+   LinuxPop brand layer over libadwaita
      accent-1   #5B7DF5  (cobalt blue)
      accent-2   #7C3AED  (royal violet)
      accent-3   #EC4899  (magenta pink)
    ============================================================ */
 
-window,
-dialog,
-.background,
-hdypreferenceswindow,
-hdypreferencespage,
-hdypreferencesgroup {
-    background-color: #0e1118;
-    color: #f0f3fa;
-}
+@define-color accent_bg_color #5B7DF5;
+@define-color accent_fg_color #ffffff;
+/* Accent used as text/foreground: a shade darker in light mode so it keeps
+   AA contrast on white (overridden for dark below). */
+@define-color accent_color #3f5fd8;
 
-/* Header bar: subtle gradient that picks up the accent palette without
-   shouting. Adds visual depth at the top of every window. */
-headerbar,
-.titlebar {
-    /* A discreet brand wash (blue -> violet -> magenta) layered over the base,
-       so every window's header reads as the same family as the onboarding. */
-    background-image: linear-gradient(120deg,
-            rgba(91, 125, 245, 0.18) 0%,
-            rgba(124, 58, 237, 0.14) 52%,
-            rgba(236, 72, 153, 0.10) 100%),
-        linear-gradient(to bottom,
-        #232a3c 0%,
-        #1a1f2e 100%);
-    background-color: #1a1f2e;
-    border-bottom: 1px solid #3a4258;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06),
-                0 1px 0 rgba(0, 0, 0, 0.35);
-    color: #f0f3fa;
-    padding: 6px 10px;
-    min-height: 38px;
-}
-
-headerbar label,
-.titlebar label {
-    color: #f0f3fa;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-}
-
-/* Typography */
-label {
-    color: #f0f3fa;
-}
-
-label.title,
-.title {
-    font-weight: 600;
-    letter-spacing: 0.005em;
-}
-
-label.subtitle,
-label.dim-label,
-.dim-label {
-    color: #b8c0d4;
-    font-size: 0.92em;
-}
-
-/* ----- libhandy boxed list (the GNOME-Settings card look) ----- */
-list.boxed-list,
-list.content {
-    background-color: #1c2231;
-    border: 1px solid #2c3346;
-    border-radius: 16px;
-    padding: 5px;
-    /* Soft, onboarding-style elevation: a faint top highlight + a gentle, wide
-       drop shadow, so cards feel lifted and clean rather than heavy. */
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset,
-                0 10px 26px rgba(0, 0, 0, 0.18);
-}
-
-list.boxed-list > row,
-list.content > row,
-hdyactionrow {
-    background-color: transparent;
-    color: #f0f3fa;
-    padding: 14px 18px;
-    border-bottom: 1px solid #262d3f;
-    transition: background-color 120ms ease;
-}
-
-/* HdyExpanderRow's CSS node is `row.expander` (NOT `hdyexpanderrow`, which
-   matched no node at all), with an inner `list` wrapping the header
-   `row.header` and a `list.nested` for sub-rows. Because the old selector
-   matched nothing, those inner nodes were never styled - so on KDE/Breeze they
-   kept a dark surface that the light-mode remap never reached, giving dark,
-   unreadable bundle cards in light mode. Style the REAL nodes with the card
-   surface (#1c2231 -> #ffffff in light) so they remap correctly in both modes. */
-row.expander,
-row.expander > box,
-row.expander > box > list,
-row.expander > box > list > row.header,
-row.expander > box > revealer,
-row.expander list.nested,
-row.expander list.nested > row {
-    background-color: #1c2231;
-    color: #f0f3fa;
-}
-
-row.expander > box > list > row.header:hover,
-row.expander list.nested > row:hover {
-    background-color: #262d3f;
-    border-radius: 10px;
-}
-
-list.boxed-list > row:last-child,
-list.content > row:last-child {
-    border-bottom: none;
-}
-
-list.boxed-list > row:hover,
-list.content > row:hover {
-    background-color: #262d3f;
-    border-radius: 10px;
-}
-
-list.boxed-list > row:selected,
-list.content > row:selected,
-list > row:selected {
-    background-image: linear-gradient(to right,
-        rgba(91, 125, 245, 0.18),
-        rgba(124, 58, 237, 0.18));
+/* Suggested action: the headline blue->violet gradient */
+button.suggested-action,
+button.suggested-action.pill {
+    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
     color: #ffffff;
-    border-radius: 10px;
+    box-shadow: 0 2px 6px rgba(91, 125, 245, 0.25);
+}
+
+button.suggested-action:hover {
+    background-image: linear-gradient(to bottom right, #6B8AF7, #8B4CF0);
+    box-shadow: 0 4px 12px rgba(91, 125, 245, 0.35);
+}
+
+button.suggested-action:active {
+    background-image: linear-gradient(to bottom right, #4A6CE3, #6929DB);
+}
+
+button.suggested-action:disabled {
+    background-image: none;
+    box-shadow: none;
+}
+
+progressbar progress {
+    background-image: linear-gradient(to right, #5B7DF5, #7C3AED);
 }
 
 /* ----- colored plugin badges (the onboarding-store look) ----- */
@@ -189,532 +91,54 @@ list > row:selected {
     text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
 }
 
-/* ----- buttons ----- */
-button {
-    background-image: linear-gradient(to bottom, #1f2433, #1a1f2c);
-    background-color: #262d3f;
-    color: #f0f3fa;
-    border: 1px solid #2c3346;
-    border-radius: 10px;
-    padding: 8px 16px;
-    font-weight: 500;
-    transition: background-color 120ms ease,
-                border-color 120ms ease,
-                box-shadow 120ms ease;
-}
-
-button:hover {
-    background-image: linear-gradient(to bottom, #262c3e, #1f2433);
-    border-color: #3a4258;
-}
-
-button:active,
-button:checked {
-    background-image: linear-gradient(to bottom, #1a1f2c, #1f2433);
-    border-color: #5B7DF5;
-}
-
-button:focus {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(91, 125, 245, 0.35);
-    border-color: #5B7DF5;
-}
-
-button:disabled {
-    color: #4a5266;
-    background-image: none;
-    background-color: #14171f;
-    border-color: #1f2433;
-}
-
-/* Suggested action: the headline blue->violet gradient */
-button.suggested-action {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
-    color: #ffffff;
-    border: none;
-    box-shadow: 0 2px 6px rgba(91, 125, 245, 0.25);
-    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
-}
-
-button.suggested-action:hover {
-    background-image: linear-gradient(to bottom right, #6B8AF7, #8B4CF0);
-    box-shadow: 0 4px 12px rgba(91, 125, 245, 0.35);
-}
-
-button.suggested-action:active {
-    background-image: linear-gradient(to bottom right, #4A6CE3, #6929DB);
-}
-
-button.destructive-action {
-    background-image: linear-gradient(to bottom right, #DC2626, #B91C1C);
-    color: #ffffff;
-    border: none;
-    box-shadow: 0 2px 6px rgba(220, 38, 38, 0.25);
-}
-
-button.destructive-action:hover {
-    background-image: linear-gradient(to bottom right, #EF4444, #DC2626);
-}
-
-button.flat,
-button.image-button {
-    background-image: none;
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
-}
-
-button.flat:hover,
-button.image-button:hover {
-    background-color: rgba(91, 125, 245, 0.12);
-    border-color: transparent;
-}
-
-/* ----- window controls (close / minimize / maximize) -----
-   These are GtkButtons living in the CSD titlebar, so the generic `button`
-   rule above turned them into dark, 16px-padded rounded pills - the X glyph
-   got lost inside, so the close button read as a blank rectangle. On KDE the
-   decoration layout puts them top-left, where they are the first thing the
-   eye lands on. Reset them to compact circular controls; give close an
-   unmistakable red treatment so its purpose is obvious at a glance. */
-.titlebutton {
-    min-width: 24px;
-    min-height: 24px;
-    padding: 0;
-    margin: 0 3px;
-    border-radius: 50%;
-    background-image: none;
-    background-color: rgba(127, 140, 170, 0.16);
-    border: 1px solid rgba(255, 255, 255, 0.10);
-    box-shadow: none;
-    color: #f0f3fa;
-    -gtk-icon-shadow: none;
-    -gtk-icon-transform: scale(0.92);
-    transition: background-color 120ms ease, box-shadow 120ms ease;
-}
-
-.titlebutton:hover {
-    background-color: rgba(127, 140, 170, 0.30);
-    border-color: rgba(255, 255, 255, 0.16);
-}
-
-.titlebutton:active {
-    background-color: rgba(127, 140, 170, 0.42);
-}
-
-.titlebutton.close {
-    background-image: linear-gradient(to bottom, #ff5f57, #ed4c5c);
-    background-color: #ed4c5c;
-    border: 1px solid rgba(150, 20, 36, 0.55);
-    color: #ffffff;
-    box-shadow: 0 1px 3px rgba(214, 60, 76, 0.45),
-                inset 0 1px 0 rgba(255, 255, 255, 0.25);
-}
-
-.titlebutton.close:hover {
-    background-image: linear-gradient(to bottom, #ff726b, #f5586a);
-    box-shadow: 0 2px 7px rgba(214, 60, 76, 0.55),
-                inset 0 1px 0 rgba(255, 255, 255, 0.30);
-}
-
-.titlebutton.close:active {
-    background-image: linear-gradient(to bottom, #e84b54, #d63c4c);
-    box-shadow: inset 0 1px 3px rgba(120, 16, 28, 0.5);
-}
-
-/* ----- entries / search ----- */
-entry,
-.entry,
-searchentry,
-spinbutton {
-    background-color: #181d2a;
-    color: #f0f3fa;
-    border: 1px solid #3a4258;
-    border-radius: 10px;
-    padding: 8px 12px;
-    caret-color: #5B7DF5;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25) inset;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-entry:focus,
-searchentry:focus,
-spinbutton:focus {
-    border-color: #5B7DF5;
-    box-shadow: 0 0 0 2px rgba(91, 125, 245, 0.25);
-    outline: none;
-}
-
-entry selection,
-entry > selection {
-    background-color: rgba(91, 125, 245, 0.45);
-    color: #ffffff;
-}
-
-placeholder,
-entry placeholder {
-    color: #5a6378;
-}
-
-/* ----- switches (clean macOS-style pill) -----
-   Solid track (no gradient), a large white knob that nearly fills the height,
-   and a soft drop shadow for the macOS "lozenge" look. */
-switch {
-    background-color: #3d4456;          /* off: neutral slate track */
-    background-image: none;
-    border: none;
-    border-radius: 999px;
-    min-width: 48px;
-    min-height: 28px;
-    transition: background-color 200ms ease;
-}
-
-switch:checked {
-    background-color: #5B7DF5;          /* on: clean solid brand blue */
-    background-image: none;
-    border: none;
-}
-
-switch:disabled {
-    opacity: 0.45;
-}
-
-switch slider {
-    background-color: #ffffff;
-    background-image: none;
-    border: none;
-    border-radius: 50%;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45),
-                0 2px 5px rgba(0, 0, 0, 0.20);
-    min-width: 24px;
-    min-height: 24px;
-    margin: 2px;
-}
-
-/* keep the pill clean: GTK 3.24's GtkSwitch has two built-in on/off `image`
-   nodes (they fill most of the track). Collapse them to nothing - opacity alone
-   is not enough; the icon transform + zero size is what actually removes them. */
-switch image {
-    opacity: 0;
-    -gtk-icon-source: none;
-    -gtk-icon-transform: scale(0);
-    min-width: 0;
-    min-height: 0;
-    margin: 0;
-    padding: 0;
-}
-
-/* ----- combobox ----- */
-combobox button,
-combobox box.linked button {
-    background-image: linear-gradient(to bottom, #1f2433, #1a1f2c);
-    border: 1px solid #2c3346;
-    color: #f0f3fa;
-    border-radius: 8px;
-}
-
-combobox arrow {
-    color: #b8c0d4;
-}
-
-/* ----- tray / panel menus ----------------------------------------
-   The Ayatana tray menu is rendered by the desktop panel (Cinnamon),
-   not by our process, but our CSS provider can leak into menu labels
-   on some indicator implementations. Reset every styleable property
-   on the menu widget tree to its default so the panel's own theme
-   wins on colour - prevents the "dark text on dark panel" disappearing
-   trick that happens when our colours get applied to the panel-side
-   rendering. */
-menu,
-menu menuitem,
-menu menuitem label,
-menu separator {
-    background-color: unset;
-    background-image: unset;
-    color: unset;
-    border: unset;
-    box-shadow: unset;
-}
-
-/* Hover/highlight on the menu item the pointer is over. Uses the
-   accent overlay at low opacity so the panel's own background colour
-   shows through - reads correctly on both a light and a dark panel
-   without overriding the label colour the panel set. */
-menu menuitem:hover,
-menu menuitem:focus,
-menu menuitem.highlight {
-    background-color: rgba(91, 125, 245, 0.22);
-    border-radius: 4px;
-}
-
-/* ----- popovers ----- */
-popover,
-popover.background {
-    background-color: #1c2231;
-    border: 1px solid #3a4258;
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-    color: #f0f3fa;
-    padding: 4px;
-}
-
-popover button,
-popover modelbutton {
-    background-image: none;
-    background-color: transparent;
-    border: none;
-    color: #f0f3fa;
-    padding: 6px 10px;
-    border-radius: 6px;
-}
-
-popover button:hover,
-popover modelbutton:hover {
-    background-color: #262d3f;
-}
-
-/* ----- scrolled windows + scrollbars ----- */
-scrolledwindow {
-    background-color: transparent;
-}
-
-scrollbar {
-    background-color: transparent;
-    border: none;
-}
-
-scrollbar slider {
-    background-color: #2c3346;
-    border-radius: 6px;
-    min-width: 6px;
-    min-height: 6px;
-}
-
-scrollbar slider:hover {
-    background-color: #3a4258;
-}
-
-/* ----- frames / separators ----- */
-frame {
-    border: 1px solid #3a4258;
-    border-radius: 10px;
-    background-color: #1c2231;
-}
-
-separator {
-    background-color: #3a4258;
-    min-width: 1px;
-    min-height: 1px;
-}
-
-/* ----- GtkAssistant left sidebar (recipe wizard's page list).
-   The internal Box has class 'sidebar', child labels are inactive,
-   the current page's label adds the 'highlight' class. Default
-   theme paints these light-on-light which is illegible against the
-   dark content panel. */
-.sidebar {
-    background-color: #161a24;
-    border-right: 1px solid #3a4258;
-}
-
-.sidebar label {
-    color: #b8c0d4;
-    padding: 8px 16px;
-    background-color: transparent;
-}
-
-.sidebar label.highlight {
-    color: #f0f3fa;
-    background-image: linear-gradient(to right,
-        rgba(91, 125, 245, 0.18),
-        rgba(124, 58, 237, 0.18));
-    box-shadow: inset 3px 0 0 #7C3AED;
-    font-weight: 600;
-}
-
-/* ----- libhandy view switcher / stack switcher (the tab strip in the
-   Plugin Manager and other multi-page windows). These render as buttons
-   in the header bar; the generic button styling above would give each
-   tab a border + gradient + 14 px horizontal padding which clips long
-   labels like 'Installed'. Strip the heavy styling so labels fit. */
-hdyviewswitcher button,
-stackswitcher button {
-    background-image: none;
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 8px;
-    box-shadow: none;
-    color: #b8c0d4;
-    font-weight: 500;
-}
-
-hdyviewswitcher button:hover,
-stackswitcher button:hover {
-    background-image: none;
-    background-color: rgba(91, 125, 245, 0.10);
-    color: #f0f3fa;
-}
-
-hdyviewswitcher button:checked,
-stackswitcher button:checked {
-    background-image: none;
-    background-color: rgba(124, 58, 237, 0.15);
-    color: #f0f3fa;
-    box-shadow: inset 0 -2px 0 #7C3AED;
-}
-
-hdyviewswitcher button label,
-stackswitcher button label {
-    /* Make sure long labels don't get ellipsised by an inherited rule */
-    margin: 0 2px;
-}
-
-/* ----- notebooks / tabs (used by some dialogs) ----- */
-notebook {
-    background-color: transparent;
-}
-
-notebook > header {
-    background-color: #141823;
-    border-bottom: 1px solid #3a4258;
-}
-
-notebook > header > tabs > tab {
-    background-color: transparent;
-    color: #b8c0d4;
-    border: none;
-    padding: 8px 14px;
-    transition: color 120ms ease;
-}
-
-notebook > header > tabs > tab:checked {
-    color: #f0f3fa;
-    box-shadow: inset 0 -2px 0 #5B7DF5;
-}
-
-notebook > header > tabs > tab:hover {
-    color: #f0f3fa;
-}
-
-/* ----- tooltips ----- */
-tooltip,
-tooltip.background {
-    background-color: #262d3f;
-    color: #f0f3fa;
-    border: 1px solid #2c3346;
-    border-radius: 6px;
-    padding: 4px 8px;
-}
-
-/* ----- check / radio buttons ----- */
-check,
-radio {
-    background-color: #14171f;
-    border: 1px solid #2c3346;
-    color: #f0f3fa;
-    min-width: 16px;
-    min-height: 16px;
-}
-
-check:checked,
-radio:checked {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
-    border-color: #5B7DF5;
-    color: #ffffff;
-}
-
-/* ----- progress bars ----- */
-progressbar trough {
-    background-color: #262d3f;
-    border: 1px solid #3a4258;
-    border-radius: 6px;
-    min-height: 6px;
-}
-
-progressbar progress {
-    background-image: linear-gradient(to right, #5B7DF5, #7C3AED);
-    border-radius: 6px;
-    min-height: 6px;
-}
-
-/* Generic TextView coverage so multi-line text widgets pick up the dark
-   theme by default. Without this, GTK falls back to the system theme's
-   white text region (which sticks out in the terminal confirm dialog,
-   the recipe wizard, etc.). */
-textview,
-textview text {
-    background-color: transparent;
-    background-image: none;
-    color: #f0f3fa;
-    caret-color: #5B7DF5;
-}
-
 /* Terminal confirm dialog: read-only "preview" state. Flat, no box,
-   sits on the dialog's dark surface the way a label would. */
+   sits on the dialog surface the way a label would. */
 textview.lp-cmd-preview,
 textview.lp-cmd-preview text {
     background-color: transparent;
-    background-image: none;
-    color: #f0f3fa;
     padding: 4px 6px;
 }
 
 /* Terminal confirm dialog: editable state after Edit was pressed.
-   Picks up the entry-field look so it's obvious you can type now. */
+   Picks up an entry-field look so it's obvious you can type now. */
 textview.lp-cmd-edit,
 textview.lp-cmd-edit text {
-    background-color: #181d2a;
-    background-image: none;
-    color: #f0f3fa;
-    caret-color: #5B7DF5;
+    background-color: @view_bg_color;
     padding: 6px 10px;
+}
+textview.lp-cmd-edit {
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 1px alpha(currentColor, 0.15);
 }
 
 /* ----- Snippet / clipboard picker -----
-   Force every container inside the picker window to inherit the window
-   background instead of the default GTK list/notebook tones. Without
-   this the listbox area stays charcoal even in light mode because GTK
-   paints a fallback there that our generic `window` rule doesn't reach.
-   Selected row keeps the accent gradient from the global list rule;
-   hover gets a tinted overlay that reads on either palette. */
-.lp-picker,
-.lp-picker box,
-.lp-picker notebook,
-.lp-picker notebook stack,
-.lp-picker scrolledwindow,
-.lp-picker viewport,
+   The list area inherits the window surface; the selected row keeps the
+   brand tint so it reads on either palette. */
 .lp-picker list,
 .lp-picker list > row {
     background-color: transparent;
-    background-image: none;
-}
-
-.lp-picker {
-    background-color: #0e1118;
 }
 
 .lp-picker list > row:hover {
-    background-color: rgba(91, 125, 245, 0.10);
+    background-color: alpha(@accent_bg_color, 0.10);
 }
 
 .lp-picker list > row:selected {
     background-image: linear-gradient(to right,
-        rgba(91, 125, 245, 0.22),
-        rgba(124, 58, 237, 0.22));
-    color: #ffffff;
+        alpha(#5B7DF5, 0.22),
+        alpha(#7C3AED, 0.22));
 }
 
 /* ----- LinuxPop-specific helper classes -----
    Any widget that adds these style classes via add_css_class()
-   gets premium accents on top of the generic widget styling. */
+   gets brand accents on top of the Adwaita widget styling. */
 .lp-accent {
-    color: #5B7DF5;
+    color: @accent_color;
 }
 
 .lp-card {
-    background-color: #1c2231;
-    border: 1px solid #3a4258;
+    background-color: @card_bg_color;
+    box-shadow: 0 0 0 1px @card_shade_color, 0 2px 6px @card_shade_color;
     border-radius: 12px;
     padding: 12px;
 }
@@ -727,7 +151,7 @@ textview.lp-cmd-edit text {
 }
 
 .lp-muted {
-    color: #b8c0d4;
+    opacity: 0.7;
 }
 
 .lp-title {
@@ -735,6 +159,11 @@ textview.lp-cmd-edit text {
     font-weight: 700;
     letter-spacing: -0.005em;
 }
+"""
+
+# Dark-mode overrides appended after the brand layer.
+_BRAND_DARK_CSS = """
+@define-color accent_color #8ea6ff;
 """
 
 
@@ -799,18 +228,14 @@ def _apply_remap(css: bytes, remap: dict[str, str]) -> bytes:
 
 
 def _system_prefers_dark() -> bool:
-    """Best-effort: does the user's system theme look dark? Checks the
-    Gtk-prefer-dark flag first, falls back to substring-match on the
-    GTK theme name (Mint-Y-Dark, Adwaita-dark, etc.). Defaults to True
-    when we have nothing to go on - keeps the existing premium look."""
+    """Best-effort: does the user's system prefer dark? With the colour
+    scheme at DEFAULT, Adw.StyleManager.get_dark() follows the desktop's
+    preference (Settings portal on GNOME/KDE). Defaults to True when we have
+    nothing to go on - keeps the long-standing dark look."""
     try:
-        s = Gtk.Settings.get_default()
-        if s is None:
-            return True
-        if s.get_property("gtk-application-prefer-dark-theme"):
-            return True
-        name = s.get_property("gtk-theme-name") or ""
-        return "dark" in name.lower()
+        # Only asked for "system", i.e. while the scheme is DEFAULT - then
+        # get_dark() is the desktop's own preference.
+        return bool(Adw.StyleManager.get_default().get_dark())
     except Exception:
         return True
 
@@ -825,95 +250,105 @@ def _resolve_mode(mode: str) -> str:
 
 _active_provider: Gtk.CssProvider | None = None
 _active_mode: str | None = None
+_requested_mode: str | None = None
+_dark_handler: int | None = None
+
+_SCHEMES = {
+    "dark": Adw.ColorScheme.FORCE_DARK,
+    "light": Adw.ColorScheme.FORCE_LIGHT,
+    "system": Adw.ColorScheme.DEFAULT,
+}
+
+
+def _load_css(provider: Gtk.CssProvider, css: str) -> None:
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(css)
+    else:
+        provider.load_from_data(css.encode("utf-8"), -1)
+
+
+def _on_system_dark_changed(sm, _pspec) -> None:
+    """The desktop flipped light/dark while we follow it ("system"): swap the
+    brand layer and rebuild the popup bar's palette to match."""
+    if _requested_mode != "system":
+        return
+    _apply_brand("dark" if sm.get_dark() else "light")
+    import sys
+
+    popup = sys.modules.get("popup")
+    if popup is not None:
+        try:
+            popup.reinstall_popup_css()
+        except Exception:
+            pass
+
+
+def _apply_brand(effective: str) -> None:
+    global _active_provider, _active_mode
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    if _active_mode == effective and _active_provider is not None:
+        return
+    css = _BRAND_CSS + (_BRAND_DARK_CSS if effective == "dark" else "")
+    provider = Gtk.CssProvider()
+    try:
+        _load_css(provider, css)
+    except Exception:
+        import logging
+
+        logging.getLogger("linuxpop").exception("brand theme (%s) failed to load", effective)
+        return
+    if _active_provider is not None:
+        try:
+            Gtk.StyleContext.remove_provider_for_display(display, _active_provider)
+        except Exception:
+            pass
+    Gtk.StyleContext.add_provider_for_display(
+        display,
+        provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+    )
+    _active_provider = provider
+    _active_mode = effective
 
 
 def install_premium_theme(mode: str = "dark") -> None:
-    """Install (or swap) the CSS provider on the default screen.
+    """Apply the colour scheme and the brand layer on the default display.
 
     `mode` is "dark", "light", or "system". Calling again with the same
-    effective mode is a no-op; calling with a different one removes the
-    old provider and installs the new one - so settings-side toggle can
-    just call this without restarting the daemon.
+    mode is a no-op; calling with a different one switches the
+    Adw.StyleManager scheme and swaps the brand provider - so the
+    settings-side toggle can just call this without restarting the daemon.
     """
-    global _active_provider, _active_mode
+    global _requested_mode, _dark_handler
 
-    screen = Gdk.Screen.get_default()
-    if screen is None:
+    import gtk4_app
+
+    gtk4_app.init()
+    if Gdk.Display.get_default() is None:
         return
+    mode = mode if mode in _SCHEMES else "dark"
+    sm = Adw.StyleManager.get_default()
+    sm.set_color_scheme(_SCHEMES[mode])
+    _requested_mode = mode
+    if _dark_handler is None:
+        _dark_handler = sm.connect("notify::dark", _on_system_dark_changed)
 
-    effective = _resolve_mode(mode)
-    if _active_mode == effective and _active_provider is not None:
-        return
-
-    # HdyExpanderRow asks for "hdy-expander-arrow-symbolic" (and a couple other
-    # names) that neither Breeze/WhiteSur nor Adwaita ship, so every expander row
-    # rendered the red "image-missing" glyph as its disclosure arrow - in BOTH
-    # themes. Install the bundled copies into the user's standard hicolor dir,
-    # which GTK already watches so a rescan actually finds them (appending a
-    # brand-new search path does NOT take effect). Runs in light AND dark.
-    try:
-        src_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "icons",
-            "hdy-compat",
-            "hicolor",
-            "scalable",
-            "actions",
-        )
-        if os.path.isdir(src_dir):
-            import shutil as _sh
-
-            dst_dir = os.path.expanduser("~/.local/share/icons/hicolor/scalable/actions")
-            os.makedirs(dst_dir, exist_ok=True)
-            for _fn in os.listdir(src_dir):
-                if _fn.endswith(".svg") and not os.path.exists(os.path.join(dst_dir, _fn)):
-                    _sh.copy2(os.path.join(src_dir, _fn), os.path.join(dst_dir, _fn))
-            Gtk.IconTheme.get_default().rescan_if_needed()
-    except OSError:
-        pass
-
-    # On KDE/Wayland the host GTK theme is light Breeze, so any widget our CSS
-    # doesn't explicitly cover renders light with near-invisible light text.
-    # Force a known dark base theme + matching icon theme in DARK mode only; our
-    # premium CSS layers on top at APPLICATION priority. Left untouched on X11.
-    if effective == "dark":
+    # On KDE/Wayland the app's button/action icons are GNOME/Adwaita symbolic
+    # names; Breeze names many differently, so they'd render as
+    # "image-missing". Force the Adwaita icon theme so they resolve (dark
+    # mode only, as before). libadwaita ignores gtk-theme-name and owns
+    # light/dark itself, so neither is touched any more.
+    if mode == "dark":
         try:
             from platform_backend import get_backend
 
             if get_backend().name == "wayland_kde":
                 s = Gtk.Settings.get_default()
                 if s is not None:
-                    s.set_property("gtk-application-prefer-dark-theme", True)
-                    s.set_property("gtk-theme-name", "Adwaita")
-                    # The app's button/action icons are GNOME/Adwaita symbolic
-                    # names; Breeze names many differently, so they'd render as
-                    # "image-missing". Force the Adwaita icon theme so they
-                    # resolve.
                     s.set_property("gtk-icon-theme-name", "Adwaita")
         except Exception:
             pass
 
-    css = _PREMIUM_CSS if effective == "dark" else _apply_remap(_PREMIUM_CSS, _LIGHT_REMAP)
-
-    provider = Gtk.CssProvider()
-    try:
-        provider.load_from_data(css)
-    except Exception:
-        import logging
-
-        logging.getLogger("linuxpop").exception("premium theme (%s) failed to load", effective)
-        return
-
-    if _active_provider is not None:
-        try:
-            Gtk.StyleContext.remove_provider_for_screen(screen, _active_provider)
-        except Exception:
-            pass
-
-    Gtk.StyleContext.add_provider_for_screen(
-        screen,
-        provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-    )
-    _active_provider = provider
-    _active_mode = effective
+    _apply_brand("dark" if mode == "dark" else "light" if mode == "light" else _resolve_mode(mode))

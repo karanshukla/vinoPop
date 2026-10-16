@@ -23,10 +23,77 @@ if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
-import gi
+# Mutter-based desktops: no wlr-layer-shell, so a native Wayland surface
+# can't be placed at the selection.
+_MUTTER_DESKTOPS = ("GNOME", "UNITY", "PANTHEON", "BUDGIE", "CINNAMON")
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+
+def _load_layer_shell() -> bool:
+    """Load gtk4-layer-shell BEFORE GTK/libwayland-client are loaded (its
+    Wayland hooks only work when it comes first in symbol lookup - the
+    upstream-documented ctypes trick for Python), then its typelib."""
+    import ctypes
+
+    try:
+        ctypes.CDLL("libgtk4-layer-shell.so.0", mode=ctypes.RTLD_GLOBAL)
+    except OSError:
+        return False
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gtk4LayerShell", "1.0")
+        from gi.repository import Gtk4LayerShell  # noqa: F401
+    except (ImportError, ValueError):
+        return False
+    return True
+
+
+def _choose_gdk_backend() -> str:
+    """Decide where GDK runs, before GTK initialises. GTK 4 dropped
+    Gtk.Window.move(), so the popup can only be placed via gtk4-layer-shell
+    (KWin, wlroots) or as an X11 override-redirect window. Wayland sessions
+    without layer-shell (GNOME/mutter, or the typelib not installed) run the
+    whole process on XWayland. Returns a line for the log."""
+    if os.environ.get("GDK_BACKEND"):
+        return f"GDK_BACKEND={os.environ['GDK_BACKEND']} (preset, left alone)"
+    wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+    x11 = bool(os.environ.get("DISPLAY"))
+    session = (os.environ.get("XDG_SESSION_TYPE") or "").lower()
+    # Same rule as platform_backend.detect(): Wayland only when there is no
+    # X11 display or the session says it is Wayland.
+    if not wayland or (x11 and session != "wayland"):
+        return "X11 session - GDK on X11"
+    forced = (os.environ.get("LINUXPOP_BACKEND") or "").strip().lower()
+    desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
+    mutter = any(d in desktop for d in _MUTTER_DESKTOPS)
+    if forced == "x11":
+        reason = "LINUXPOP_BACKEND=x11"
+    elif mutter:
+        reason = f"{desktop or 'this desktop'} has no wlr-layer-shell"
+    elif not _load_layer_shell():
+        reason = "Gtk4LayerShell (gtk4-layer-shell) is not installed"
+    else:
+        return "Wayland session - native Wayland with gtk4-layer-shell"
+    if not x11:
+        return f"Wayland session, {reason}, and no XWayland DISPLAY - popup placement unavailable"
+    os.environ["GDK_BACKEND"] = "x11"
+    if mutter and not forced:
+        # KWin-only paths (cursorPos script, KGlobalAccel) can't work on
+        # mutter; the X11 backend's xclip/Xlib/xdotool path does on XWayland.
+        os.environ["LINUXPOP_BACKEND"] = "x11"
+    return f"Wayland session, {reason} - running on XWayland (GDK_BACKEND=x11)"
+
+
+_GDK_BACKEND_CHOICE = _choose_gdk_backend()
+
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, GLib, Gtk  # noqa: E402
+
+import gtk4_app  # noqa: E402
 
 # XInitThreads is intentionally NOT called here. We tried it (since
 # multiple threads touch X - watcher, hotkey, popup tick, clipboard
@@ -39,15 +106,15 @@ from gi.repository import GLib, Gtk  # noqa: E402
 # up under load, revisit by giving each Xlib-using component its own
 # connection (already mostly the case) rather than re-enabling
 # XInitThreads.
-import plugin_loader
-import theme
-from classifier import classify
-from editable_detect import focused_selection_rect, is_focus_editable
-from platform_backend import get_backend
-from popup import PopupWindow
-from settings import get_settings
-from version import __version__
-from xdg_paths import CACHE_DIR, CONFIG_DIR
+import plugin_loader  # noqa: E402
+import theme  # noqa: E402
+from classifier import classify  # noqa: E402
+from editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
+from platform_backend import get_backend  # noqa: E402
+from popup import PopupWindow  # noqa: E402
+from settings import get_settings  # noqa: E402
+from version import __version__  # noqa: E402
+from xdg_paths import CACHE_DIR, CONFIG_DIR  # noqa: E402
 
 if TYPE_CHECKING:
     from watcher import SelectionWatcher
@@ -683,30 +750,34 @@ class App:
             log.exception("plugin manager dialog crashed")
 
     def open_about(self) -> None:
-        about = Gtk.AboutDialog()
-        about.set_program_name("LinuxPop")
+        # Adw.AboutDialog (libadwaita 1.5); with no parent window it opens as
+        # its own window. Non-modal: no GTK 4 equivalent of dialog.run().
+        about = Adw.AboutDialog()
+        about.set_application_name("LinuxPop")
         about.set_version(__version__)
         about.set_comments(
             f"A PopClip-inspired floating action popup for Linux ({get_backend().name})."
         )
         about.set_license_type(Gtk.License.MIT_X11)
-        about.set_logo_icon_name("linuxpop")
-        about.set_icon_name("linuxpop")
+        about.set_application_icon("linuxpop")
         # Only set the website link if it was overridden via env var, so we
         # don't ship a 404 placeholder. Set LINUXPOP_PROJECT_URL when forking.
         project_url = os.environ.get("LINUXPOP_PROJECT_URL")
         if project_url:
             about.set_website(project_url)
-            about.set_website_label("Project page")
-        # Add a "Support" action button so the donation flow is one click
-        # away from the canonical "About" surface.
-        try:
-            support_btn = about.add_button("Support LinuxPop…", Gtk.ResponseType.HELP)
-            support_btn.connect("clicked", lambda *_: self.open_support())
-        except Exception:
-            pass
-        about.run()
-        about.destroy()
+        # A "Support" link so the donation flow is one click away from the
+        # canonical "About" surface. AboutDialog only takes links, so a
+        # private URI is intercepted in activate-link and opens our picker.
+        about.add_link("Support LinuxPop…", "linuxpop:support")
+
+        def _on_link(_dlg, uri):
+            if uri == "linuxpop:support":
+                self.open_support()
+                return True
+            return False
+
+        about.connect("activate-link", _on_link)
+        about.present(None)
 
     # ---- first-run experience ------------------------------------------------
 
@@ -774,7 +845,7 @@ class App:
         self._reload_pending_id = GLib.timeout_add(400, _do_reload)
 
     def quit(self) -> None:
-        Gtk.main_quit()
+        gtk4_app.quit()
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -816,6 +887,7 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     _setup_logging(args.debug)
+    log.info("[display] %s", _GDK_BACKEND_CHOICE)
     get_backend().check_session()
     # Single-instance guard - refuses to start a second copy. Run BEFORE
     # any GTK init or hotkey grabs so the second copy exits before
@@ -830,11 +902,15 @@ def main(argv: list[str] | None = None) -> int:
     # clipboard picker is opened. Accepting some zombie PIDs over uptime
     # is the lesser evil; a proper periodic reaper can come later.
 
+    # GTK 4 + libadwaita init (opens the display chosen by
+    # _choose_gdk_backend). Replaces Gtk.init via `import Gtk` in GTK 3.
+    gtk4_app.init()
     theme.install_premium_theme(get_settings().get("theme", "dark") or "dark")
 
     app = App(enable_tray=not args.no_tray)
 
-    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    # GLib-level SIGINT handler: fires reliably while the main loop sits in C.
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *_: (app.quit(), True)[1])
     log.info(
         "LinuxPop %s running (tray=%s, hotkey=%s, watcher=%s)",
         __version__,
@@ -855,7 +931,7 @@ def main(argv: list[str] | None = None) -> int:
 
     GLib.idle_add(_freeze_gc_after_startup)
 
-    Gtk.main()
+    gtk4_app.run()
     if app.watcher:
         app.watcher.stop()
     if app.hotkey:

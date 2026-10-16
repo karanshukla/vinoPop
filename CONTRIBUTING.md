@@ -102,8 +102,10 @@ Please file an issue. Include:
 
 ## Development setup
 
-The app runs on your distro's PyGObject/GTK, so run it with the system
-Python (see README). The checks don't need GTK or OpenVINO; this is what
+The app runs on your distro's PyGObject with GTK 4 (4.14+) and libadwaita
+(1.5+), so run it with the system Python (see README for the
+`gir1.2-gtk-4.0` / `gir1.2-adw-1` packages and their Fedora/Arch names). To
+try the X11 path on a Wayland desktop, run it with `GDK_BACKEND=x11`. The checks don't need GTK or OpenVINO; this is what
 CI does:
 
 ```bash

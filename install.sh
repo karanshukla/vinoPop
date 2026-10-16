@@ -56,8 +56,8 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     exit 1
 fi
 
-python3 -c "import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk" 2>/dev/null \
-    || { echo "[install] missing python3-gi: sudo apt-get install -y python3-gi gir1.2-gtk-3.0"; exit 1; }
+python3 -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
+    || { echo "[install] missing GTK 4 / libadwaita for python3-gi: sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1"; exit 1; }
 python3 -c "import Xlib" 2>/dev/null \
     || { echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"; exit 1; }
 

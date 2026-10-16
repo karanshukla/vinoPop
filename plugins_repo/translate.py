@@ -13,10 +13,10 @@ import logging
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk  # noqa: E402
 
-from plugin_base import Plugin
+from plugin_base import Plugin  # noqa: E402
 
 log = logging.getLogger("linuxpop")
 
@@ -82,13 +82,14 @@ def _translate(text: str) -> None:
         ai_worker.run_into(bubble, "translate", text, lang=_ENGLISH_NAME[state["code"]])
 
     def _picker() -> Gtk.Widget:
-        combo = Gtk.ComboBoxText()
-        for code, label, _name in _LANGS:
-            combo.append(code, label)
-        combo.set_active_id(state["code"])
+        codes = [code for code, _label, _name in _LANGS]
+        drop = Gtk.DropDown.new(Gtk.StringList.new([label for _code, label, _n in _LANGS]))
+        drop.set_selected(codes.index(state["code"]))
+        drop.set_focusable(False)
 
-        def _changed(c: Gtk.ComboBoxText) -> None:
-            code = c.get_active_id()
+        def _changed(d: Gtk.DropDown, _pspec) -> None:
+            idx = d.get_selected()
+            code = codes[idx] if idx < len(codes) else None
             bubble = state["bubble"]
             if not code or code == state["code"] or bubble is None:
                 return
@@ -99,14 +100,19 @@ def _translate(text: str) -> None:
 
             threading.Thread(target=_run, args=(bubble,), daemon=True).start()
 
-        def _popup(c: Gtk.ComboBoxText, _pspec) -> None:
+        def _popup(pop: Gtk.Popover, _pspec) -> None:
             # Picking a language happens on a separate surface, outside the bubble
             if state["bubble"] is not None:
-                state["bubble"].keep_open = bool(c.get_property("popup-shown"))
+                state["bubble"].keep_open = pop.get_visible()
 
-        combo.connect("changed", _changed)
-        combo.connect("notify::popup-shown", _popup)
-        return combo
+        drop.connect("notify::selected", _changed)
+        # GtkDropDown has no "popup-shown"; watch its internal popover instead.
+        child = drop.get_first_child()
+        while child is not None:
+            if isinstance(child, Gtk.Popover):
+                child.connect("notify::visible", _popup)
+            child = child.get_next_sibling()
+        return drop
 
     ai_bubble.show("Translate to", _run, header_widget_factory=_picker)
 

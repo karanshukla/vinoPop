@@ -17,8 +17,10 @@ import math
 import cairo
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 # ── brand palette (matches theme.py / the app icon) ──────────────────────────
 BLUE = (0.357, 0.490, 0.961)  # #5B7DF5
@@ -121,6 +123,8 @@ def _blink_at(t, period=3.4):
 
 
 def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0.0, bob=0.0):
+    if s <= 0.0:  # fully faded out; a zero scale would make cairo raise
+        return
     cr.save()
     cr.translate(cx, cy + bob)
     cr.rotate(tilt)
@@ -857,7 +861,35 @@ def _build_pages(settings):
     ]
 
 
-class OnboardingWindow(Gtk.Window):
+# Window-local CSS: the scene stage keeps the brand look (it's a Cairo
+# drawing), and the page titles take the brand blue as a soft accent.
+_CSS = """
+.lp-onboarding-title {
+    color: #5B7DF5;
+}
+"""
+_css_installed = False
+
+
+def _install_css() -> None:
+    global _css_installed
+    if _css_installed:
+        return
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    provider = Gtk.CssProvider()
+    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+        provider.load_from_string(_CSS)
+    else:
+        provider.load_from_data(_CSS, -1)
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
+    _css_installed = True
+
+
+class OnboardingWindow(Adw.Window):
     def __init__(self, settings, on_open_plugins=None):
         super().__init__(title="Welcome to LinuxPop")
         self._settings = settings
@@ -865,10 +897,10 @@ class OnboardingWindow(Gtk.Window):
         self._pages = _build_pages(settings)
         self._index = 0
         self._t0 = GLib.get_monotonic_time()
+        _install_css()
 
         self.set_default_size(700, 600)
         self.set_resizable(False)
-        self.set_position(Gtk.WindowPosition.CENTER)
         try:
             self.set_icon_name("linuxpop")
         except Exception:
@@ -876,48 +908,47 @@ class OnboardingWindow(Gtk.Window):
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
+        # The animated scene: one Cairo stage, redrawn every frame, whose
+        # contents follow the current page.
         self._area = Gtk.DrawingArea()
-        self._area.set_size_request(-1, 280)
-        self._area.connect("draw", self._on_draw)
-        self._area.set_margin_top(16)
+        self._area.set_content_height(280)
+        self._area.set_draw_func(self._on_draw)
         self._area.set_margin_start(22)
         self._area.set_margin_end(22)
-        root.pack_start(self._area, False, False, 0)
+        root.append(self._area)
 
-        self._stack = Gtk.Stack()
-        self._stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self._stack.set_transition_duration(300)
-        self._stack.set_homogeneous(True)
-        for i, pg in enumerate(self._pages):
+        # Page texts live in an Adw.Carousel so they slide (and can be
+        # swiped / scrolled) between steps; the scene follows the carousel.
+        self._carousel = Adw.Carousel()
+        self._carousel.set_vexpand(True)
+        self._carousel.set_spacing(24)
+        self._carousel.set_allow_scroll_wheel(False)
+        for pg in self._pages:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            box.set_hexpand(True)
             box.set_margin_top(12)
             box.set_margin_start(44)
             box.set_margin_end(44)
-            title = Gtk.Label(xalign=0.5)
-            title.set_markup(f"<span size='xx-large' weight='bold'>{pg['title']}</span>")
+            title = Gtk.Label(label=pg["title"], xalign=0.5)
+            title.add_css_class("title-1")
+            title.add_css_class("lp-onboarding-title")
             title.set_justify(Gtk.Justification.CENTER)
-            title.set_line_wrap(True)
-            box.pack_start(title, False, False, 0)
+            title.set_wrap(True)
+            box.append(title)
             body = Gtk.Label(xalign=0.5)
             body.set_markup(f"<span size='large'>{pg['body']}</span>")
             body.set_justify(Gtk.Justification.CENTER)
-            body.set_line_wrap(True)
+            body.set_wrap(True)
             body.set_max_width_chars(54)
-            box.pack_start(body, False, False, 0)
-            self._stack.add_named(box, f"p{i}")
-        root.pack_start(self._stack, True, True, 0)
+            box.append(body)
+            self._carousel.append(box)
+        self._carousel.connect("page-changed", self._on_page_changed)
+        root.append(self._carousel)
 
-        self._dots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._dots = Adw.CarouselIndicatorDots(carousel=self._carousel)
         self._dots.set_halign(Gtk.Align.CENTER)
-        self._dot_widgets = []
-        for _ in self._pages:
-            d = Gtk.DrawingArea()
-            d.set_size_request(9, 9)
-            d.connect("draw", self._draw_dot)
-            self._dot_widgets.append(d)
-            self._dots.pack_start(d, False, False, 0)
         self._dots.set_margin_top(6)
-        root.pack_start(self._dots, False, False, 0)
+        root.append(self._dots)
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         controls.set_margin_top(14)
@@ -925,52 +956,55 @@ class OnboardingWindow(Gtk.Window):
         controls.set_margin_start(22)
         controls.set_margin_end(22)
         self._dont = Gtk.CheckButton(label="Don't show this again")
-        controls.pack_start(self._dont, False, False, 0)
+        controls.append(self._dont)
         self._skip = Gtk.Button(label="Skip")
-        self._skip.get_style_context().add_class("flat")
+        self._skip.add_css_class("flat")
         self._skip.connect("clicked", lambda _b: self._finish(open_plugins=False))
-        controls.pack_start(self._skip, False, False, 0)
-        controls.pack_start(Gtk.Label(), True, True, 0)
+        controls.append(self._skip)
+        controls.append(Gtk.Box(hexpand=True))
         self._back = Gtk.Button(label="Back")
-        self._back.get_style_context().add_class("flat")
+        self._back.add_css_class("flat")
+        self._back.add_css_class("pill")
         self._back.connect("clicked", lambda _b: self._go(-1))
-        controls.pack_start(self._back, False, False, 0)
+        controls.append(self._back)
         self._next = Gtk.Button(label="Next")
-        self._next.get_style_context().add_class("suggested-action")
+        self._next.add_css_class("suggested-action")
+        self._next.add_css_class("pill")
         self._next.connect("clicked", lambda _b: self._go(1))
-        controls.pack_start(self._next, False, False, 0)
-        root.pack_start(controls, False, False, 0)
+        controls.append(self._next)
 
-        self.add(root)
+        # Flat, title-less header (just the close button) over the scene.
+        header = Adw.HeaderBar()
+        header.add_css_class("flat")
+        header.set_show_title(False)
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(root)
+        toolbar.add_bottom_bar(controls)
+        self.set_content(toolbar)
+
+        # Window-wide arrows / Enter / Space / Esc, caught in the capture
+        # phase so they work whichever widget has focus.
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
+
         self.connect("destroy", self._on_destroy)
-        self.connect("key-press-event", self._on_key)
-        self._timer = GLib.timeout_add(33, self._tick)
+        # Frame-clock driven animation (replaces the old 33 ms timeout)
+        self._timer = self._area.add_tick_callback(self._tick)
         self._update_controls()
-        self.show_all()
 
-    def _on_draw(self, area, cr):
-        w = area.get_allocated_width()
-        h = area.get_allocated_height()
+    def _on_draw(self, _area, cr, w, h):
         t = (GLib.get_monotonic_time() - self._t0) / 1_000_000.0
         try:
             self._pages[self._index]["draw"](cr, w, h, t)
         except Exception:
             pass
-        return False
 
-    def _tick(self):
+    def _tick(self, _widget, _clock):
         self._area.queue_draw()
-        return True
-
-    def _draw_dot(self, area, cr):
-        i = self._dot_widgets.index(area)
-        cr.arc(4.5, 4.5, 4.0, 0, 2 * math.pi)
-        if i == self._index:
-            cr.set_source_rgba(*BLUE, 1)
-        else:
-            cr.set_source_rgba(*MUTE, 0.5)
-        cr.fill()
-        return False
+        return GLib.SOURCE_CONTINUE
 
     def _go(self, delta):
         ni = self._index + delta
@@ -979,12 +1013,17 @@ class OnboardingWindow(Gtk.Window):
             return
         if ni < 0:
             return
-        self._stack.set_transition_type(
-            Gtk.StackTransitionType.SLIDE_LEFT if delta > 0 else Gtk.StackTransitionType.SLIDE_RIGHT
-        )
+        self._set_index(ni)
+        self._carousel.scroll_to(self._carousel.get_nth_page(ni), True)
+
+    def _on_page_changed(self, _carousel, index):
+        # Also fires after a swipe, which bypasses _go().
+        if index != self._index:
+            self._set_index(index)
+
+    def _set_index(self, ni):
         self._index = ni
         self._t0 = GLib.get_monotonic_time()
-        self._stack.set_visible_child_name(f"p{ni}")
         self._update_controls()
 
     def _update_controls(self):
@@ -992,19 +1031,15 @@ class OnboardingWindow(Gtk.Window):
         self._back.set_sensitive(self._index > 0)
         self._next.set_label("Get started" if last else "Next")
         self._skip.set_visible(not last)
-        for d in self._dot_widgets:
-            d.queue_draw()
 
-    def _on_key(self, _w, ev):
-        from gi.repository import Gdk
-
-        if ev.keyval in (Gdk.KEY_Right, Gdk.KEY_Return, Gdk.KEY_space):
+    def _on_key(self, _ctrl, keyval, _code, _state):
+        if keyval in (Gdk.KEY_Right, Gdk.KEY_Return, Gdk.KEY_space):
             self._go(1)
             return True
-        if ev.keyval == Gdk.KEY_Left:
+        if keyval == Gdk.KEY_Left:
             self._go(-1)
             return True
-        if ev.keyval == Gdk.KEY_Escape:
+        if keyval == Gdk.KEY_Escape:
             self._finish(open_plugins=False)
             return True
         return False
@@ -1017,7 +1052,7 @@ class OnboardingWindow(Gtk.Window):
             except Exception:
                 pass
         cb = self._on_open_plugins if (open_plugins and self._on_open_plugins) else None
-        self.destroy()
+        self.close()
         if cb:
             try:
                 cb()
@@ -1027,7 +1062,7 @@ class OnboardingWindow(Gtk.Window):
     def _on_destroy(self, _w):
         if getattr(self, "_timer", None):
             try:
-                GLib.source_remove(self._timer)
+                self._area.remove_tick_callback(self._timer)
             except Exception:
                 pass
             self._timer = None
@@ -1054,6 +1089,9 @@ if __name__ == "__main__":  # standalone preview / replay
     import sys
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gtk4_app
+
+    gtk4_app.init()
     try:
         from settings import get_settings
 
@@ -1079,6 +1117,4 @@ if __name__ == "__main__":  # standalone preview / replay
         install_premium_theme(_s.get("theme", "dark") or "dark")
     except Exception:
         pass
-    _w = OnboardingWindow(_s)
-    _w.connect("destroy", Gtk.main_quit)
-    Gtk.main()
+    gtk4_app.run_window(OnboardingWindow(_s))

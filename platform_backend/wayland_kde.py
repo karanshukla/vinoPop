@@ -6,7 +6,8 @@ Proven on Fedora 44 KDE Plasma (KWin 6.6.5) during the Fase 0 spike:
   - global pointer position -> KWin `workspace.cursorPos` over DBus
                                (see _kwin_cursor.py; subprocess per query)
   - keystroke injection     -> wtype
-  - popup positioning        -> gtk-layer-shell (anchor top-left + margins)
+  - popup positioning        -> gtk4-layer-shell (anchor top-left + margins);
+                               XWayland override-redirect when it's missing
   - global hotkey            -> KGlobalAccel over DBus (best-effort, see below)
 
 The global hotkey path is the one piece that cannot be verified without a
@@ -131,17 +132,19 @@ _YDOTOOL_KEYCODES = {
 
 
 def _layer_shell():
-    """Import GtkLayerShell lazily so importing this module doesn't hard-fail
+    """Import Gtk4LayerShell lazily so importing this module doesn't hard-fail
     when the typelib is missing (we want a clear error only when we actually
-    try to show the popup)."""
+    try to show the popup). main.py preloads libgtk4-layer-shell before GTK
+    so its Wayland hooks are in place; without the typelib main.py has already
+    moved the process onto XWayland and this is never reached."""
     global _LAYER
     if _LAYER is None:
         import gi
 
-        gi.require_version("GtkLayerShell", "0.1")
-        from gi.repository import GtkLayerShell
+        gi.require_version("Gtk4LayerShell", "1.0")
+        from gi.repository import Gtk4LayerShell
 
-        _LAYER = GtkLayerShell
+        _LAYER = Gtk4LayerShell
     return _LAYER
 
 
@@ -1120,15 +1123,29 @@ class WaylandKdeBackend(PlatformBackend):
         return WaylandDoubleClickWatcher(self, on_double_click)
 
     # ---- popup positioning ----------------------------------------------
-    def init_popup_window(self, win) -> None:
+    def prepare_popup_window(self, win) -> None:
+        # No gtk4-layer-shell (main.py then puts GDK on XWayland): place the
+        # popup the X11 way. Selection / pointer / hotkey stay on the native
+        # KWin paths either way.
+        from .x11 import gdk_display_is_x11, x11_prepare_popup_window
+
+        if gdk_display_is_x11(win.get_display()):
+            x11_prepare_popup_window(win)
+            return
         L = _layer_shell()
+        try:
+            if not L.is_supported():
+                print("[wayland] compositor has no wlr-layer-shell - popup placement will be off")
+        except Exception:
+            pass
         L.init_for_window(win)
         L.set_layer(win, L.Layer.OVERLAY)
         # KeyboardMode.NONE: the popup must NOT take keyboard focus. With
         # ON_DEMAND the layer surface grabs focus on map then immediately gets
-        # a focus-out, and PopupWindow._on_focus_out hides it before it's even
-        # visible. NONE keeps it on-screen; dismissal is via the leave/initial
-        # grace timers (Esc-to-dismiss is a documented Wayland gap for now).
+        # a focus-out, and PopupWindow's focus-loss handler hides it before it's
+        # even visible. NONE keeps it on-screen; dismissal is via the
+        # leave/initial grace timers (Esc-to-dismiss is a documented Wayland
+        # gap for now).
         try:
             L.set_keyboard_mode(win, L.KeyboardMode.NONE)
         except Exception:
@@ -1137,6 +1154,11 @@ class WaylandKdeBackend(PlatformBackend):
         L.set_anchor(win, L.Edge.TOP, True)
 
     def move_popup_window(self, win, x: int, y: int) -> None:
+        from .x11 import gdk_display_is_x11, x11_move_popup_window
+
+        if gdk_display_is_x11(win.get_display()):
+            x11_move_popup_window(win, x, y)
+            return
         L = _layer_shell()
         L.set_anchor(win, L.Edge.LEFT, True)
         L.set_anchor(win, L.Edge.TOP, True)

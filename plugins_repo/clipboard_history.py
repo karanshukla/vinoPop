@@ -34,15 +34,66 @@ from pathlib import Path
 
 import gi
 
-gi.require_version("Gtk", "3.0")
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
+gi.require_version("Graphene", "1.0")
+from gi.repository import Adw, Gdk, GdkPixbuf, GLib, Graphene, Gtk, Pango  # noqa: E402
 
 try:
-    gi.require_version("GdkX11", "3.0")
-    from gi.repository import GdkX11  # noqa: F401, E402
+    gi.require_version("GdkX11", "4.0")
+    from gi.repository import GdkX11  # noqa: E402
 except (ImportError, ValueError):
-    pass
+    GdkX11 = None
+
+
+def _x11_surface(window):
+    """The window's GdkX11.X11Surface, or None off X11 / before realize."""
+    if GdkX11 is None:
+        return None
+    try:
+        surface = window.get_surface()
+    except Exception:
+        return None
+    if surface is not None and isinstance(surface, GdkX11.X11Surface):
+        return surface
+    return None
+
+
+def _apply_x11_hints(window) -> None:
+    """X11-only window-manager hints GTK 4 no longer exposes on Gtk.Window:
+    skip taskbar / pager and keep-above. Skip hints go through GdkX11;
+    keep-above has no GDK API left, so it's an EWMH request via wmctrl
+    when that's installed (best-effort - the picker still works without)."""
+    surface = _x11_surface(window)
+    if surface is None:
+        return
+    try:
+        surface.set_skip_taskbar_hint(True)
+        surface.set_skip_pager_hint(True)
+    except Exception:
+        pass
+    if not shutil.which("wmctrl"):
+        return
+    try:
+        hex_id = f"0x{int(surface.get_xid()):08x}"
+    except Exception:
+        return
+
+    def _above() -> None:
+        try:
+            subprocess.run(
+                ["wmctrl", "-i", "-r", hex_id, "-b", "add,above"],
+                check=False,
+                capture_output=True,
+                timeout=1.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # Off the main thread - wmctrl round-trips to the WM.
+    threading.Thread(target=_above, daemon=True, name="clipboard-above").start()
 
 
 def _force_to_front(window) -> None:
@@ -52,37 +103,27 @@ def _force_to_front(window) -> None:
     explicit X11 raise the picker can be marked keep_above yet still
     appear behind a more-recently-focused LinuxPop dialog.
 
-    The fix is to call GdkWindow.raise_() AND a final window.present()
-    after the WM hint flips, which together force a proper restack.
+    The fix is present() plus an explicit toplevel focus request with
+    the X server time, after the keep-above hint is in place, which
+    together force a proper restack.
     """
     try:
-        window.deiconify()
-        window.set_accept_focus(True)
-        window.set_focus_on_map(True)
-        # Permanent keep-above while the picker is visible. Cleared
-        # implicitly on _on_destroy.
-        window.set_keep_above(True)
-        gdk_win = window.get_window()
-        if gdk_win is not None:
-            try:
-                ts = Gdk.X11.get_server_time(gdk_win)
-            except Exception:
-                ts = Gtk.get_current_event_time() or 0
-            window.present_with_time(ts)
-            # Explicit X11 raise -- doesn't go through focus arbitration,
-            # so it survives focus-stealing prevention.
-            try:
-                gdk_win.raise_()
-            except Exception:
-                pass
-            # And demand keyboard focus on top of that.
-            try:
-                gdk_win.focus(ts)
-            except Exception:
-                pass
-        # Final present() nudge after keep_above + raise so the WM
-        # re-evaluates stack order with the new flags in place.
         window.present()
+        surface = _x11_surface(window)
+        if surface is not None:
+            # Permanent keep-above while the picker is visible. Cleared
+            # implicitly when the window is destroyed.
+            _apply_x11_hints(window)
+            try:
+                ts = GdkX11.x11_get_server_time(surface)
+            except Exception:
+                ts = 0
+            # Demand keyboard focus with a real timestamp so it survives
+            # focus-stealing prevention.
+            try:
+                surface.focus(ts)
+            except Exception:
+                pass
     except Exception:
         try:
             window.present()
@@ -1888,39 +1929,87 @@ _PICKER_OFFSET_X = 12
 _PICKER_OFFSET_Y = 12
 
 
+def _is_wayland_kde() -> bool:
+    try:
+        from platform_backend import get_backend
+
+        return get_backend().name == "wayland_kde"
+    except Exception:
+        return False
+
+
+def _monitor_geometry_at(px: int, py: int):
+    """Geometry (Gdk.Rectangle) of the monitor holding (px, py), or None.
+    GTK 4 dropped Gdk.Display.get_monitor_at_point, so walk the list."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return None
+    monitors = display.get_monitors()
+    first = None
+    for i in range(monitors.get_n_items()):
+        geom = monitors.get_item(i).get_geometry()
+        if first is None:
+            first = geom
+        if geom.x <= px < geom.x + geom.width and geom.y <= py < geom.y + geom.height:
+            return geom
+    return first
+
+
 def _position_at_pointer(win: Gtk.Window) -> None:
     """Place the picker near the pointer, clamped to its monitor.
 
     Borderless windows can't be moved by the user via a title bar (we
     don't have one), so opening at the pointer makes the picker land
     where the user is already looking. The drag handle on the brand
-    row lets them move it after that."""
-    display = Gdk.Display.get_default()
-    if display is None:
+    row lets them move it after that. Positioning goes through
+    platform_backend - GTK 4 has no Gtk.Window.move()."""
+    # Wayland: a client can't self-position a toplevel; the compositor
+    # places the (decorated) picker.
+    if _is_wayland_kde():
         return
     try:
-        seat = display.get_default_seat()
-        pointer = seat.get_pointer()
-        _, px, py = pointer.get_position()
+        from platform_backend import get_backend
+
+        backend = get_backend()
+        px, py = backend.pointer_position()
     except Exception:
         return
-    try:
-        monitor = display.get_monitor_at_point(px, py)
-        geom = monitor.get_geometry()
-    except Exception:
+    geom = _monitor_geometry_at(px, py)
+    if geom is None:
         # Fall back to a static default if monitor lookup fails.
-        win.move(max(0, px - _PICKER_W // 2), max(0, py - _PICKER_H // 2))
-        return
-    x = px + _PICKER_OFFSET_X
-    y = py + _PICKER_OFFSET_Y
-    # Clamp so the window fits inside the monitor.
-    if x + _PICKER_W > geom.x + geom.width:
-        x = px - _PICKER_OFFSET_X - _PICKER_W
-    if y + _PICKER_H > geom.y + geom.height:
-        y = py - _PICKER_OFFSET_Y - _PICKER_H
-    x = max(geom.x, x)
-    y = max(geom.y, y)
-    win.move(x, y)
+        x, y = max(0, px - _PICKER_W // 2), max(0, py - _PICKER_H // 2)
+    else:
+        x = px + _PICKER_OFFSET_X
+        y = py + _PICKER_OFFSET_Y
+        # Clamp so the window fits inside the monitor.
+        if x + _PICKER_W > geom.x + geom.width:
+            x = px - _PICKER_OFFSET_X - _PICKER_W
+        if y + _PICKER_H > geom.y + geom.height:
+            y = py - _PICKER_OFFSET_Y - _PICKER_H
+        x = max(geom.x, x)
+        y = max(geom.y, y)
+    try:
+        backend.move_popup_window(win, x, y)
+    except Exception as exc:
+        print(f"[clipboard] could not position picker: {exc}")
+
+
+def _run_nested(present: Callable[[], None], connect_done: Callable[[Callable], None]) -> None:
+    """Block until a dialog is dismissed - the GTK 4 stand-in for
+    Gtk.Dialog.run(). Spins a nested main loop exactly like run() did,
+    so the synchronous callers (render_placeholders' ask callback, the
+    confirm prompts) keep their straight-line shape. `connect_done`
+    receives the function to call once the dialog is gone."""
+    loop = GLib.MainLoop()
+
+    def _done(*_a):
+        if loop.is_running():
+            loop.quit()
+        return False
+
+    connect_done(_done)
+    present()
+    loop.run()
 
 
 class _PickerDialog:
@@ -1964,41 +2053,55 @@ class _PickerDialog:
             return
         self.target_window = target_window
 
-        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        # Adw.Window so the confirm / fill-in prompts (Adw.AlertDialog)
+        # render as sheets inside the picker instead of separate windows.
+        win = Adw.Window()
         # Tag the picker so the theme can force-clear the dark fallback
         # GTK paints over ListBox content. Without an explicit class
         # the row area kept a dark cast in the light theme.
-        win.get_style_context().add_class("lp-picker")
+        win.add_css_class("lp-picker")
         win.set_title("LinuxPop - Clipboard & Snippets")
         win.set_default_size(_PICKER_W, _PICKER_H)
-        # Position is set explicitly via _position_at_pointer() below;
-        # NONE lets our move() take effect before show.
-        win.set_position(Gtk.WindowPosition.NONE)
-        win.set_gravity(Gdk.Gravity.NORTH_WEST)
         win.set_icon_name("linuxpop")
-        win.set_skip_taskbar_hint(True)
-        win.set_skip_pager_hint(True)
-        win.set_keep_above(True)
         # Borderless, ephemeral picker on X11 - moved via the brand-row drag
-        # handle. On Wayland a client can't self-position or self-move an
-        # undecorated window, so give the picker real KWin decorations there:
-        # the user gets move + resize for free from the window manager.
-        try:
-            from platform_backend import get_backend
-
-            _wl = get_backend().name == "wayland_kde"
-        except Exception:
-            _wl = False
+        # handle. On Wayland a client can't self-position an undecorated
+        # window, so keep the picker a normal resizable toplevel there: the
+        # compositor places it and the brand-row drag still moves it.
+        _wl = _is_wayland_kde()
         if _wl:
             win.set_decorated(True)
             win.set_resizable(True)
         else:
             win.set_decorated(False)
-            win.set_type_hint(Gdk.WindowTypeHint.UTILITY)
-            win.set_resizable(False)
+            # GTK 3 made this non-resizable. In GTK 4 an undecorated window
+            # has no resize edges anyway, and a non-resizable AdwWindow
+            # would float its Adw.AlertDialog prompts as separate windows
+            # instead of sheets inside the picker - so leave it resizable.
+            win.set_resizable(True)
+            # Positioning (and the skip-taskbar / keep-above behaviour of
+            # a utility popup) is the platform backend's job in GTK 4.
+            try:
+                from platform_backend import get_backend
+
+                get_backend().prepare_popup_window(win)
+            except Exception as exc:
+                _log.info("[clipboard.show] prepare_popup_window failed: %s", exc)
+        # GTK 4's Gtk.Window.destroy() only drops GTK's own reference, so
+        # "destroy" may fire late (or not while Python still holds the
+        # window); _dismiss() clears state eagerly and these are backups
+        # for the WM closing the window (Wayland decorations).
         win.connect("destroy", self._on_destroy)
-        win.connect("key-press-event", self._on_key_press)
-        win.connect("focus-out-event", self._on_focus_out)
+        win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
+        win.connect("map", lambda w: _apply_x11_hints(w))
+        # Capture phase: the window sees keys before the focused child,
+        # matching GTK 3's toplevel key-press-event ordering.
+        key_ctrl = Gtk.EventControllerKey()
+        key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        win.add_controller(key_ctrl)
+        # GTK 4 has no focus-out-event on toplevels; "is-active" flipping
+        # to False is the equivalent signal.
+        win.connect("notify::is-active", self._on_active_changed)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         outer.set_margin_top(8)
@@ -2010,85 +2113,72 @@ class _PickerDialog:
         # without a window decoration to lean on (this is a borderless
         # popup). The icon is the full-colour app logo so it reads on
         # both the dark and the light theme.
-        # Wrapped in an EventBox so button-press on the header begins a
-        # window-move drag - the only way for the user to reposition a
-        # decoration-less Gtk.Window without re-enabling the title bar.
-        brand_event = Gtk.EventBox()
-        brand_event.set_visible_window(False)
-        brand_event.add_events(
-            Gdk.EventMask.BUTTON_PRESS_MASK
-            | Gdk.EventMask.POINTER_MOTION_MASK
-            | Gdk.EventMask.ENTER_NOTIFY_MASK
-            | Gdk.EventMask.LEAVE_NOTIFY_MASK
-        )
-        brand_event.connect("button-press-event", self._on_header_press, win)
-        brand_event.connect(
-            "enter-notify-event",
-            lambda w, e: (
-                w.get_window().set_cursor(Gdk.Cursor.new_from_name(w.get_display(), "grab"))
-                if w.get_window()
-                else False
-            ),
-        )
-        brand_event.connect(
-            "leave-notify-event",
-            lambda w, e: w.get_window().set_cursor(None) if w.get_window() else False,
-        )
+        # A click gesture on the header begins a window-move drag - the
+        # only way for the user to reposition a decoration-less window
+        # without re-enabling the title bar.
         brand_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         brand_row.set_margin_bottom(6)
-        brand_icon = Gtk.Image.new_from_icon_name("linuxpop", Gtk.IconSize.LARGE_TOOLBAR)
+        brand_row.set_cursor_from_name("grab")
+        header_click = Gtk.GestureClick()
+        header_click.set_button(Gdk.BUTTON_PRIMARY)
+        header_click.connect("pressed", self._on_header_pressed)
+        brand_row.add_controller(header_click)
+        brand_icon = Gtk.Image.new_from_icon_name("linuxpop")
         brand_icon.set_pixel_size(24)
-        brand_row.pack_start(brand_icon, False, False, 0)
+        brand_row.append(brand_icon)
         brand_text_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         brand_text_box.set_valign(Gtk.Align.CENTER)
+        brand_text_box.set_hexpand(True)
         brand_name = Gtk.Label(xalign=0)
         brand_name.set_markup("<b>LinuxPop</b>")
-        brand_text_box.pack_start(brand_name, False, False, 0)
+        brand_text_box.append(brand_name)
         brand_sub = Gtk.Label(label="Clipboard & snippets", xalign=0)
-        brand_sub.get_style_context().add_class("dim-label")
-        brand_text_box.pack_start(brand_sub, False, False, 0)
-        brand_row.pack_start(brand_text_box, True, True, 0)
-        brand_event.add(brand_row)
-        outer.pack_start(brand_event, False, False, 0)
+        brand_sub.add_css_class("dim-label")
+        brand_text_box.append(brand_sub)
+        brand_row.append(brand_text_box)
+        outer.append(brand_row)
 
         # Search
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("Type to filter…")
         self.search_entry.connect("search-changed", self._on_search_changed)
-        outer.pack_start(self.search_entry, False, False, 0)
+        outer.append(self.search_entry)
 
         # Tabs
         self.notebook = Gtk.Notebook()
         self.notebook.set_margin_top(6)
+        self.notebook.set_vexpand(True)
 
         # Recent tab
         recent_scroll = Gtk.ScrolledWindow()
         recent_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        recent_scroll.set_vexpand(True)
         self.recent_listbox = Gtk.ListBox()
         self.recent_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.recent_listbox.set_filter_func(self._row_filter)
         self.recent_listbox.connect("row-activated", self._on_row_activated)
-        recent_scroll.add(self.recent_listbox)
+        recent_scroll.set_child(self.recent_listbox)
         self.notebook.append_page(recent_scroll, Gtk.Label(label="Recent"))
 
         # Snippets tab - listbox plus a "+ New snippet" button under it.
         snippets_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         snippets_scroll = Gtk.ScrolledWindow()
         snippets_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        snippets_scroll.set_vexpand(True)
         self.snippets_listbox = Gtk.ListBox()
         self.snippets_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.snippets_listbox.set_filter_func(self._row_filter)
         self.snippets_listbox.connect("row-activated", self._on_row_activated)
-        snippets_scroll.add(self.snippets_listbox)
-        snippets_box.pack_start(snippets_scroll, True, True, 0)
+        snippets_scroll.set_child(self.snippets_listbox)
+        snippets_box.append(snippets_scroll)
         new_snippet_btn = Gtk.Button(label="＋ New snippet…")
         new_snippet_btn.set_halign(Gtk.Align.START)
         new_snippet_btn.set_margin_top(4)
         new_snippet_btn.connect("clicked", self._on_new_snippet_clicked)
-        snippets_box.pack_start(new_snippet_btn, False, False, 0)
+        snippets_box.append(new_snippet_btn)
         self.notebook.append_page(snippets_box, Gtk.Label(label="Snippets"))
 
-        outer.pack_start(self.notebook, True, True, 0)
+        outer.append(self.notebook)
 
         # Hint
         hint = Gtk.Label(xalign=0, margin_top=6)
@@ -2097,74 +2187,92 @@ class _PickerDialog:
             "Ctrl+R rename · Snippets support <tt>{date} {time} {datetime} "
             "{clipboard} {cursor} {ask:Label}</tt> · Esc to close</small>"
         )
-        hint.set_line_wrap(True)
-        outer.pack_start(hint, False, False, 0)
+        hint.set_wrap(True)
+        outer.append(hint)
 
-        win.add(outer)
+        win.set_content(outer)
+        self.dialog = win
         _stamp("built widgets")
         self._populate_recent()
         _stamp("populated recent")
         self._populate_snippets()
         _stamp("populated snippets")
         _position_at_pointer(win)
-        win.show_all()
-        _stamp("show_all")
-        # Re-issue the move now that the window has a size - some WMs
-        # ignore move() requests on unrealized windows.
+        win.present()
+        _stamp("present")
+        # Re-issue the move now that the window is realized and has a
+        # size - some WMs ignore move requests on unmapped windows.
         _position_at_pointer(win)
         _force_to_front(win)
         _stamp("force_to_front")
         # Defer search-entry focus until AFTER the WM has had a chance to
         # process our focus request - calling grab_focus immediately after
-        # show_all races the FocusIn event and silently fails.
+        # present races the FocusIn event and silently fails.
         if self.search_entry is not None:
             GLib.idle_add(self._grab_search_focus)
-        self.dialog = win
 
     def _grab_search_focus(self) -> bool:
         if self.search_entry is not None and self.dialog is not None:
             self.search_entry.grab_focus()
         return False  # one-shot
 
-    def _on_header_press(self, _widget, event, win: Gtk.Window) -> bool:
+    def _on_header_pressed(self, gesture: Gtk.GestureClick, _n_press, x, y) -> None:
         # Left-click on the header begins a window-move drag via the WM.
         # The focus-out that fires while the drag is in progress would
         # otherwise destroy the picker mid-drag; flag it so the focus-out
         # handler defers, and clear the flag a beat after the drag would
         # have completed (GTK has no clean "drag ended" callback for
-        # begin_move_drag).
-        if event.button != Gdk.BUTTON_PRIMARY:
-            return False
+        # Gdk.Toplevel.begin_move).
+        win = self.dialog
+        if win is None:
+            return
+        surface = win.get_surface()
+        if surface is None:
+            return
+        # begin_move wants surface coordinates: header-local -> window ->
+        # surface (the surface transform covers any CSD shadow margin).
+        ok, pt = gesture.get_widget().compute_point(win, Graphene.Point().init(x, y))
+        if not ok:
+            return
+        tx, ty = win.get_surface_transform()
         self._dragging = True
-        win.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-        # The drag returns control synchronously after the user releases
-        # the button; clear the flag on the next main-loop tick so any
-        # late focus-out events are still suppressed.
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        try:
+            surface.begin_move(
+                gesture.get_device(),
+                gesture.get_current_button(),
+                pt.x + tx,
+                pt.y + ty,
+                gesture.get_current_event_time(),
+            )
+        except Exception:
+            pass
+        # Clear the flag on a later main-loop tick so any late focus-out
+        # events are still suppressed.
         GLib.timeout_add(200, self._clear_dragging)
-        return True
 
     def _clear_dragging(self) -> bool:
         self._dragging = False
         return False  # one-shot
 
-    def _on_focus_out(self, _widget, _event) -> bool:
+    def _on_active_changed(self, _win, _pspec) -> None:
+        if self.dialog is None or self.dialog.is_active():
+            return
         # Don't close while a rename / pin prompt is showing - that
         # dialog is transient_for=self.dialog and tearing it down would
         # orphan the prompt.
         if self._modal_child_open:
-            return False
+            return
         # Don't close mid-drag - the WM steals focus from us while we
         # move the window, and we want it back when the drag ends.
         if self._dragging:
-            return False
+            return
         # IBus/Cinnamon occasionally bounce focus away from the picker
         # for a single frame (input-method window opens, system tray
         # ping, etc.) and immediately give it back. Destroying on the
         # first focus-out makes the picker vanish mid-search. Defer the
         # check: if focus has actually moved elsewhere 120 ms from now,
         # close. Otherwise the picker is still focused - keep it.
-        if self.dialog is None:
-            return False
 
         def _confirm_focus_lost() -> bool:
             if self.dialog is None:
@@ -2176,13 +2284,23 @@ class _PickerDialog:
             except Exception:
                 still_active = False
             if not still_active:
-                self.dialog.destroy()
+                self._dismiss()
             return False  # one-shot
 
         GLib.timeout_add(120, _confirm_focus_lost)
-        return False
 
-    def _on_destroy(self, *_):
+    def _dismiss(self) -> None:
+        """Close the picker and clear its state right away."""
+        win = self.dialog
+        if win is None:
+            return
+        self._on_destroy(win)
+        win.destroy()
+
+    def _on_destroy(self, win=None, *_):
+        # A stale window's late "destroy" must not wipe a newer picker.
+        if win is not None and win is not self.dialog:
+            return
         import logging
 
         logging.getLogger("linuxpop").info("[clipboard.show] window destroyed -- state cleared")
@@ -2195,31 +2313,39 @@ class _PickerDialog:
 
     # ---- population ----
 
+    @staticmethod
+    def _rows(listbox: Gtk.ListBox) -> list[Gtk.ListBoxRow]:
+        """All rows of a listbox, in order. GTK 4 has no get_children(),
+        and the listbox's widget children also include category headers."""
+        rows = []
+        i = 0
+        while (row := listbox.get_row_at_index(i)) is not None:
+            rows.append(row)
+            i += 1
+        return rows
+
     def _populate_recent(self) -> None:
         if self.recent_listbox is None:
             return
-        for child in list(self.recent_listbox.get_children()):
-            self.recent_listbox.remove(child)
+        self.recent_listbox.remove_all()
         with _history_lock:
             entries = list(_history)
         if not entries:
-            self.recent_listbox.add(
+            self.recent_listbox.append(
                 self._empty_row("History is empty", "Copy something - it appears here.")
             )
         else:
             for entry in entries:
-                self.recent_listbox.add(self._make_row(entry, is_snippet=False))
-        self.recent_listbox.show_all()
+                self.recent_listbox.append(self._make_row(entry, is_snippet=False))
 
     def _populate_snippets(self) -> None:
         if self.snippets_listbox is None:
             return
-        for child in list(self.snippets_listbox.get_children()):
-            self.snippets_listbox.remove(child)
+        self.snippets_listbox.remove_all()
         with _snippets_lock:
             entries = list(_snippets)
         if not entries:
-            self.snippets_listbox.add(
+            self.snippets_listbox.append(
                 self._empty_row(
                     "No snippets yet", "Pin (★) an entry from Recent to save it here permanently."
                 )
@@ -2233,9 +2359,8 @@ class _PickerDialog:
                 return (cat.lower() or "￿", (e.name or "").lower())
 
             for entry in sorted(entries, key=_sort_key):
-                self.snippets_listbox.add(self._make_row(entry, is_snippet=True))
+                self.snippets_listbox.append(self._make_row(entry, is_snippet=True))
             self.snippets_listbox.set_header_func(self._snippet_header_func)
-        self.snippets_listbox.show_all()
 
     @staticmethod
     def _snippet_header_func(row, before) -> None:
@@ -2255,22 +2380,23 @@ class _PickerDialog:
             return
         header = Gtk.Label(xalign=0, margin_top=6, margin_bottom=2, margin_start=10, margin_end=10)
         header.set_markup(f"<small><b>{GLib.markup_escape_text(cat.upper())}</b></small>")
-        header.get_style_context().add_class("dim-label")
+        header.add_css_class("dim-label")
         row.set_header(header)
 
     def _empty_row(self, title: str, subtitle: str) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
         row.set_selectable(False)
+        row.set_activatable(False)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.set_margin_top(24)
         box.set_margin_bottom(24)
         t = Gtk.Label(xalign=0.5)
         t.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
         s = Gtk.Label(label=subtitle, xalign=0.5, wrap=True)
-        s.get_style_context().add_class("dim-label")
-        box.pack_start(t, False, False, 0)
-        box.pack_start(s, False, False, 0)
-        row.add(box)
+        s.add_css_class("dim-label")
+        box.append(t)
+        box.append(s)
+        row.set_child(box)
         return row
 
     def _make_row(self, entry: Entry, is_snippet: bool) -> Gtk.ListBoxRow:
@@ -2278,7 +2404,14 @@ class _PickerDialog:
         row.entry = entry  # type: ignore[attr-defined]
         row.is_snippet = is_snippet  # type: ignore[attr-defined]
 
-        hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, margin=6)
+        hbox = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=10,
+            margin_top=6,
+            margin_bottom=6,
+            margin_start=6,
+            margin_end=6,
+        )
 
         # Thumbnail / icon
         if entry.kind == "image" and Path(entry.image_path).is_file():
@@ -2289,19 +2422,20 @@ class _PickerDialog:
                     48,
                     True,
                 )
-                img = Gtk.Image.new_from_pixbuf(pix)
+                img = Gtk.Image.new_from_paintable(Gdk.Texture.new_for_pixbuf(pix))
+                img.set_pixel_size(48)
             except Exception:
-                img = Gtk.Image.new_from_icon_name(
-                    "image-x-generic-symbolic",
-                    Gtk.IconSize.LARGE_TOOLBAR,
-                )
+                img = Gtk.Image.new_from_icon_name("image-x-generic-symbolic")
+                img.set_pixel_size(24)
         else:
             icon_name = "starred-symbolic" if is_snippet else "edit-paste-symbolic"
-            img = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.LARGE_TOOLBAR)
-        hbox.pack_start(img, False, False, 0)
+            img = Gtk.Image.new_from_icon_name(icon_name)
+            img.set_pixel_size(24)
+        hbox.append(img)
 
         # Text
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        vbox.set_hexpand(True)
         title = Gtk.Label(xalign=0)
         title_markup = f"<b>{GLib.markup_escape_text(entry.preview())}</b>"
         if is_snippet and entry.trigger:
@@ -2311,9 +2445,9 @@ class _PickerDialog:
                 f"⇥ {GLib.markup_escape_text(triggers_display)}</span></small>"
             )
         title.set_markup(title_markup)
-        title.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+        title.set_ellipsize(Pango.EllipsizeMode.END)
         title.set_max_width_chars(60)
-        vbox.pack_start(title, False, False, 0)
+        vbox.append(title)
 
         if is_snippet and entry.name:
             # Show a preview of contents under the name, plus a usage
@@ -2333,53 +2467,47 @@ class _PickerDialog:
                 f"{GLib.markup_escape_text(count_suffix)}"
                 f"</span></small>"
             )
-            sub.set_ellipsize(3)
+            sub.set_ellipsize(Pango.EllipsizeMode.END)
             sub.set_max_width_chars(80)
-            vbox.pack_start(sub, False, False, 0)
+            vbox.append(sub)
         else:
             meta = time.strftime("%H:%M:%S", time.localtime(entry.timestamp))
             if entry.kind == "text":
                 meta += f"  ·  {len(entry.text)} chars"
             sub = Gtk.Label(xalign=0)
             sub.set_markup(f"<small><span foreground='#8a92a8'>{meta}</span></small>")
-            vbox.pack_start(sub, False, False, 0)
-        hbox.pack_start(vbox, True, True, 0)
+            vbox.append(sub)
+        hbox.append(vbox)
 
-        # Action buttons
+        # Action buttons (GTK 3 packed these from the end: rightmost first)
         if is_snippet:
-            rename_btn = Gtk.Button.new_from_icon_name(
-                "document-edit-symbolic",
-                Gtk.IconSize.BUTTON,
-            )
-            rename_btn.set_valign(Gtk.Align.CENTER)
-            rename_btn.set_tooltip_text("Rename")
-            rename_btn.connect("clicked", self._on_rename_clicked, entry)
-            hbox.pack_end(rename_btn, False, False, 0)
-
             # Delete this snippet entirely. Used to be a "star/unpin"
             # button from the days when snippets were pinned clipboard
             # entries; now that snippets are first-class items with
             # triggers and bodies of their own, "delete" matches the
             # mental model better.
-            delete_btn = Gtk.Button.new_from_icon_name(
-                "user-trash-symbolic",
-                Gtk.IconSize.BUTTON,
-            )
+            delete_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
             delete_btn.set_valign(Gtk.Align.CENTER)
+            delete_btn.add_css_class("flat")
             delete_btn.set_tooltip_text("Delete this snippet")
             delete_btn.connect("clicked", self._on_unpin_clicked, entry)
-            hbox.pack_end(delete_btn, False, False, 0)
+            hbox.append(delete_btn)
+
+            rename_btn = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+            rename_btn.set_valign(Gtk.Align.CENTER)
+            rename_btn.add_css_class("flat")
+            rename_btn.set_tooltip_text("Rename")
+            rename_btn.connect("clicked", self._on_rename_clicked, entry)
+            hbox.append(rename_btn)
         else:
-            pin_btn = Gtk.Button.new_from_icon_name(
-                "non-starred-symbolic",
-                Gtk.IconSize.BUTTON,
-            )
+            pin_btn = Gtk.Button.new_from_icon_name("non-starred-symbolic")
             pin_btn.set_valign(Gtk.Align.CENTER)
+            pin_btn.add_css_class("flat")
             pin_btn.set_tooltip_text("Pin as snippet (also lets you name it)")
             pin_btn.connect("clicked", self._on_pin_clicked, entry)
-            hbox.pack_end(pin_btn, False, False, 0)
+            hbox.append(pin_btn)
 
-        row.add(hbox)
+        row.set_child(hbox)
         return row
 
     # ---- filter ----
@@ -2433,62 +2561,168 @@ class _PickerDialog:
                     name=entry.name,
                 )
         if self.dialog is not None:
-            self.dialog.destroy()
+            self._dismiss()
         _paste_to_window(entry, target, cursor_left=cursor_left)
+
+    # ---- modal helpers (GTK 4 has no Gtk.Dialog.run) ----
+
+    def _run_alert(
+        self,
+        dlg: Adw.AlertDialog,
+        parent: Gtk.Widget | None = None,
+        activate_widgets: tuple = (),
+    ) -> str:
+        """Present an Adw.AlertDialog over `parent` (the picker by default)
+        and block until it closes. Returns the response id; the dialog's
+        close-response when dismissed. Entries in `activate_widgets` submit
+        the default response on Enter, like activates_default did."""
+        parent = parent if parent is not None else self.dialog
+        result: list[str | None] = [None]
+
+        def _on_response(_d, rid):
+            if result[0] is None:
+                result[0] = rid
+
+        def _submit(*_a):
+            dlg.emit("response", dlg.get_default_response() or "ok")
+            dlg.close()
+
+        dlg.connect("response", _on_response)
+        for w in activate_widgets:
+            w.connect("activate", _submit)
+
+        def _connect(done):
+            dlg.connect("closed", done)
+            # A picker torn down underneath the prompt must not leave the
+            # nested loop spinning.
+            if parent is not None:
+                parent.connect("destroy", done)
+
+        _run_nested(lambda: dlg.present(parent), _connect)
+        return result[0] or dlg.get_close_response()
+
+    def _make_form_window(
+        self,
+        title: str,
+        parent: Gtk.Window | None,
+        width: int,
+        height: int,
+        ok_label: str | None,
+    ) -> tuple[Adw.Window, Gtk.Box, Gtk.Button | None]:
+        """A modal Adw.Window with a header bar (Cancel / `ok_label`) and a
+        vertical content box - the replacement for the bigger Gtk.Dialog
+        forms. With ok_label=None it's a plain closable window."""
+        win = Adw.Window(title=title, modal=True)
+        if parent is not None:
+            win.set_transient_for(parent)
+        win.set_default_size(width, height)
+        header = Adw.HeaderBar()
+        ok_btn = None
+        if ok_label is not None:
+            header.set_show_start_title_buttons(False)
+            header.set_show_end_title_buttons(False)
+            cancel_btn = Gtk.Button(label="Cancel")
+            cancel_btn.connect("clicked", lambda _b: win.close())
+            header.pack_start(cancel_btn)
+            ok_btn = Gtk.Button(label=ok_label)
+            ok_btn.add_css_class("suggested-action")
+            header.pack_end(ok_btn)
+            win.set_default_widget(ok_btn)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.set_margin_top(8)
+        content.set_margin_bottom(8)
+        content.set_margin_start(12)
+        content.set_margin_end(12)
+        view = Adw.ToolbarView()
+        view.add_top_bar(header)
+        view.set_content(content)
+        win.set_content(view)
+        # Esc closes (= Cancel), as it did for Gtk.Dialog.
+        keys = Gtk.EventControllerKey()
+
+        def _on_key(_c, keyval, _code, _state):
+            if keyval == Gdk.KEY_Escape:
+                win.close()
+                return True
+            return False
+
+        keys.connect("key-pressed", _on_key)
+        win.add_controller(keys)
+        return win, content, ok_btn
+
+    @staticmethod
+    def _run_form(win: Adw.Window, ok_btn: Gtk.Button | None, collect: Callable[[], object]):
+        """Block until `win` closes. Returns collect() if OK was pressed
+        (read before the widgets are torn down), else None."""
+        result: list = [None]
+        if ok_btn is not None:
+
+            def _ok(_b):
+                result[0] = collect()
+                win.close()
+
+            ok_btn.connect("clicked", _ok)
+        _run_nested(win.present, lambda done: win.connect("close-request", done))
+        return result[0]
 
     def _ask_placeholder_values(
         self,
         fields: list[tuple[str, list[str] | None]],
     ) -> dict | None:
-        """Bridge for render_placeholders → blocking Gtk form dialog
+        """Bridge for render_placeholders → blocking Adw.AlertDialog form
         with one widget per unique {ask:Label}. `fields` is a list of
         (label, options) pairs: options=None means free-text Entry,
-        a list of strings becomes a ComboBoxText dropdown. Returns
+        a list of strings becomes a Gtk.DropDown. Returns
         {label: value} on OK, None on Cancel."""
         if not fields:
             return {}
         self._modal_child_open = True
         try:
             title = "Snippet" if len(fields) > 1 else fields[0][0]
-            dlg = Gtk.Dialog(title=title, transient_for=self.dialog, flags=0)
-            dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
-            dlg.set_default_response(Gtk.ResponseType.OK)
-            content = dlg.get_content_area()
-            content.set_spacing(6)
-            content.set_margin_top(8)
-            content.set_margin_bottom(8)
-            content.set_margin_start(12)
-            content.set_margin_end(12)
+            dlg = Adw.AlertDialog(heading=title)
+            dlg.add_response("cancel", "Cancel")
+            dlg.add_response("ok", "OK")
+            dlg.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+            dlg.set_default_response("ok")
+            dlg.set_close_response("cancel")
+            content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             widgets: dict = {}
+            entries: list = []
+            first_entry = None
             for i, (label, options) in enumerate(fields):
                 lbl = Gtk.Label(xalign=0)
                 lbl.set_markup(f"<b>{GLib.markup_escape_text(label)}</b>")
-                content.add(lbl)
+                content.append(lbl)
                 if options:
-                    combo = Gtk.ComboBoxText()
-                    for opt in options:
-                        combo.append_text(opt)
-                    combo.set_active(0)
-                    content.add(combo)
+                    combo = Gtk.DropDown.new(Gtk.StringList.new(list(options)), None)
+                    combo.set_selected(0)
+                    content.append(combo)
                     widgets[label] = combo
                 else:
                     entry = Gtk.Entry()
-                    entry.set_activates_default(True)
                     entry.set_width_chars(40)
-                    content.add(entry)
+                    content.append(entry)
                     widgets[label] = entry
+                    entries.append(entry)
                     if i == 0:
-                        entry.set_property("has-focus", True)
-            dlg.show_all()
-            response = dlg.run()
+                        first_entry = entry
+            dlg.set_extra_child(content)
+            if first_entry is not None:
+                dlg.set_focus(first_entry)
             answers = {}
-            for label, w in widgets.items():
-                if isinstance(w, Gtk.ComboBoxText):
-                    answers[label] = w.get_active_text() or ""
-                else:
-                    answers[label] = w.get_text()
-            dlg.destroy()
-            if response != Gtk.ResponseType.OK:
+
+            def _collect(*_a):
+                for label, w in widgets.items():
+                    if isinstance(w, Gtk.DropDown):
+                        item = w.get_selected_item()
+                        answers[label] = item.get_string() if item is not None else ""
+                    else:
+                        answers[label] = w.get_text()
+
+            # Read the values as the response fires, before teardown.
+            dlg.connect("response", _collect)
+            response = self._run_alert(dlg, activate_widgets=tuple(entries))
+            if response != "ok":
                 return None
             return answers
         finally:
@@ -2524,32 +2758,22 @@ class _PickerDialog:
         label = entry.name or entry.preview(40) or "this snippet"
         self._modal_child_open = True
         try:
-            dlg = Gtk.MessageDialog(
-                transient_for=self.dialog,
-                modal=True,
-                message_type=Gtk.MessageType.QUESTION,
-                buttons=Gtk.ButtonsType.NONE,
-                text=f'Delete "{label}"?',
-                secondary_text=(
+            dlg = Adw.AlertDialog(
+                heading=f'Delete "{label}"?',
+                body=(
                     "The snippet, its triggers, and its category will "
                     "be removed. This can't be undone."
                 ),
             )
-            dlg.add_buttons(
-                "Cancel",
-                Gtk.ResponseType.CANCEL,
-                "Delete",
-                Gtk.ResponseType.OK,
-            )
+            dlg.add_response("cancel", "Cancel")
+            dlg.add_response("delete", "Delete")
             # Style the destructive button red so the choice reads at a glance.
-            ok_btn = dlg.get_widget_for_response(Gtk.ResponseType.OK)
-            if ok_btn is not None:
-                ok_btn.get_style_context().add_class("destructive-action")
-            response = dlg.run()
-            dlg.destroy()
+            dlg.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+            dlg.set_close_response("cancel")
+            response = self._run_alert(dlg)
         finally:
             self._modal_child_open = False
-        if response != Gtk.ResponseType.OK:
+        if response != "delete":
             return
         _unpin_snippet(entry.id)
         self._populate_snippets()
@@ -2581,13 +2805,16 @@ class _PickerDialog:
         person who is NOT a programmer - heavy on examples, light on jargon."""
         self._modal_child_open = True
         try:
-            dlg = Gtk.Dialog(
-                title="Snippet guide",
-                transient_for=parent,
-                flags=0,
-            )
-            dlg.set_default_size(620, 580)
-            dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+            # Plain closable window (header-bar close button stands in
+            # for the old dialog's "Close" action button).
+            dlg, content, _ok = self._make_form_window("Snippet guide", parent, 620, 580, None)
+            for set_margin in (
+                content.set_margin_top,
+                content.set_margin_bottom,
+                content.set_margin_start,
+                content.set_margin_end,
+            ):
+                set_margin(0)
 
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -2606,10 +2833,10 @@ class _PickerDialog:
             # Hero
             hero = Gtk.Label(xalign=0)
             hero.set_markup("<span size='xx-large' weight='bold'>Snippets, in plain words</span>")
-            outer.pack_start(hero, False, False, 0)
+            outer.append(hero)
 
             intro = Gtk.Label(xalign=0)
-            intro.set_line_wrap(True)
+            intro.set_wrap(True)
             intro.set_markup(
                 "<span foreground='#8a92a8'>A <b>snippet</b> is a "
                 "piece of text you save once and reuse forever. Your "
@@ -2617,15 +2844,17 @@ class _PickerDialog:
                 "frequently asked question, a bug-report template - "
                 "anything you find yourself typing more than twice.</span>"
             )
-            outer.pack_start(intro, False, False, 0)
+            outer.append(intro)
 
             sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.pack_start(sep1, False, False, 4)
+            sep1.set_margin_top(4)
+            sep1.set_margin_bottom(4)
+            outer.append(sep1)
 
             # Three ways
             ways_head = Gtk.Label(xalign=0)
             ways_head.set_markup("<span size='large' weight='bold'>Three ways to use one</span>")
-            outer.pack_start(ways_head, False, False, 0)
+            outer.append(ways_head)
 
             for n, head, body in [
                 (
@@ -2661,21 +2890,23 @@ class _PickerDialog:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
                 num = Gtk.Label(xalign=0, yalign=0)
                 num.set_markup(f"<span foreground='#5B7DF5' weight='bold' size='large'>{n}</span>")
-                row.pack_start(num, False, False, 0)
+                row.append(num)
                 text = Gtk.Label(xalign=0, yalign=0)
                 text.set_markup(f"<b>{head}</b>\n<span foreground='#8a92a8'>{body}</span>")
-                text.set_line_wrap(True)
+                text.set_wrap(True)
                 text.set_hexpand(True)
-                row.pack_start(text, True, True, 0)
-                outer.pack_start(row, False, False, 0)
+                row.append(text)
+                outer.append(row)
 
             sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.pack_start(sep2, False, False, 4)
+            sep2.set_margin_top(4)
+            sep2.set_margin_bottom(4)
+            outer.append(sep2)
 
             # Placeholders table
             ph_head = Gtk.Label(xalign=0)
             ph_head.set_markup("<span size='large' weight='bold'>Placeholders you can use</span>")
-            outer.pack_start(ph_head, False, False, 0)
+            outer.append(ph_head)
 
             grid = Gtk.Grid(column_spacing=14, row_spacing=8)
             grid.set_margin_top(4)
@@ -2737,18 +2968,20 @@ class _PickerDialog:
                 grid.attach(tag_lbl, 0, i, 1, 1)
                 desc_lbl = Gtk.Label(xalign=0, yalign=0)
                 desc_lbl.set_markup(f"<span foreground='#9ba3b8'>{desc}</span>")
-                desc_lbl.set_line_wrap(True)
+                desc_lbl.set_wrap(True)
                 desc_lbl.set_hexpand(True)
                 grid.attach(desc_lbl, 1, i, 1, 1)
-            outer.pack_start(grid, False, False, 0)
+            outer.append(grid)
 
             sep3 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.pack_start(sep3, False, False, 4)
+            sep3.set_margin_top(4)
+            sep3.set_margin_bottom(4)
+            outer.append(sep3)
 
             # Recipes
             rec_head = Gtk.Label(xalign=0)
             rec_head.set_markup("<span size='large' weight='bold'>A few real-world recipes</span>")
-            outer.pack_start(rec_head, False, False, 0)
+            outer.append(rec_head)
 
             for title, body_text, note in [
                 (
@@ -2777,41 +3010,43 @@ class _PickerDialog:
             ]:
                 head = Gtk.Label(xalign=0)
                 head.set_markup(f"<b>{GLib.markup_escape_text(title)}</b>")
-                outer.pack_start(head, False, False, 0)
+                outer.append(head)
                 box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
                 box.set_margin_start(8)
                 # Code block: a Frame with the .lp-card CSS class so the
                 # surface follows the active theme (dark vs light). The
                 # accent foreground is fine on either surface.
                 code_frame = Gtk.Frame()
-                code_frame.get_style_context().add_class("lp-card")
+                code_frame.add_css_class("lp-card")
                 code = Gtk.Label(xalign=0, selectable=True)
                 code.set_markup(
                     f"<tt><span foreground='#5B7DF5'>"
                     f"{GLib.markup_escape_text(body_text)}</span></tt>"
                 )
-                code.set_line_wrap(True)
+                code.set_wrap(True)
                 code.set_margin_top(4)
                 code.set_margin_bottom(4)
                 code.set_margin_start(8)
                 code.set_margin_end(8)
-                code_frame.add(code)
-                box.pack_start(code_frame, False, False, 0)
+                code_frame.set_child(code)
+                box.append(code_frame)
                 note_lbl = Gtk.Label(xalign=0)
                 note_lbl.set_markup(f"<small><span foreground='#8a92a8'>{note}</span></small>")
-                note_lbl.set_line_wrap(True)
-                box.pack_start(note_lbl, False, False, 0)
-                outer.pack_start(box, False, False, 0)
+                note_lbl.set_wrap(True)
+                box.append(note_lbl)
+                outer.append(box)
 
             sep4 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.pack_start(sep4, False, False, 4)
+            sep4.set_margin_top(4)
+            sep4.set_margin_bottom(4)
+            outer.append(sep4)
 
             # Case-tip
             case_head = Gtk.Label(xalign=0)
             case_head.set_markup("<span size='large' weight='bold'>One small case-trick</span>")
-            outer.pack_start(case_head, False, False, 0)
+            outer.append(case_head)
             case_body = Gtk.Label(xalign=0)
-            case_body.set_line_wrap(True)
+            case_body.set_wrap(True)
             case_body.set_markup(
                 "<span foreground='#9ba3b8'>"
                 "Triggers match without caring about capital letters, "
@@ -2823,19 +3058,21 @@ class _PickerDialog:
                 "  <tt>;Name </tt> -> Alex morgan\n"
                 "  <tt>;NAME </tt> -> ALEX MORGAN"
             )
-            outer.pack_start(case_body, False, False, 0)
+            outer.append(case_body)
 
             sep5 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.pack_start(sep5, False, False, 4)
+            sep5.set_margin_top(4)
+            sep5.set_margin_bottom(4)
+            outer.append(sep5)
 
             # Type a trigger literally
             esc_head = Gtk.Label(xalign=0)
             esc_head.set_markup(
                 "<span size='large' weight='bold'>Typing a trigger without expanding it</span>"
             )
-            outer.pack_start(esc_head, False, False, 0)
+            outer.append(esc_head)
             esc_body = Gtk.Label(xalign=0)
-            esc_body.set_line_wrap(True)
+            esc_body.set_wrap(True)
             esc_body.set_markup(
                 "<span foreground='#9ba3b8'>"
                 "Sometimes you need to write the literal trigger - "
@@ -2859,13 +3096,11 @@ class _PickerDialog:
                 "that way."
                 "</span>"
             )
-            outer.pack_start(esc_body, False, False, 0)
+            outer.append(esc_body)
 
-            scroll.add(outer)
-            dlg.get_content_area().pack_start(scroll, True, True, 0)
-            dlg.show_all()
-            dlg.run()
-            dlg.destroy()
+            scroll.set_child(outer)
+            content.append(scroll)
+            self._run_form(dlg, None, lambda: None)
         finally:
             self._modal_child_open = False
 
@@ -2880,29 +3115,23 @@ class _PickerDialog:
         Returns (name, trigger, category, text) on OK, None on Cancel."""
         self._modal_child_open = True
         try:
-            dlg = Gtk.Dialog(title="Edit snippet", transient_for=self.dialog, flags=0)
-            dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
-            dlg.set_default_response(Gtk.ResponseType.OK)
-            dlg.set_default_size(520, 460)
-            content = dlg.get_content_area()
+            dlg, content, ok_btn = self._make_form_window(
+                "Edit snippet", self.dialog, 520, 460, "Save"
+            )
             content.set_spacing(4)
-            content.set_margin_top(8)
-            content.set_margin_bottom(8)
-            content.set_margin_start(12)
-            content.set_margin_end(12)
 
             name_lbl = Gtk.Label(xalign=0)
             name_lbl.set_markup("<b>Name</b>")
-            content.add(name_lbl)
+            content.append(name_lbl)
             name_entry = Gtk.Entry()
             name_entry.set_text(default_name)
             name_entry.set_activates_default(True)
             name_entry.set_width_chars(36)
-            content.add(name_entry)
+            content.append(name_entry)
 
             trig_lbl = Gtk.Label(xalign=0, margin_top=6)
             trig_lbl.set_markup("<b>Trigger(s)</b>  <small>(optional, comma-separated)</small>")
-            content.add(trig_lbl)
+            content.append(trig_lbl)
             trig_entry = Gtk.Entry()
             trig_entry.set_text(default_trigger)
             trig_entry.set_activates_default(True)
@@ -2911,11 +3140,11 @@ class _PickerDialog:
                 trig_entry.set_placeholder_text("e.g. ;email, ;e - any of them auto-expands")
             else:
                 trig_entry.set_placeholder_text("Enable 'Snippet triggers' in Settings to use")
-            content.add(trig_entry)
+            content.append(trig_entry)
 
             cat_lbl = Gtk.Label(xalign=0, margin_top=6)
             cat_lbl.set_markup("<b>Category</b>  <small>(optional)</small>")
-            content.add(cat_lbl)
+            content.append(cat_lbl)
             cat_entry = Gtk.Entry()
             cat_entry.set_text(default_category)
             cat_entry.set_activates_default(True)
@@ -2934,48 +3163,49 @@ class _PickerDialog:
                     cat_entry.set_completion(completion)
             except Exception:
                 pass
-            content.add(cat_entry)
+            content.append(cat_entry)
 
             body_lbl = Gtk.Label(xalign=0, margin_top=6)
             body_lbl.set_markup(
                 "<b>Text</b>  <small>(the snippet body - what gets "
                 "pasted when this snippet fires)</small>"
             )
-            content.add(body_lbl)
+            content.append(body_lbl)
             body_scroll = Gtk.ScrolledWindow()
             body_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
             body_scroll.set_min_content_height(140)
-            body_scroll.set_shadow_type(Gtk.ShadowType.IN)
+            body_scroll.set_has_frame(True)
+            body_scroll.set_vexpand(True)
             body_view = Gtk.TextView()
             body_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
             body_view.set_accepts_tab(False)
-            body_view.get_style_context().add_class("lp-cmd-edit")
+            body_view.add_css_class("lp-cmd-edit")
             body_view.get_buffer().set_text(default_text)
-            body_scroll.add(body_view)
-            content.pack_start(body_scroll, True, True, 0)
+            body_scroll.set_child(body_view)
+            content.append(body_scroll)
 
             # Small "Snippet guide" button so help is reachable from the
             # rename/edit dialog too, not just New snippet.
             guide_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, margin_top=10)
             spacer = Gtk.Label()
-            guide_row.pack_start(spacer, True, True, 0)
+            spacer.set_hexpand(True)
+            guide_row.append(spacer)
             guide_btn = Gtk.Button(label="📖 Snippet guide")
             guide_btn.connect("clicked", lambda _b: self._show_snippet_help_dialog(parent=dlg))
-            guide_row.pack_start(guide_btn, False, False, 0)
-            content.add(guide_row)
+            guide_row.append(guide_btn)
+            content.append(guide_row)
 
-            dlg.show_all()
-            name_entry.grab_focus()
-            response = dlg.run()
-            name = name_entry.get_text().strip()
-            trig = trig_entry.get_text().strip()
-            category = cat_entry.get_text().strip()
-            buf = body_view.get_buffer()
-            text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
-            dlg.destroy()
-            if response != Gtk.ResponseType.OK:
-                return None
-            return (name, trig, category, text)
+            def _collect():
+                buf = body_view.get_buffer()
+                return (
+                    name_entry.get_text().strip(),
+                    trig_entry.get_text().strip(),
+                    cat_entry.get_text().strip(),
+                    buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True),
+                )
+
+            dlg.set_focus(name_entry)
+            return self._run_form(dlg, ok_btn, _collect)
         finally:
             self._modal_child_open = False
 
@@ -3011,23 +3241,11 @@ class _PickerDialog:
         )
         self._modal_child_open = True
         try:
-            dlg = Gtk.MessageDialog(
-                transient_for=self.dialog,
-                modal=True,
-                message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.NONE,
-                text="Trigger already in use",
-                secondary_text=body,
-            )
-            dlg.add_buttons(
-                "Cancel",
-                Gtk.ResponseType.CANCEL,
-                "Save anyway",
-                Gtk.ResponseType.OK,
-            )
-            response = dlg.run()
-            dlg.destroy()
-            return response == Gtk.ResponseType.OK
+            dlg = Adw.AlertDialog(heading="Trigger already in use", body=body)
+            dlg.add_response("cancel", "Cancel")
+            dlg.add_response("ok", "Save anyway")
+            dlg.set_close_response("cancel")
+            return self._run_alert(dlg) == "ok"
         finally:
             self._modal_child_open = False
 
@@ -3036,31 +3254,24 @@ class _PickerDialog:
         Returns (name, body, trigger, category) on OK, None on Cancel."""
         self._modal_child_open = True
         try:
-            dlg = Gtk.Dialog(title="New snippet", transient_for=self.dialog, flags=0)
-            dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
-            dlg.set_default_response(Gtk.ResponseType.OK)
-            dlg.set_default_size(480, 360)
-
-            content = dlg.get_content_area()
+            dlg, content, ok_btn = self._make_form_window(
+                "New snippet", self.dialog, 480, 360, "Save"
+            )
             content.set_spacing(6)
-            content.set_margin_top(8)
-            content.set_margin_bottom(8)
-            content.set_margin_start(12)
-            content.set_margin_end(12)
 
             name_label = Gtk.Label(xalign=0)
             name_label.set_markup("<b>Name</b>")
-            content.add(name_label)
+            content.append(name_label)
             name_entry = Gtk.Entry()
             name_entry.set_placeholder_text("Short label (optional)")
-            content.add(name_entry)
+            content.append(name_entry)
 
             triggers_on = bool(_cfg("snippet_triggers_enabled", False))
             trigger_label = Gtk.Label(xalign=0, margin_top=6)
             trigger_label.set_markup(
                 "<b>Trigger(s)</b>  <small>(optional, comma-separated)</small>"
             )
-            content.add(trigger_label)
+            content.append(trigger_label)
             trigger_entry = Gtk.Entry()
             if triggers_on:
                 trigger_entry.set_placeholder_text(
@@ -3070,13 +3281,13 @@ class _PickerDialog:
                 trigger_entry.set_placeholder_text(
                     "Set, then enable 'Snippet triggers' in Settings to auto-expand"
                 )
-            content.add(trigger_entry)
+            content.append(trigger_entry)
 
             cat_label = Gtk.Label(xalign=0, margin_top=6)
             cat_label.set_markup(
                 "<b>Category</b>  <small>(optional - keeps the picker tidy)</small>"
             )
-            content.add(cat_label)
+            content.append(cat_label)
             cat_entry = Gtk.Entry()
             cat_entry.set_placeholder_text("e.g. Email, Code, Personal. Leave blank for General.")
             # Auto-complete from categories that already exist so the
@@ -3096,14 +3307,14 @@ class _PickerDialog:
                     cat_entry.set_completion(completion)
             except Exception:
                 pass
-            content.add(cat_entry)
+            content.append(cat_entry)
 
             body_label = Gtk.Label(xalign=0, margin_top=6)
             body_label.set_markup(
                 "<b>Text</b>  <small>(this is the snippet body - "
                 "type or paste what you want to expand to)</small>"
             )
-            content.add(body_label)
+            content.append(body_label)
             body_scroll = Gtk.ScrolledWindow()
             body_scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
             body_scroll.set_min_content_height(180)
@@ -3111,34 +3322,39 @@ class _PickerDialog:
             # area. Without this, no amount of CSS background on the inner
             # TextView reads as a "real" input field because the field
             # has no frame around it.
-            body_scroll.set_shadow_type(Gtk.ShadowType.IN)
+            body_scroll.set_has_frame(True)
+            body_scroll.set_vexpand(True)
             body_view = Gtk.TextView()
             body_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
             body_view.set_accepts_tab(False)
             # Reuse the same class the terminal-confirm dialog's editable
             # state uses - it gives the standard Entry-field look
             # (lighter background, padding, blue caret).
-            body_view.get_style_context().add_class("lp-cmd-edit")
-            body_scroll.add(body_view)
-            content.pack_start(body_scroll, True, True, 0)
+            body_view.add_css_class("lp-cmd-edit")
+            body_scroll.set_child(body_view)
+            content.append(body_scroll)
 
             help_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=6)
             help_intro = Gtk.Label(xalign=0)
             help_intro.set_markup(
                 "<small>Click to insert a placeholder (filled in at paste time):</small>"
             )
-            help_row.pack_start(help_intro, True, True, 0)
+            help_intro.set_hexpand(True)
+            help_row.append(help_intro)
             help_btn = Gtk.Button(label="📖 Snippet guide")
             help_btn.set_tooltip_text(
                 "Open a friendly walkthrough of snippets, triggers, and placeholders."
             )
             help_btn.connect("clicked", lambda _b: self._show_snippet_help_dialog(parent=dlg))
-            help_row.pack_start(help_btn, False, False, 0)
-            content.add(help_row)
+            help_row.append(help_btn)
+            content.append(help_row)
 
             chips = Gtk.FlowBox()
             chips.set_selection_mode(Gtk.SelectionMode.NONE)
             chips.set_max_children_per_line(6)
+            # GTK 4 sizes a FlowBox's minimum for one child per line, which
+            # made the dialog ~1100 px tall; ask for a few per line instead.
+            chips.set_min_children_per_line(3)
             chips.set_row_spacing(4)
             chips.set_column_spacing(4)
 
@@ -3223,51 +3439,47 @@ class _PickerDialog:
                 child = btn.get_child()
                 if isinstance(child, Gtk.Label):
                     child.set_use_markup(False)
-                    child.get_attributes()
-                    child.get_style_context().add_class("monospace")
+                    child.add_css_class("monospace")
                 btn.connect(
                     "clicked",
                     lambda _b, t=token, so=sel_off, sl=sel_len: insert_token(t, so, sl),
                 )
-                chips.add(btn)
-            content.add(chips)
+                chips.append(btn)
+            content.append(chips)
 
-            dlg.show_all()
-            name_entry.grab_focus()
-            response = dlg.run()
-            name = name_entry.get_text().strip()
-            trigger = trigger_entry.get_text().strip()
-            category = cat_entry.get_text().strip()
-            buf = body_view.get_buffer()
-            body = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True)
-            dlg.destroy()
-            if response != Gtk.ResponseType.OK:
-                return None
-            return (name, body, trigger, category)
+            def _collect():
+                buf = body_view.get_buffer()
+                return (
+                    name_entry.get_text().strip(),
+                    buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True),
+                    trigger_entry.get_text().strip(),
+                    cat_entry.get_text().strip(),
+                )
+
+            dlg.set_focus(name_entry)
+            return self._run_form(dlg, ok_btn, _collect)
         finally:
             self._modal_child_open = False
 
     def _ask_for_name(self, default: str = "") -> str | None:
         self._modal_child_open = True
         try:
-            dlg = Gtk.Dialog(title="Snippet name", transient_for=self.dialog, flags=0)
-            dlg.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "OK", Gtk.ResponseType.OK)
-            dlg.set_default_response(Gtk.ResponseType.OK)
+            dlg = Adw.AlertDialog(heading="Snippet name")
+            dlg.add_response("cancel", "Cancel")
+            dlg.add_response("ok", "OK")
+            dlg.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+            dlg.set_default_response("ok")
+            dlg.set_close_response("cancel")
             entry = Gtk.Entry()
             entry.set_text(default)
-            entry.set_activates_default(True)
-            entry.set_margin_top(8)
-            entry.set_margin_bottom(8)
-            entry.set_margin_start(12)
-            entry.set_margin_end(12)
-            dlg.get_content_area().add(entry)
-            dlg.show_all()
-            response = dlg.run()
-            value = entry.get_text().strip()
-            dlg.destroy()
-            if response != Gtk.ResponseType.OK:
+            dlg.set_extra_child(entry)
+            dlg.set_focus(entry)
+            value = [""]
+            dlg.connect("response", lambda *_a: value.__setitem__(0, entry.get_text().strip()))
+            response = self._run_alert(dlg, activate_widgets=(entry,))
+            if response != "ok":
                 return None
-            return value
+            return value[0]
         finally:
             self._modal_child_open = False
 
@@ -3282,23 +3494,42 @@ class _PickerDialog:
     def _first_visible_row(self, listbox: Gtk.ListBox):
         """Return the first row that survives the current filter, or
         None if the listbox is empty or fully filtered out."""
-        for row in listbox.get_children():
-            if row.get_visible() and (row.get_mapped() or self._filter_text == ""):
+        for row in self._rows(listbox):
+            if row.get_child_visible() and (row.get_mapped() or self._filter_text == ""):
                 # Re-check the filter explicitly because get_visible()
                 # lags behind invalidate_filter() by a tick.
                 if self._row_filter(row):
                     return row
         return None
 
-    def _on_key_press(self, _widget, event) -> bool:
-        if event.keyval == Gdk.KEY_Escape:
+    def _focus_within(self, widget: Gtk.Widget | None) -> bool:
+        """True if the picker's focus widget is `widget` or inside it (a
+        GTK 4 SearchEntry's real focus is its internal Gtk.Text)."""
+        if widget is None or self.dialog is None:
+            return False
+        focused = self.dialog.get_focus()
+        while focused is not None:
+            if focused is widget:
+                return True
+            focused = focused.get_parent()
+        return False
+
+    def _on_key_pressed(self, _ctrl, keyval: int, _keycode: int, state) -> bool:
+        # A prompt (Adw.AlertDialog) shown inside the picker gets its own
+        # keys - Enter/Esc/typing belong to it, not to the list.
+        if self._modal_child_open:
+            return False
+        return self._handle_key(keyval, state)
+
+    def _handle_key(self, keyval: int, state) -> bool:
+        if keyval == Gdk.KEY_Escape:
             if self.dialog is not None:
-                self.dialog.destroy()
+                self._dismiss()
             return True
         # Tab / Shift+Tab → flip between the Recent and Snippets tabs.
         # Replaces the default focus-cycling (search-entry → listbox →
         # +New button etc.) which is overkill for a 2-tab popup.
-        if event.keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+        if keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
             if self.notebook is not None and self.notebook.get_n_pages() > 1:
                 cur = self.notebook.get_current_page()
                 self.notebook.set_current_page(1 - cur)
@@ -3306,7 +3537,7 @@ class _PickerDialog:
         # Down / Up → jump straight into the listbox the first time
         # (skipping search-entry + tab-labels), then let GTK's native
         # ListBox navigation drive subsequent presses.
-        if event.keyval in (Gdk.KEY_Down, Gdk.KEY_Up):
+        if keyval in (Gdk.KEY_Down, Gdk.KEY_Up):
             listbox = self._current_listbox()
             if listbox is None:
                 return False
@@ -3315,20 +3546,16 @@ class _PickerDialog:
             # itself and its individual rows count as "in" - we want
             # subsequent arrow presses to fall through to GTK's
             # built-in row navigation in either case.
-            if self.dialog is not None:
-                focused = self.dialog.get_focus()
-                while focused is not None:
-                    if focused is listbox:
-                        return False  # let GTK move the selection
-                    focused = focused.get_parent()
+            if self._focus_within(listbox):
+                return False  # let GTK move the selection
             # First press from outside: focus the right-edge row and
             # let it own focus. With a row focused, GtkListBox's
             # built-in Down/Up handling moves to the adjacent row.
-            if event.keyval == Gdk.KEY_Down:
+            if keyval == Gdk.KEY_Down:
                 target = self._first_visible_row(listbox)
             else:
                 target = None
-                for row in listbox.get_children():
+                for row in self._rows(listbox):
                     if self._row_filter(row):
                         target = row
             if target is not None:
@@ -3339,7 +3566,7 @@ class _PickerDialog:
             return True
         # Enter → if focus is on a list row, paste it. Lets the user
         # arrow-down + Enter without ever touching the mouse.
-        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             listbox = self._current_listbox()
             if listbox is not None:
                 selected = listbox.get_selected_row()
@@ -3348,11 +3575,11 @@ class _PickerDialog:
                     return True
             return False
         # Ctrl+P → pin currently selected (if in Recent)
-        if event.state & Gdk.ModifierType.CONTROL_MASK and event.keyval == Gdk.KEY_p:
+        if state & Gdk.ModifierType.CONTROL_MASK and keyval == Gdk.KEY_p:
             self._action_on_selected("pin")
             return True
         # Ctrl+R → rename (if in Snippets)
-        if event.state & Gdk.ModifierType.CONTROL_MASK and event.keyval == Gdk.KEY_r:
+        if state & Gdk.ModifierType.CONTROL_MASK and keyval == Gdk.KEY_r:
             self._action_on_selected("rename")
             return True
         # Printable character with no Ctrl/Alt → start typing into the
@@ -3360,14 +3587,14 @@ class _PickerDialog:
         # the user arrow-down to browse, then immediately type to
         # filter without explicitly clicking the search box.
         modifiers = (
-            Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK | Gdk.ModifierType.SUPER_MASK
+            Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.ALT_MASK | Gdk.ModifierType.SUPER_MASK
         )
-        if not (event.state & modifiers):
-            unicode_val = Gdk.keyval_to_unicode(event.keyval)
+        if not (state & modifiers):
+            unicode_val = Gdk.keyval_to_unicode(keyval)
             if unicode_val and 0x20 <= unicode_val < 0x10FFFF:
                 ch = chr(unicode_val)
                 if ch.isprintable() and self.search_entry is not None:
-                    if not self.search_entry.has_focus():
+                    if not self._focus_within(self.search_entry):
                         self.search_entry.grab_focus()
                         # Append the typed character ourselves - the
                         # original event has already been consumed by
