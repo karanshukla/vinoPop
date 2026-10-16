@@ -33,42 +33,10 @@ from .base import PlatformBackend
 
 _LAYER = None
 
-_HOST_HAS_CACHE: dict = {}
-
-
-def _in_flatpak() -> bool:
-    return os.path.exists("/.flatpak-info")
-
-
-def _host_has(binary: str) -> bool:
-    """Is `binary` on the host's PATH? Used in Flatpak, where the Wayland
-    injectors (ydotool) live on the host, not in the sandbox. Cached: host
-    tool availability doesn't change within a session, and this is on the
-    paste/can_paste path."""
-    if binary in _HOST_HAS_CACHE:
-        return _HOST_HAS_CACHE[binary]
-    ok = False
-    try:
-        r = subprocess.run(
-            ["flatpak-spawn", "--host", "sh", "-c", f"command -v {binary}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        ok = r.returncode == 0 and bool(r.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        ok = False
-    _HOST_HAS_CACHE[binary] = ok
-    return ok
-
-
 def _kwin_subprocess_env() -> dict:
     """Environment for the `python3 -m platform_backend._kwin_*` helper
     subprocesses. Puts the package root on PYTHONPATH so the child can
-    import platform_backend even when its cwd isn't the app directory -
-    notably inside a Flatpak sandbox, where it otherwise dies with
-    ModuleNotFoundError and the cursor/active-window query silently fails
-    (popup then falls back to the top-left corner)."""
+    import platform_backend even when its cwd isn't the app directory."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
@@ -850,11 +818,6 @@ class WaylandKdeBackend(PlatformBackend):
 
     def can_paste(self) -> bool:
         # ydotool (KWin) / wtype (wlroots) are the only Wayland injectors.
-        # In the Flatpak the sandbox has neither (and no /dev/uinput), so we
-        # drive the host's ydotool through flatpak-spawn instead - check that
-        # it's actually installed on the host.
-        if _in_flatpak():
-            return _host_has("ydotool")
         return bool(shutil.which("ydotool") or shutil.which("wtype"))
 
     # ---- keystroke injection --------------------------------------------
@@ -940,30 +903,12 @@ class WaylandKdeBackend(PlatformBackend):
         return args
 
     def _has_ydotool(self) -> bool:
-        if _in_flatpak():
-            # Prefer the bundled ydotool (needs --device=all for /dev/uinput);
-            # fall back to a host install for custom Flatpak builds without it.
-            return os.path.isfile("/app/bin/ydotool") or _host_has("ydotool")
         return bool(shutil.which("ydotool"))
 
     def _ydotool_run(self, sub_argv: list) -> bool:
-        """Dispatch `ydotool <sub_argv>` to the daemon.
-
-        In the Flatpak we prefer the bundled ydotool binary and run it inside
-        the sandbox (ydotoold is started by the wrapper). We keep the
-        flatpak-spawn --host fallback so custom builds without the bundled
-        binary can still use a host-installed ydotool."""
-        bundled = "/app/bin/ydotool"
-        if _in_flatpak() and os.path.isfile(bundled):
-            argv = [bundled, *sub_argv]
-        elif _in_flatpak():
-            runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-            sock = os.path.join(runtime, ".ydotool_socket")
-            argv = ["flatpak-spawn", "--host", f"--env=YDOTOOL_SOCKET={sock}", "ydotool", *sub_argv]
-        else:
-            argv = ["ydotool", *sub_argv]
+        """Dispatch `ydotool <sub_argv>` to the daemon."""
         try:
-            subprocess.run(argv, env=self._ydotool_env(), check=False)
+            subprocess.run(["ydotool", *sub_argv], env=self._ydotool_env(), check=False)
             return True
         except OSError as exc:
             print(f"[wayland] ydotool failed: {exc}")
@@ -974,8 +919,8 @@ class WaylandKdeBackend(PlatformBackend):
             events = self._ydotool_key_events(combo)
             if events is not None and self._ydotool_run(["key", *events]):
                 return
-        # wtype is wlroots-only (dead on KWin) and not bundled in the Flatpak.
-        if not _in_flatpak() and shutil.which("wtype"):
+        # wtype is wlroots-only (dead on KWin).
+        if shutil.which("wtype"):
             args = self._wtype_args(combo)
             if args is not None:
                 subprocess.run(["wtype"] + args, check=False)
@@ -986,26 +931,18 @@ class WaylandKdeBackend(PlatformBackend):
         )
         from .base import _warn_missing_injector
 
-        if _in_flatpak():
-            _warn_missing_injector(
-                "wayland_kde_flatpak",
-                "Cut/Paste/Backspace could not use ydotool. If this is a custom "
-                "Flatpak build, install ydotool on the host; otherwise the "
-                "bundled daemon may not have started.",
-            )
-        else:
-            _warn_missing_injector(
-                "wayland_kde_native",
-                "Cut/Paste/Backspace needs ydotool + ydotoold. Install and "
-                "start ydotoold to enable keystroke actions.",
-            )
+        _warn_missing_injector(
+            "wayland_kde_native",
+            "Cut/Paste/Backspace needs ydotool + ydotoold. Install and "
+            "start ydotoold to enable keystroke actions.",
+        )
 
     def type_text(self, text: str) -> None:
         # `--` terminates ydotool's own option parsing so text that starts
         # with '-' is typed literally rather than parsed.
         if self._has_ydotool() and self._ydotool_run(["type", "--", text]):
             return
-        if not _in_flatpak() and shutil.which("wtype"):
+        if shutil.which("wtype"):
             subprocess.run(["wtype", text], check=False)
             return
         print("[wayland] no working text-injection tool (install ydotool)")

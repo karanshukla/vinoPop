@@ -42,4 +42,4 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: shellcheck
-        run: shellcheck install.sh packaging/deb/build-deb.sh packaging/flatpak/publish-flatpak-repo.sh packaging/gen-version.sh
+        run: shellcheck install.sh

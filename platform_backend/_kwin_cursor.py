@@ -20,10 +20,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib  # only GLib: no GTK in this helper
 
-# App-id-prefixed so a Flatpak sandbox auto-allows owning it (the bus filter
-# only lets an app own its app-id and sub-names; the old "org.linuxpop.Cursor"
-# was rejected with org.freedesktop.DBus.Error.ServiceUnknown). Harmless
-# outside Flatpak. _JS references the constant so both sides stay in sync.
+# Use an app-specific bus name. _JS references the constant to stay in sync.
 BUS_NAME = "io.github.GaimsDevSoftware.LinuxPop.Cursor"
 OBJ_PATH = "/cursor"
 _JS = (
@@ -48,13 +45,7 @@ def main() -> int:
     name = dbus.service.BusName(BUS_NAME, bus)
     _svc = _Svc(name, OBJ_PATH)
 
-    # Write the script to the per-user runtime dir, not /tmp: under Flatpak
-    # $XDG_RUNTIME_DIR/linuxpop maps to the same host path KWin reads (granted
-    # via --filesystem=xdg-run/linuxpop), so no host /tmp access is needed.
-    _rt = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
-    _dir = os.path.join(_rt, "linuxpop")
-    os.makedirs(_dir, mode=0o700, exist_ok=True)
-    fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-cursor-", dir=_dir)
+    fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-cursor-")
     try:
         os.write(fd, _JS.encode("utf-8"))
         os.close(fd)

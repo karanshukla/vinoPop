@@ -17,9 +17,7 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib  # only GLib: no GTK in this helper
 
-# App-id-prefixed so a Flatpak sandbox auto-allows owning it (see the note in
-# _kwin_cursor.py). Harmless outside Flatpak. _JS uses the constant to stay
-# in sync.
+# Use an app-specific bus name. _JS references the constant to stay in sync.
 BUS_NAME = "io.github.GaimsDevSoftware.LinuxPop.ActiveWin"
 OBJ_PATH = "/win"
 # KWin 6 renamed activeClient -> activeWindow; fall back for older builds.
@@ -46,13 +44,7 @@ def main() -> int:
     name = dbus.service.BusName(BUS_NAME, bus)
     _svc = _Svc(name, OBJ_PATH)
 
-    # Per-user runtime dir, not /tmp (see _kwin_cursor._script path note):
-    # $XDG_RUNTIME_DIR/linuxpop maps to the same host path KWin reads under
-    # Flatpak (--filesystem=xdg-run/linuxpop), avoiding host /tmp access.
-    _rt = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
-    _dir = os.path.join(_rt, "linuxpop")
-    os.makedirs(_dir, mode=0o700, exist_ok=True)
-    fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-active-", dir=_dir)
+    fd, path = tempfile.mkstemp(suffix=".js", prefix="linuxpop-active-")
     try:
         os.write(fd, _JS.encode("utf-8"))
         os.close(fd)

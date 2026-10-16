@@ -123,10 +123,7 @@ class PlatformBackend(abc.ABC):
         self.send_key("ctrl+v")
 
     def can_paste(self) -> bool:
-        """Whether this backend can actually inject a paste keystroke.
-        False when the required injector is missing (notably the Flatpak
-        sandbox on Wayland, which has no ydotool/wtype) - callers then leave
-        the result on the clipboard and tell the user to paste manually."""
+        """Whether this backend can actually inject a paste keystroke."""
         return True
 
     # ---- opening URLs ----------------------------------------------------

@@ -28,31 +28,10 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
 
-def _in_flatpak() -> bool:
-    return os.path.exists("/.flatpak-info")
-
-
-def _host_has(binary: str) -> bool:
-    """Is `binary` on the host's PATH? (Used in Flatpak, where the screen
-    grabbers live on the host, not in the sandbox.)"""
-    try:
-        r = subprocess.run(
-            ["flatpak-spawn", "--host", "sh", "-c", f"command -v {binary}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return r.returncode == 0 and bool(r.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
 def _grabber() -> str | None:
-    """Name of the first available full-screen grabber, or None. Checks the
-    host's PATH inside Flatpak, the sandbox's PATH otherwise."""
-    probe = _host_has if _in_flatpak() else shutil.which
+    """Name of the first available full-screen grabber, or None."""
     for tool in ("spectacle", "grim", "maim"):
-        if probe(tool):
+        if shutil.which(tool):
             return tool
     return None
 
@@ -61,26 +40,13 @@ def _capture_fullscreen() -> str | None:
     """Grab the whole screen to a temp PNG with no UI. spectacle -f -b is the
     KWin-native path; grim covers wlroots; maim covers X11.
 
-    Inside Flatpak the grabbers run on the HOST (flatpak-spawn), and the PNG
-    must land in a dir the host can write and the sandbox can read: the app's
-    $XDG_RUNTIME_DIR/linuxpop is bind-mounted to the identical host path."""
+    The PNG is written to a temporary file in the user's runtime environment."""
     tool = _grabber()
     if not tool:
         return None
-    in_fp = _in_flatpak()
-    if in_fp:
-        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        shared = os.path.join(runtime, "linuxpop")
-        try:
-            os.makedirs(shared, exist_ok=True)
-        except OSError:
-            return None
-        path = os.path.join(shared, f"lp-ocr-full-{os.getpid()}.png")
-        prefix = ["flatpak-spawn", "--host"]
-    else:
-        fd, path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-full-")
-        os.close(fd)
-        prefix = []
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-full-")
+    os.close(fd)
+    prefix = []
     argv = {
         "spectacle": [*prefix, "spectacle", "-f", "-b", "-n", "-o", path],
         "grim": [*prefix, "grim", path],
@@ -264,8 +230,7 @@ def select_and_capture(callback) -> bool:
 
 
 def available() -> bool:
-    """True if we have a full-screen grabber and layer-shell/X11 to overlay.
-    In Flatpak the grabber is checked on the host (flatpak-spawn)."""
+    """True if we have a full-screen grabber and layer-shell/X11 to overlay."""
     if not _grabber():
         return False
     if _layer_shell() is not None:
