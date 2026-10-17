@@ -297,6 +297,31 @@ _QT_NAMED_KEYS = {
     "pageup": 0x01000016,
     "pagedown": 0x01000017,
     "insert": 0x01000006,
+    # The Settings recorder stores GDK key names ("page_up", "print", ...)
+    "page_up": 0x01000016,
+    "page_down": 0x01000017,
+    "pause": 0x01000008,
+    "print": 0x01000009,
+    "scroll_lock": 0x01000026,
+    # Shift+Tab is reported as ISO_Left_Tab; shift is already a modifier
+    "iso_left_tab": 0x01000001,
+}
+# GDK names of printable punctuation -> the character, which is also the
+# Qt::Key value (Qt::Key_Comma == 0x2c == ord(",")).
+_QT_PUNCTUATION = {
+    "comma": ",",
+    "period": ".",
+    "minus": "-",
+    "equal": "=",
+    "plus": "+",
+    "slash": "/",
+    "backslash": "\\",
+    "semicolon": ";",
+    "apostrophe": "'",
+    "grave": "`",
+    "bracketleft": "[",
+    "bracketright": "]",
+    "asterisk": "*",
 }
 
 
@@ -314,6 +339,8 @@ def _qt_keycode(hotkey_str: str) -> int | None:
     key = parts[-1]
     if key in _QT_NAMED_KEYS:
         keycode = _QT_NAMED_KEYS[key]
+    elif key in _QT_PUNCTUATION:
+        keycode = ord(_QT_PUNCTUATION[key])
     elif len(key) == 1:
         keycode = ord(key.upper())
     elif key.startswith("f") and key[1:].isdigit():

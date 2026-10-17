@@ -854,7 +854,7 @@ def _build_pages(settings):
         ),
         dict(
             title="You're all set",
-            body="Everything lives in the tray icon (top-right): Settings, "
+            body="Everything lives in the tray icon in your panel: Settings, "
             "Plugins, and your own buttons. Off you go!",
             draw=_draw_done,
         ),

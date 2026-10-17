@@ -44,6 +44,10 @@ _KEY_ALIASES = {
     "end": "End",
     "pageup": "Page_Up",
     "pagedown": "Page_Down",
+    "page_up": "Page_Up",
+    "page_down": "Page_Down",
+    # Shift+Tab reports this keysym; the grab wants plain Tab (shift is a modifier)
+    "iso_left_tab": "Tab",
     "up": "Up",
     "down": "Down",
     "left": "Left",
@@ -91,7 +95,30 @@ def _resolve_keysym(name: str) -> int:
         ks = XK.string_to_keysym(cand)
         if ks:
             return ks
-    return 0
+    # Names recorded in Settings are lower-cased ("page_up", "kp_add",
+    # "xf86audioplay"), so match case-insensitively against python-xlib's table.
+    real = _keysym_names().get(name.lower())
+    return XK.string_to_keysym(real) if real else 0
+
+
+_KEYSYM_NAMES: dict[str, str] | None = None
+
+
+def _keysym_names() -> dict[str, str]:
+    """lower-case keysym name -> real name, for every keysym python-xlib knows."""
+    global _KEYSYM_NAMES
+    if _KEYSYM_NAMES is None:
+        for group in ("xkb", "xf86", "latin2", "latin3", "latin4", "greek", "cyrillic", "hebrew"):
+            try:
+                XK.load_keysym_group(group)
+            except Exception:  # noqa: BLE001 - a missing group only narrows the table
+                pass
+        _KEYSYM_NAMES = {n[3:].lower(): n[3:] for n in dir(XK) if n.startswith("XK_")}
+        # python-xlib spells media keys "XF86_AudioPlay"; GDK reports "XF86AudioPlay"
+        for real in list(_KEYSYM_NAMES.values()):
+            if real.startswith("XF86_"):
+                _KEYSYM_NAMES.setdefault(real.replace("_", "").lower(), real)
+    return _KEYSYM_NAMES
 
 
 def _lock_variants(dpy: display.Display) -> Iterable[int]:
