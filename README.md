@@ -68,8 +68,8 @@ pip install --user -r requirements-ai.txt
 `--break-system-packages` or run vinoPop from a venv created with
 `--system-site-packages` so it still sees PyGObject.)
 
-The first AI action downloads the model once (Phi-3.5 mini, about 2.2 GB, or
-set `"ai_llm_model": "qwen2.5-1.5b"` for a 1 GB one). After that nothing goes
+The first AI action downloads the model once (Gemma 4 E2B, about 3 GB, fast and
+light on RAM, or set `"ai_llm_model": "gemma-4-e4b"` for the more accurate 5 GB one). After that nothing goes
 online. `"ai_device"` forces `"NPU"`, `"GPU"` or `"CPU"`.
 
 `python3 main.py --doctor` (add `--json` for a bug report) checks the AI

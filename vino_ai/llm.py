@@ -71,7 +71,10 @@ def _load(on_status: Callable[[str], None]):
         if dev == "NPU":
             props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=512)
         try:
-            pipe = ov_genai.LLMPipeline(str(path), dev, **props)
+            if (path / "openvino_model.xml").is_file():
+                pipe = ov_genai.LLMPipeline(str(path), dev, **props)
+            else:  # multimodal export (Gemma 4): text-only use of the VLM pipeline
+                pipe = ov_genai.VLMPipeline(str(path), dev, **props)
         except Exception as exc:  # noqa: BLE001 - try the next device
             log.warning("[vino_ai] LLM on %s failed: %s", dev, exc)
             errors.append(f"{dev}: {exc}")

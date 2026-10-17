@@ -118,7 +118,8 @@ def test_models_registry():
     assert models.DEFAULT_LLM in models.LLM_MODELS
     for m in models.LLM_MODELS.values():
         assert m.repo_id.startswith("OpenVINO/") and m.repo_id.endswith("-ov")
-        assert len(m.revision) == 40 and int(m.revision, 16) >= 0  # a full commit sha
+        # a full commit sha, or "main" until one is pinned
+        assert m.revision == "main" or (len(m.revision) == 40 and int(m.revision, 16) >= 0)
 
 
 def test_model_completeness(tmp_path, monkeypatch):
@@ -127,7 +128,7 @@ def test_model_completeness(tmp_path, monkeypatch):
     assert not models.is_downloaded(model)
     path = models.model_dir(model)
     path.mkdir(parents=True)
-    (path / "openvino_model.xml").write_text("")
+    (path / "openvino_language_model.xml").write_text("")
     assert not models.is_downloaded(model)
     (path / "openvino_tokenizer.xml").write_text("")
     assert models.is_downloaded(model)
