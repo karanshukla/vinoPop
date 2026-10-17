@@ -548,6 +548,21 @@ class App:
         self.settings.set("show_on_selection", bool(active))
         self.settings.save()
 
+    def _sync_watcher_with_settings(self) -> None:
+        """Start or stop the watcher to match show_on_selection, so the
+        Settings switch applies without a restart, and bring the tray's
+        checkbox along with it."""
+        want = bool(self.settings.get("show_on_selection"))
+        if want and self.watcher is None:
+            self._start_watcher()
+        elif not want and self.watcher is not None:
+            self._stop_watcher()
+        if self.tray is not None:
+            try:
+                self.tray.refresh()
+            except Exception:
+                pass
+
     def watcher_active(self) -> bool:
         return self._watcher_active
 
@@ -700,6 +715,7 @@ class App:
                         self.tray.reload_icon()
                     except Exception:
                         pass
+                self._sync_watcher_with_settings()
                 if self.watcher is not None:
                     self.watcher.set_debounce_ms(int(self.settings.get("selection_debounce_ms")))
                 # Reload plugins so settings that gate plugin registration

@@ -257,6 +257,34 @@ def _open_path(path) -> None:
         print(f"[settings] couldn't open {path}: {exc}")
 
 
+def _apply_theme(mode: str) -> None:
+    """Load the app theme for `mode` and rebuild the popup's own CSS
+    provider so the selection popup picks up the new palette too."""
+    try:
+        import theme as _theme
+
+        _theme.install_premium_theme(mode)
+    except Exception as exc:
+        print(f"[settings] theme reload failed: {exc}")
+    try:
+        import popup as _popup
+
+        _popup.reinstall_popup_css()
+    except Exception as exc:
+        print(f"[settings] popup theme reload failed: {exc}")
+
+
+def _force_all_supported() -> bool:
+    """Whether the popup can read the force-all-plugins modifier: it
+    queries the pointer's modifier mask over Xlib, so X11 only."""
+    try:
+        from platform_backend import get_backend
+
+        return bool(get_backend().popup_uses_xlib)
+    except Exception:
+        return True
+
+
 def _force_to_front(window: Gtk.Window) -> None:
     """Bring the window to the foreground. GTK 4 dropped keep_above and
     GdkWindow.raise_(), so present() (with an unminimize first) is the
@@ -681,20 +709,7 @@ class SettingsDialog:
         def _on_theme_changed(mode: str) -> None:
             mode = mode or "dark"
             self._save_key("theme", mode)
-            try:
-                import theme as _theme
-
-                _theme.install_premium_theme(mode)
-            except Exception as exc:
-                print(f"[settings] theme reload failed: {exc}")
-            # Popup uses its own CSS provider; rebuild it so the
-            # selection popup picks up the new palette too.
-            try:
-                import popup as _popup
-
-                _popup.reinstall_popup_css()
-            except Exception as exc:
-                print(f"[settings] popup theme reload failed: {exc}")
+            _apply_theme(mode)
 
         theme_row = self._combo_row(
             "Theme",
@@ -997,8 +1012,8 @@ class SettingsDialog:
             "Modifier+double-click for the edit menu",
             "Hold the modifier below and double-click in a text field for "
             "Paste / Select all / Backspace. Watches mouse clicks locally; "
-            "nothing is logged. On Wayland it only reaches XWayland apps - "
-            "the popup hotkey shows the same menu everywhere.",
+            "nothing is logged. On Wayland it reads /dev/input, so your user "
+            "needs to be in the 'input' group.",
             self._settings.get("double_click_popup_enabled", False),
         )
         # Live-apply happens through the settings on_changed callback in
@@ -1049,6 +1064,14 @@ class SettingsDialog:
             (self._settings.get("popup_force_all_modifier") or "").lower(),
             lambda v: self._save_key("popup_force_all_modifier", v or ""),
         )
+        # The popup reads held modifiers through Xlib, which the Wayland
+        # backend never opens, so the key is never seen there.
+        if not _force_all_supported():
+            force_row.set_sensitive(False)
+            force_row.set_subtitle(
+                "Only works in an X11 session for now: on Wayland vinoPop "
+                "can't see which keys are held when the popup opens."
+            )
         group.add(force_row)
 
         # Autostart at login (switch row) - driven by ~/.config/autostart
@@ -1634,18 +1657,16 @@ class SettingsDialog:
         # A consent file vinoPop wrote goes back to the default (off) too;
         # one from Intel's opt_in_out stays the user's call.
         owned = bool(self._settings.get(telemetry.OWNED_SETTING, False))
-
-        # Replace the singleton's data with the canonical defaults and
-        # persist. Use a fresh copy so the dict isn't aliased with the
-        # module-level DEFAULTS.
         try:
-            self._settings._data = {**DEFAULTS}  # type: ignore[attr-defined]
-            self._settings.save()
+            self._settings.reset_to_defaults()
         except Exception as exc:
             err = Adw.AlertDialog.new("Couldn't reset settings", f"{exc}")
             err.add_response("close", "Close")
             err.present(self._window)
             return
+        # Theme, button size and icon style are applied here rather than
+        # by the daemon, same as when they're changed one at a time.
+        _apply_theme(self._settings.get("theme") or "dark")
         if owned:
             telemetry.set_enabled(bool(DEFAULTS[telemetry.SETTING]))
         # Trigger the daemon-side reload so hotkeys / watchers / etc.
