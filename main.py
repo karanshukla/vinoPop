@@ -125,12 +125,11 @@ from platform_backend import get_backend  # noqa: E402
 from popup import PopupWindow  # noqa: E402
 from settings import get_settings  # noqa: E402
 from version import __version__  # noqa: E402
-from xdg_paths import CACHE_DIR, CONFIG_DIR  # noqa: E402
+from xdg_paths import CACHE_DIR, CONFIG_DIR, LOG_FILE  # noqa: E402
 
 if TYPE_CHECKING:
     from watcher import SelectionWatcher
 
-LOG_FILE = CACHE_DIR / "vinopop.log"
 LOCK_FILE = CACHE_DIR / "vinopop.lock"
 FIRST_RUN_MARKER = CONFIG_DIR / ".first-run-done"
 
@@ -275,6 +274,7 @@ class App:
         self._bound_use_polling: bool = False
         self._watcher_active = False
         self.tray = None
+        self.restart_requested = False
         # Single-instance dialogs: created lazily, reused on subsequent opens
         self._settings_dialog = None
         self._plugin_dialog = None
@@ -752,7 +752,11 @@ class App:
                 self._maybe_start_dblclick_watcher()
                 log.info("settings reloaded")
 
-            self._settings_dialog = SettingsDialog(on_changed=on_changed)
+            self._settings_dialog = SettingsDialog(
+                on_changed=on_changed,
+                on_restart=self.restart,
+                on_open_plugins=self.open_plugins,
+            )
         try:
             # Subsequent calls just present() the existing window.
             self._settings_dialog.show()
@@ -873,6 +877,12 @@ class App:
     def quit(self) -> None:
         gtk4_app.quit()
 
+    def restart(self) -> None:
+        """Quit, then main() starts vinoPop again in this process."""
+        log.info("restarting vinoPop")
+        self.restart_requested = True
+        self.quit()
+
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -968,6 +978,13 @@ def main(argv: list[str] | None = None) -> int:
         app.ocr_hotkey.stop()
     if app.dblclick_watcher:
         app.dblclick_watcher.stop()
+    if app.restart_requested:
+        if app.tray is not None:
+            app.tray.stop()
+        logging.shutdown()
+        # The single-instance lock fd is close-on-exec, so the new
+        # process can take it.
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
     return 0
 
 

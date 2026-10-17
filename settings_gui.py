@@ -203,6 +203,60 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
     view.add_controller(focus)
 
 
+def _doctor_checks() -> list[dict]:
+    """Run `main.py --doctor --json` and return its checks."""
+    import json
+    import sys
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parent / "main.py"
+    try:
+        res = subprocess.run(
+            [sys.executable, str(main_py), "--doctor", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return list(json.loads(res.stdout)["checks"])
+    except Exception as exc:  # noqa: BLE001 - shown in the page
+        return [{"status": "FAIL", "label": "doctor", "detail": f"couldn't run: {exc}"}]
+
+
+def _session_info() -> list[tuple[str, str]]:
+    import os
+    import platform
+
+    try:
+        from version import __version__
+    except Exception:  # noqa: BLE001
+        __version__ = "unknown"
+    env = os.environ.get
+    display = Gdk.Display.get_default()
+    try:
+        system = platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
+    except OSError:
+        system = platform.system()
+    return [
+        ("vinoPop", __version__),
+        (
+            "Desktop",
+            f"{env('XDG_CURRENT_DESKTOP') or 'unknown'} on {env('XDG_SESSION_TYPE') or 'unknown'}",
+        ),
+        ("GTK display", type(display).__name__ if display else "none"),
+        ("System", system),
+        ("Kernel", platform.release()),
+    ]
+
+
+def _open_path(path) -> None:
+    from gi.repository import Gio
+
+    try:
+        Gio.AppInfo.launch_default_for_uri(path.as_uri(), None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[settings] couldn't open {path}: {exc}")
+
+
 def _force_to_front(window: Gtk.Window) -> None:
     """Bring the window to the foreground. GTK 4 dropped keep_above and
     GdkWindow.raise_(), so present() (with an unminimize first) is the
@@ -342,47 +396,172 @@ _SETTING_ICONS = {
 
 
 class SettingsDialog:
-    def __init__(self, on_changed: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_changed: Callable[[], None] | None = None,
+        on_restart: Callable[[], None] | None = None,
+        on_open_plugins: Callable[..., None] | None = None,
+    ) -> None:
         gtk4_app.init()
         self._on_changed = on_changed
+        self._on_restart = on_restart
+        self._on_open_plugins = on_open_plugins
+        # Runs the doctor the first time the Debug page is opened.
+        self._debug_refresh: Callable[[], None] | None = None
         self._settings = get_settings()
-        self._window: Adw.PreferencesWindow | None = None
+        self._window: Adw.Window | None = None
+        # Kept across a rebuild (Reset to defaults) so the user stays put.
+        self._page_name = "activation"
 
     def show(self) -> None:
         if self._window is not None and self._window.get_visible():
             _force_to_front(self._window)
             return
 
-        win = Adw.PreferencesWindow()
-        win.set_title("vinoPop")
-        win.set_search_enabled(False)
-        win.set_default_size(720, 640)
+        win = Adw.Window()
+        win.set_title("vinoPop Settings")
+        win.set_default_size(860, 640)
+        win.set_size_request(360, 360)
         win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
         # GTK 4 may keep the destroyed window alive while Python holds a
         # ref, so drop our references on close-request as well.
         win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
-
-        page = Adw.PreferencesPage()
-        page.set_title("General")
-        page.set_icon_name("preferences-system-symbolic")
-
-        # Snippets & Clipboard first - that's the core of what people use
-        # vinoPop for. Activation comes second because users new to
-        # the app reach for "what's my hotkey" before anything else.
-        page.add(self._build_activation_group())
-        page.add(self._build_appearance_group())
-        page.add(self._build_timing_group())
-        page.add(self._build_filter_group())
-        page.add(self._build_search_group())
-        page.add(self._build_terminal_group())
-        page.add(self._build_advanced_group())
-
-        win.add(page)
-        self._decorate_badges(page)
+        # Set before the groups are built: their modal editors use it as
+        # their parent.
         self._window = win
+
+        # One page per topic in a sidebar (like vinoWhisper's settings),
+        # instead of every group stacked in one long scroll.
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        for name, title, icon, builders in self._pages():
+            page = Adw.PreferencesPage()
+            for build in builders:
+                group = build()
+                # The header already names the page.
+                if group.get_title() == title:
+                    group.set_title("")
+                page.add(group)
+            # The Debug page's rows carry status icons instead.
+            if name != "debug":
+                self._decorate_badges(page)
+            stack.add_titled(page, name, title).set_icon_name(icon)
+
+        content_page = Adw.NavigationPage()
+        content_header = Adw.HeaderBar()
+        content_view = Adw.ToolbarView()
+        content_view.add_top_bar(content_header)
+        content_view.set_content(stack)
+        content_page.set_child(content_view)
+
+        sidebar = Gtk.ListBox()
+        sidebar.add_css_class("navigation-sidebar")
+        names: list[str] = []
+        for name, title, icon, _builders in self._pages():
+            names.append(name)
+            item = Gtk.Box(spacing=12)
+            item.set_margin_top(6)
+            item.set_margin_bottom(6)
+            item.set_margin_start(6)
+            item.append(Gtk.Image.new_from_icon_name(icon))
+            item.append(Gtk.Label(label=title, xalign=0))
+            sidebar.append(item)
+        sidebar_page = Adw.NavigationPage(title="Settings")
+        sidebar_view = Adw.ToolbarView()
+        sidebar_view.add_top_bar(Adw.HeaderBar())
+        sidebar_scroll = Gtk.ScrolledWindow()
+        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_scroll.set_child(sidebar)
+        sidebar_view.set_content(sidebar_scroll)
+        sidebar_page.set_child(sidebar_view)
+
+        split = Adw.NavigationSplitView()
+        split.set_sidebar(sidebar_page)
+        split.set_content(content_page)
+        split.set_min_sidebar_width(190)
+        split.set_max_sidebar_width(230)
+
+        def _show_page(name: str) -> None:
+            stack.set_visible_child_name(name)
+            child = stack.get_child_by_name(name)
+            content_page.set_title(stack.get_page(child).get_title() or "")
+            self._page_name = name
+            if name == "debug" and self._debug_refresh is not None:
+                refresh, self._debug_refresh = self._debug_refresh, None
+                refresh()
+
+        def _on_row(_box, row) -> None:
+            if row is None:
+                return
+            _show_page(names[row.get_index()])
+            split.set_show_content(True)
+
+        sidebar.connect("row-activated", _on_row)
+        sidebar.connect("row-selected", _on_row)
+        current = self._page_name if self._page_name in names else names[0]
+        _show_page(current)
+        sidebar.select_row(sidebar.get_row_at_index(names.index(current)))
+
+        # Narrow windows show one pane at a time: the page list, then the
+        # page with a back button.
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 600sp"))
+        narrow.add_setter(split, "collapsed", True)
+        win.add_breakpoint(narrow)
+        win.set_content(split)
         _force_to_front(win)
+
+    def _pages(self) -> list[tuple[str, str, str, list[Callable[[], Adw.PreferencesGroup]]]]:
+        """(id, sidebar title, icon, group builders) for each Settings page."""
+        return [
+            (
+                "activation",
+                "Activation",
+                "input-keyboard-symbolic",
+                [self._build_activation_group, self._build_timing_group],
+            ),
+            (
+                "appearance",
+                "Appearance",
+                "applications-graphics-symbolic",
+                [self._build_appearance_group],
+            ),
+            (
+                "clipboard",
+                "Clipboard & Snippets",
+                "edit-paste-symbolic",
+                [self._build_snippets_clipboard_group],
+            ),
+            (
+                "filters",
+                "Filters",
+                "security-medium-symbolic",
+                [self._build_filter_group],
+            ),
+            (
+                "actions",
+                "Search & Terminal",
+                "edit-find-symbolic",
+                [self._build_search_group, self._build_terminal_group],
+            ),
+            (
+                "advanced",
+                "Advanced",
+                "emblem-system-symbolic",
+                [self._build_advanced_group],
+            ),
+            (
+                "debug",
+                "Debug",
+                "dialog-information-symbolic",
+                [
+                    self._build_troubleshoot_group,
+                    self._build_session_group,
+                    self._build_diagnostics_group,
+                ],
+            ),
+        ]
 
     def _on_destroy(self, win=None, *_):
         # Ignore a late signal from a window we already replaced.
@@ -518,9 +697,7 @@ class SettingsDialog:
 
         theme_row = self._combo_row(
             "Theme",
-            "Dark uses the cobalt + violet palette. Light gives you the "
-            "same layout on a clean off-white. 'Follow system' picks one "
-            "based on your desktop theme.",
+            "'Follow system' matches your desktop's light or dark setting.",
             [
                 ("dark", "Dark"),
                 ("light", "Light"),
@@ -546,11 +723,8 @@ class SettingsDialog:
         size_row = _plain(Adw.SpinRow.new(size_adj, 1, 0))
         size_row.set_title("Popup button size")
         size_row.set_subtitle(
-            "How big each action button in the popup is, in pixels. "
-            "16 is small and dense; 32 is roomy and easy to click. "
-            "Tip: smaller buttons also fit more actions on a single row "
-            "before the popup has to wrap or expand (see ‘When actions "
-            "overflow’ below)."
+            "Size of each popup button in pixels, from 16 (dense) to 32 "
+            "(roomy). Smaller buttons fit more actions on one row."
         )
         size_row.set_numeric(True)
 
@@ -656,10 +830,7 @@ class SettingsDialog:
         count_row = _plain(Adw.SpinRow.new(count_adj, 1, 0))
         count_row.set_title("Maximum buttons in the popup")
         count_row.set_subtitle(
-            "Cap on how many actions the popup shows. Extras wrap to "
-            "a second row first; beyond that, a '+N' chip lets you open "
-            "Plugin Manager to reorder. Raise this if you have lots of "
-            "plugins enabled and want them all visible."
+            "Actions past this are hidden behind a '+N' chip that opens the Plugin Manager."
         )
         count_row.set_numeric(True)
         count_row.connect(
@@ -824,14 +995,10 @@ class SettingsDialog:
         # (Paste / Select all / Backspace). PopClip's text-field gesture.
         dbl_row = self._switch_row(
             "Modifier+double-click for the edit menu",
-            "Hold the modifier key below and double-click inside any "
-            "text field to bring up Paste / Select all / Backspace at "
-            "the cursor. The modifier is required so it never collides "
-            "with the app's own double-click-to-select-a-word gesture. "
-            "Requires watching mouse clicks globally (nothing is logged or "
-            "sent). On Wayland this reaches XWayland windows only - for "
-            "native Wayland apps, press the popup hotkey instead; it shows "
-            "the same menu when nothing is selected.",
+            "Hold the modifier below and double-click in a text field for "
+            "Paste / Select all / Backspace. Watches mouse clicks locally; "
+            "nothing is logged. On Wayland it only reaches XWayland apps - "
+            "the popup hotkey shows the same menu everywhere.",
             self._settings.get("double_click_popup_enabled", False),
         )
         # Live-apply happens through the settings on_changed callback in
@@ -841,9 +1008,7 @@ class SettingsDialog:
 
         mod_row = self._combo_row(
             "Modifier key",
-            "Which key must be held during the double-click. "
-            "Ctrl is the safest default; pick another if Ctrl is "
-            "already mapped to something you do with the mouse.",
+            "The key to hold while double-clicking.",
             [
                 ("ctrl", "Ctrl"),
                 ("shift", "Shift"),
@@ -870,14 +1035,9 @@ class SettingsDialog:
         # squeezes it into a tall narrow ribbon.
         force_row = self._combo_row(
             "Force all plugins modifier",
-            "Hold this key while making a selection to bypass the "
-            "content-type filter and surface every installed action. "
-            "Every option conflicts with something - pick what hurts "
-            "least. Alt and Super are usually bound to the window-"
-            "manager's move gesture (Alt+drag = move window in Cinnamon "
-            "by default). Ctrl breaks word-by-word text selection in "
-            'many editors. Shift extends a selection. Pick "None" to '
-            "leave the feature off.",
+            "Hold this key while selecting to show every action, not just "
+            "the ones that fit the text. Each key clashes with something: "
+            "Alt/Super often move windows, Ctrl and Shift change selection.",
             [
                 ("", "None (off)"),
                 ("ctrl", "Ctrl"),
@@ -946,9 +1106,8 @@ class SettingsDialog:
         clip_row = _plain(Adw.ActionRow())
         clip_row.set_title("Optional clipboard shortcut")
         clip_row.set_subtitle(
-            "A direct shortcut that opens the clipboard picker at the "
-            "cursor. You don't have to set one - the popup hotkey above "
-            "already gets you there when nothing is highlighted."
+            "Opens the clipboard picker at the cursor. Optional: the popup "
+            "hotkey (Activation page) opens it too when nothing is highlighted."
         )
         clip_recorder = HotkeyRecorder(
             self._settings.get("clipboard_hotkey") or "",
@@ -1202,10 +1361,8 @@ class SettingsDialog:
         # threshold. The spinner only goes 'live' when the toggle is on.
         min_toggle_row = self._switch_row(
             "Skip short auto-popup selections",
-            "If on, the auto-popup ignores selections shorter than the "
-            "number below - useful if you keep getting popups for "
-            "single-character misclicks. The hotkey is unaffected and "
-            "always opens the popup, even with no text selected.",
+            "The auto-popup ignores selections shorter than the number "
+            "below. The hotkey always works.",
             self._settings.get("min_selection_length_enabled"),
         )
         min_toggle_row.connect("notify::active", self._on_switch, "min_selection_length_enabled")
@@ -1363,10 +1520,8 @@ class SettingsDialog:
 
         poll_row = self._switch_row(
             "Trigger hotkey on first press",
-            "Some desktops (especially Cinnamon) swallow the first "
-            "hotkey press, so the popup only appears after 2-3 tries. "
-            "Turn this on to fix it. Runs a tiny background check - no "
-            "noticeable impact on performance.",
+            "Turn on if the popup only appears after pressing the hotkey "
+            "2-3 times (common on Cinnamon).",
             self._settings.get("hotkey_use_polling", False),
         )
         poll_row.connect("notify::active", self._on_switch, "hotkey_use_polling")
@@ -1457,6 +1612,166 @@ class SettingsDialog:
             return False
 
         GLib.idle_add(_rebuild)
+
+    # ---- debug page ----------------------------------------------------------
+
+    def _build_diagnostics_group(self) -> Adw.PreferencesGroup:
+        """`vinopop --doctor`, run in a child process: it imports OpenVINO
+        and probes devices, which would stall this window."""
+        group = Adw.PreferencesGroup()
+        group.set_title("Diagnostics")
+        group.set_description("What the on-device AI needs from this machine (vinopop --doctor).")
+        buttons = Gtk.Box(spacing=6)
+        rerun = self._suffix_icon_button("view-refresh-symbolic", "Run the checks again")
+        copy = self._suffix_icon_button("edit-copy-symbolic", "Copy a report for a bug report")
+        buttons.append(rerun)
+        buttons.append(copy)
+        group.set_header_suffix(buttons)
+
+        status_icons = {
+            "ok": ("emblem-ok-symbolic", "success"),
+            "warn": ("dialog-warning-symbolic", "warning"),
+            "FAIL": ("dialog-error-symbolic", "error"),
+        }
+        rows: list[Gtk.Widget] = []
+        report = {"text": ""}
+
+        def _set_rows(checks: list[dict]) -> None:
+            for row in rows:
+                group.remove(row)
+            rows.clear()
+            for check in checks:
+                row = _plain(Adw.ActionRow())
+                row.set_title(check.get("label", ""))
+                row.set_subtitle(check.get("detail", ""))
+                row.set_subtitle_selectable(True)
+                icon, css = status_icons.get(
+                    check.get("status", ""), ("dialog-question-symbolic", "dim-label")
+                )
+                img = Gtk.Image.new_from_icon_name(icon)
+                img.add_css_class(css)
+                row.add_prefix(img)
+                group.add(row)
+                rows.append(row)
+
+        def _done(checks: list[dict]) -> bool:
+            _set_rows(checks)
+            width = max((len(c.get("label", "")) for c in checks), default=0)
+            report["text"] = "\n".join(
+                f"[{c.get('status', ''):>4}] {c.get('label', ''):<{width}}  {c.get('detail', '')}"
+                for c in checks
+            )
+            rerun.set_sensitive(True)
+            return False
+
+        def _run() -> None:
+            rerun.set_sensitive(False)
+            _set_rows([{"status": "", "label": "Running checks…"}])
+
+            def _worker() -> None:
+                checks = _doctor_checks()
+                GLib.idle_add(_done, checks)
+
+            threading.Thread(target=_worker, daemon=True, name="doctor").start()
+
+        def _copy(*_) -> None:
+            text = "\n".join(
+                [f"{label}: {value}" for label, value in _session_info()] + ["", report["text"]]
+            )
+            Gdk.Display.get_default().get_clipboard().set(text.strip() + "\n")
+            copy.set_tooltip_text("Copied")
+
+        rerun.connect("clicked", lambda *_: _run())
+        copy.connect("clicked", _copy)
+        _set_rows([{"status": "", "label": "Checks run when this page opens"}])
+        self._debug_refresh = _run
+        return group
+
+    def _build_session_group(self) -> Adw.PreferencesGroup:
+        from xdg_paths import LOG_FILE
+
+        group = Adw.PreferencesGroup()
+        group.set_title("This session")
+        for label, value in _session_info():
+            row = _plain(Adw.ActionRow())
+            row.set_title(label)
+            row.set_subtitle(value)
+            row.set_subtitle_selectable(True)
+            row.add_css_class("property")
+            group.add(row)
+
+        log_row = _plain(Adw.ActionRow())
+        log_row.set_title("Log file")
+        log_row.set_subtitle(str(LOG_FILE))
+        log_row.set_subtitle_selectable(True)
+        open_log = Gtk.Button(label="Open")
+        open_log.set_valign(Gtk.Align.CENTER)
+        open_log.connect("clicked", lambda *_: _open_path(LOG_FILE))
+        folder = self._suffix_icon_button("folder-open-symbolic", "Open the log folder")
+        folder.connect("clicked", lambda *_: _open_path(LOG_FILE.parent))
+        log_row.add_suffix(open_log)
+        log_row.add_suffix(folder)
+        group.add(log_row)
+        return group
+
+    def _build_troubleshoot_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
+        group.set_title("Troubleshooting")
+
+        def _button_row(title: str, subtitle: str, label: str, on_click) -> Adw.ActionRow:
+            row = _plain(Adw.ActionRow())
+            row.set_title(title)
+            row.set_subtitle(subtitle)
+            btn = Gtk.Button(label=label)
+            btn.set_valign(Gtk.Align.CENTER)
+            btn.connect("clicked", on_click)
+            row.add_suffix(btn)
+            row.set_activatable_widget(btn)
+            group.add(row)
+            return row
+
+        restart = _button_row(
+            "Restart vinoPop",
+            "Try this first if the popup, hotkeys or tray stop responding.",
+            "Restart",
+            lambda *_: self._on_restart() if self._on_restart else None,
+        )
+        restart.set_sensitive(self._on_restart is not None)
+
+        def _setup(*_) -> None:
+            from onboarding import OnboardingWindow
+
+            win = OnboardingWindow(self._settings, on_open_plugins=self._on_open_plugins)
+            if self._window is not None:
+                win.set_transient_for(self._window)
+            win.present()
+
+        _button_row(
+            "Run the setup again",
+            "Walk through the first-run setup: hotkeys, plugins and permissions.",
+            "Open",
+            _setup,
+        )
+
+        from vino_ai import failures
+
+        skipped = sorted(failures.all_records())
+        if skipped:
+
+            def _forget(btn: Gtk.Button) -> None:
+                for dev in skipped:
+                    failures.forget(dev)
+                btn.set_sensitive(False)
+                btn.set_label("Forgotten")
+
+            _button_row(
+                "Retry AI devices that failed",
+                f"{', '.join(skipped)} failed to load the model before and are skipped. "
+                "Clear that so the next AI action tries them again.",
+                "Retry",
+                _forget,
+            )
+        return group
 
     def _build_terminal_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()

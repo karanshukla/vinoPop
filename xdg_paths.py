@@ -52,6 +52,7 @@ CONFIG_DIR = CONFIG_HOME / APP
 CACHE_DIR = CACHE_HOME / APP
 DATA_DIR = DATA_HOME / APP
 STATE_DIR = STATE_HOME / APP
+LOG_FILE = CACHE_DIR / "vinopop.log"
 
 # Icons the user drops in (picked up by the icon picker and plugin loader) and
 # the hicolor theme folder GTK and the tray search for per-user icons.

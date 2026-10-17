@@ -167,6 +167,18 @@ class Tray:
             print(f"[tray] failed to start tray process: {exc}")
             self._proc = None
 
+    def stop(self) -> None:
+        """End the tray process now, for a restart: it only dies with
+        this process, and exec() keeps the process alive."""
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        self._proc = None
+        self._gave_up = True
+
     def _child_died(self) -> bool:
         return self._proc is not None and self._proc.poll() is not None
 
