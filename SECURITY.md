@@ -15,6 +15,11 @@ The only network traffic is something you click that is plainly online:
 OCR, summarize, rewrite, explain and translate run on the local OpenVINO
 models; the selected text never leaves the machine.
 
+OpenVINO ships Intel's own usage telemetry, which is on unless you opt out.
+vinoPop opts out for you before it first loads OpenVINO by writing `0` to
+`~/intel/openvino_telemetry`; Settings > Advanced > Privacy turns it back on
+if you want to share the stats.
+
 ## Clipboard history
 
 Clipboard history is stored in plain JSON at

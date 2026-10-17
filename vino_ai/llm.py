@@ -22,7 +22,7 @@ from pathlib import Path
 
 from xdg_paths import CACHE_DIR
 
-from . import devices, failures, models
+from . import devices, failures, models, telemetry
 
 log = logging.getLogger("vinopop")
 
@@ -171,6 +171,7 @@ def _load(on_status: Callable[[str], None]):
         on_status(f"Downloading {model.label} ({model.size}, one time only)…")
     path = models.ensure_llm(model, on_status)
 
+    telemetry.prepare()
     import openvino_genai as ov_genai
 
     cache = CACHE_DIR / "ov-cache"
@@ -448,6 +449,7 @@ def _generate(
     on_token: Callable[[str], None] | None,
     cancelled: Callable[[], bool] | None = None,
 ) -> Answer:
+    telemetry.prepare()
     import openvino_genai as ov_genai
 
     tok = pipe.get_tokenizer()

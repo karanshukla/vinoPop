@@ -14,6 +14,8 @@ from __future__ import annotations
 import functools
 import logging
 
+from . import telemetry
+
 log = logging.getLogger("vinopop")
 
 LLM_ORDER = ("NPU", "GPU", "CPU")
@@ -22,6 +24,7 @@ OCR_ORDER = ("GPU", "CPU")
 
 @functools.lru_cache(maxsize=1)
 def available_devices() -> tuple[str, ...]:
+    telemetry.prepare()
     import openvino as ov
 
     devs = tuple(ov.Core().available_devices)
@@ -33,6 +36,7 @@ def available_devices() -> tuple[str, ...]:
 def _log_npu_notes() -> None:
     """Pass ovfetch's view of the NPU to the log once. Diagnosis only: the
     NPU is still tried, and a failed compile falls back to GPU/CPU."""
+    telemetry.prepare()
     import openvino as ov
 
     from . import ovfetch
