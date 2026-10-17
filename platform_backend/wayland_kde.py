@@ -117,6 +117,17 @@ def _layer_shell():
     return _LAYER
 
 
+def _die_with_parent() -> None:
+    """preexec_fn: SIGTERM this child when the daemon dies, however it dies.
+    Without it every restart left a `wl-paste --watch` behind, all of them
+    pulling each new selection out of the source app."""
+    import ctypes
+    import signal
+
+    PR_SET_PDEATHSIG = 1
+    ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+
+
 # ---------------------------------------------------------------------------
 # Selection watcher: `wl-paste --primary --watch` notifies us; we then read
 # the primary selection and the cursor position, mirroring the X11 watcher's
@@ -168,12 +179,14 @@ class WaylandSelectionWatcher:
                 ["wl-paste", "--primary", "--watch", "echo"],
                 stdout=subprocess.PIPE,
                 bufsize=0,
+                preexec_fn=_die_with_parent,
             )
         except OSError as exc:
             print(f"[wayland] could not start wl-paste --watch: {exc}")
             return
         assert self._proc.stdout is not None
         fd = self._proc.stdout.fileno()
+        self._last_clipboard = self._backend.read_selection("clipboard")
         first = True
         while not self._stop.is_set():
             # Block until at least one ping arrives (0.5 s wake-ups so stop()
