@@ -7,6 +7,7 @@ user clicks outside it.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 from collections.abc import Callable
@@ -27,6 +28,8 @@ import actions
 import plugin_loader
 from classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
+
+log = logging.getLogger("vinopop")
 
 _CSS = b"""
 /* The window itself is invisible; only the rounded bar paints. GTK 4 needs
@@ -782,8 +785,8 @@ class PopupWindow:
                                 p.execute(text_snapshot)
                         else:
                             p.execute(text_snapshot)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[popup] plugin '{plugin_name}' failed: {exc}")
+                    except Exception:  # noqa: BLE001
+                        log.exception("[popup] plugin '%s' failed", plugin_name)
 
                 threading.Thread(
                     target=_worker,
