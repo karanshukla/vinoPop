@@ -102,17 +102,6 @@
     "icon": "vinopop-case-upper-symbolic"
   },
   {
-    "file": "speak.py",
-    "title": "Speak aloud",
-    "description": "Reads the selection out loud via spd-say or espeak",
-    "category": "Productivity",
-    "tags": [
-      "utility",
-      "accessibility"
-    ],
-    "icon": "audio-speakers-symbolic"
-  },
-  {
     "file": "text_transformations.py",
     "title": "Text transformations bundle",
     "description": "Reverse, sort lines, deduplicate, trim, strip HTML, remove diacritics, ASCII-only, swap case - 8 buttons in one plugin",
@@ -148,19 +137,6 @@
   },
   {
     "kind": "recipe",
-    "file": "define.json",
-    "title": "Define this word",
-    "description": "Looks up a dictionary definition via Google's 'define' search - the fastest way to clarify an unfamiliar word",
-    "category": "Web shortcuts",
-    "tags": [
-      "web",
-      "dictionary",
-      "essentials"
-    ],
-    "icon": "accessories-dictionary-symbolic"
-  },
-  {
-    "kind": "recipe",
     "file": "wikipedia.json",
     "title": "Search Wikipedia",
     "description": "English Wikipedia full-text search",
@@ -169,18 +145,6 @@
       "web"
     ],
     "icon": "vinopop-wikipedia"
-  },
-  {
-    "kind": "recipe",
-    "file": "google-translate.json",
-    "title": "Google Translate to English",
-    "description": "Auto-detect source language → translate to English",
-    "category": "Web shortcuts",
-    "tags": [
-      "web",
-      "text"
-    ],
-    "icon": "preferences-desktop-locale-symbolic"
   },
   {
     "kind": "recipe",

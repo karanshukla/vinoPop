@@ -6,7 +6,6 @@ Each transforms the selection and copies the result to the clipboard.
 from __future__ import annotations
 
 import html
-import random as _random
 import re
 import subprocess
 import unicodedata
@@ -146,20 +145,6 @@ def _worth_reversing(text: str) -> bool:
     return len(text.strip()) >= 3
 
 
-def _worth_mocking(text: str) -> bool:
-    """Mocking SpongeBob is for full quotes - single words look silly."""
-    return _has_letters(text) and len(text.strip()) >= 4
-
-
-def _mock_case(text: str) -> None:
-    """Random upper/lower per char - the SpongeBob mocking format.
-    Seeded with the selection so the result is stable across re-clicks
-    on the same text (less surprising than fresh randomness each time)."""
-    rng = _random.Random(text)
-    out = "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in text)
-    _copy(out, "mOcKiNg cAsE")
-
-
 def register(register_plugin) -> None:
     types = (ContentType.PLAIN_TEXT,)
     # Reverse: any non-empty selection - no predicate needed.
@@ -246,7 +231,7 @@ def register(register_plugin) -> None:
             predicate=_has_non_ascii,
         )
     )
-    # Swap / mock case: only meaningful if the selection has letters.
+    # Swap case: only meaningful if the selection has letters.
     register_plugin(
         Plugin(
             name="swap-case",
@@ -256,16 +241,5 @@ def register(register_plugin) -> None:
             content_types=types,
             priority=157,
             predicate=_has_mixed_case,
-        )
-    )
-    register_plugin(
-        Plugin(
-            name="mock-case",
-            icon="face-smile-big-symbolic",
-            tooltip="mOcKiNg cAsE",
-            handler=_mock_case,
-            content_types=types,
-            priority=158,
-            predicate=_worth_mocking,
         )
     )
