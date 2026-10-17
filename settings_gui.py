@@ -550,7 +550,7 @@ class SettingsDialog:
                 "advanced",
                 "Advanced",
                 "emblem-system-symbolic",
-                [self._build_privacy_group, self._build_advanced_group],
+                [self._build_ai_group, self._build_privacy_group, self._build_advanced_group],
             ),
             (
                 "debug",
@@ -1510,6 +1510,32 @@ class SettingsDialog:
 
         custom_row.connect("changed", _on_custom_changed)
         return group
+
+    def _build_ai_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
+        group.set_title("Offline AI")
+        try:
+            from vino_ai import models
+
+            model = models.llm_model()
+            size = f"{model.label}, {model.size}"
+        except Exception:
+            size = "about 4 GB"
+        prefetch_row = self._switch_row(
+            "Download the AI model in the background",
+            f"One-time download ({size}) when vinoPop starts, so the first AI "
+            "action doesn't wait for it. Off: it downloads on the first AI action.",
+            self._settings.get("ai_prefetch_model", False),
+        )
+        prefetch_row.connect("notify::active", self._on_prefetch_switch)
+        group.add(prefetch_row)
+        return group
+
+    def _on_prefetch_switch(self, switch: Adw.SwitchRow, _param) -> None:
+        # Flipping it is an answer, so a stored True now counts as a yes
+        # (see vino_ai.models.prefetch_consented).
+        self._settings.set("ai_prefetch_asked", True)
+        self._save_key("ai_prefetch_model", bool(switch.get_active()))
 
     def _build_privacy_group(self) -> Adw.PreferencesGroup:
         from vino_ai import telemetry

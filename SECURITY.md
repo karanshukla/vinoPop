@@ -9,8 +9,9 @@ The only network traffic is something you click that is plainly online:
 
 - web search and recipe buttons open a URL in your browser
 - opening a link you selected
-- the one-time AI model download from Hugging Face, the first time you use an
-  AI action
+- the one-time AI model download from Hugging Face: the first time you use an
+  AI action, or in the background at startup if you chose "Download now" in
+  onboarding or turned it on in Settings → Advanced
 
 OCR, summarize, rewrite, explain and translate run on the local OpenVINO
 models; the selected text never leaves the machine.
