@@ -380,6 +380,10 @@ class PopupWindow:
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         motion.connect("leave", self._on_leave)
+        # Hiding the popup with the pointer on it (every button click does)
+        # leaves GTK thinking the pointer never left, so the next show gets
+        # no "enter" and clicks read as outside. Motion still fires.
+        motion.connect("motion", self._on_motion)
         self.win.add_controller(motion)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_press)
@@ -1326,6 +1330,10 @@ class PopupWindow:
         self._pointer_in_popup = True
         self._cancel_initial_hide()
         self._cancel_hide_timeout()
+
+    def _on_motion(self, controller, x, y) -> None:
+        if not self._pointer_in_popup:
+            self._on_enter(controller, x, y)
 
     def _on_leave(self, _controller) -> None:
         self._pointer_in_popup = False
