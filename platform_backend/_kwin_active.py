@@ -8,6 +8,7 @@ default no-blocklist path.
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 import tempfile
@@ -17,15 +18,23 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib  # only GLib: no GTK in this helper
 
-# Use an app-specific bus name. _JS references the constant to stay in sync.
-BUS_NAME = "io.github.karanshukla.vinoPop.ActiveWin"
+# Unique bus name per run, fixed interface: see _kwin_cursor.py for why.
+IFACE = "io.github.karanshukla.vinoPop.ActiveWin"
 OBJ_PATH = "/win"
-# KWin 6 renamed activeClient -> activeWindow; fall back for older builds.
-_JS = (
-    "var c = workspace.activeWindow || workspace.activeClient;"
-    f'callDBus("{BUS_NAME}", "{OBJ_PATH}", "{BUS_NAME}", '
-    '"Report", c ? String(c.resourceClass) : "", c ? String(c.caption) : "");'
-)
+_counter = itertools.count()
+
+
+def bus_name() -> str:
+    return f"{IFACE}.p{os.getpid()}_{next(_counter)}"
+
+
+def script_js(name: str) -> str:
+    # KWin 6 renamed activeClient -> activeWindow; fall back for older builds.
+    return (
+        "var c = workspace.activeWindow || workspace.activeClient;"
+        f'callDBus("{name}", "{OBJ_PATH}", "{IFACE}", '
+        '"Report", c ? String(c.resourceClass) : "", c ? String(c.caption) : "");'
+    )
 
 
 def main() -> int:
@@ -35,18 +44,20 @@ def main() -> int:
     got: dict[str, tuple[str, str]] = {}
 
     class _Svc(dbus.service.Object):
-        @dbus.service.method(BUS_NAME, in_signature="ss", out_signature="")
+        @dbus.service.method(IFACE, in_signature="ss", out_signature="")
         def Report(self, cls, caption):  # noqa: N802
             got["v"] = (str(cls), str(caption))
             print(f"{cls}\t{caption}", flush=True)
             loop.quit()
 
-    name = dbus.service.BusName(BUS_NAME, bus)
+    unique = bus_name()
+    # do_not_queue: fail fast rather than wait behind another owner.
+    name = dbus.service.BusName(unique, bus, do_not_queue=True)
     _svc = _Svc(name, OBJ_PATH)
 
     fd, path = tempfile.mkstemp(suffix=".js", prefix="vinopop-active-")
     try:
-        os.write(fd, _JS.encode("utf-8"))
+        os.write(fd, script_js(unique).encode("utf-8"))
         os.close(fd)
         scripting = dbus.Interface(
             bus.get_object("org.kde.KWin", "/Scripting"),

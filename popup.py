@@ -28,6 +28,7 @@ import actions
 import plugin_loader
 from classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
+from platform_backend.monitors import monitor_at  # noqa: E402
 
 log = logging.getLogger("vinopop")
 
@@ -100,18 +101,7 @@ def _monitor_for_point(display, x: float, y: float, is_logical: bool = True):
     get_monitor_at_point(); monitor geometry is logical, so physical X11 root
     coords are scaled down by each monitor's own factor before the test."""
     try:
-        monitors = display.get_monitors()
-        first = None
-        for i in range(monitors.get_n_items()):
-            m = monitors.get_item(i)
-            if first is None:
-                first = m
-            g = m.get_geometry()
-            s = 1 if is_logical else max(1, m.get_scale_factor())
-            lx, ly = x / s, y / s
-            if g.x <= lx < g.x + g.width and g.y <= ly < g.y + g.height:
-                return m
-        return first
+        return monitor_at(display.get_monitors(), x, y, is_logical)
     except Exception:
         return None
 

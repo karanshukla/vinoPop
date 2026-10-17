@@ -11,6 +11,7 @@ so the round-trip's GLib main loop never tangles with the main app's loop.
 
 from __future__ import annotations
 
+import itertools
 import os
 import sys
 import tempfile
@@ -20,13 +21,26 @@ import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib  # only GLib: no GTK in this helper
 
-# Use an app-specific bus name. _JS references the constant to stay in sync.
-BUS_NAME = "io.github.karanshukla.vinoPop.Cursor"
+# The interface is fixed; the bus NAME is unique per helper run. A shared
+# name made concurrent queries collide: the second helper sat in the name's
+# queue, KWin delivered its script's callback to the first, and it timed
+# out with no coords (the popup then landed at (0, 0)).
+IFACE = "io.github.karanshukla.vinoPop.Cursor"
 OBJ_PATH = "/cursor"
-_JS = (
-    f'callDBus("{BUS_NAME}", "{OBJ_PATH}", "{BUS_NAME}", '
-    '"Report", workspace.cursorPos.x, workspace.cursorPos.y);'
-)
+_counter = itertools.count()
+
+
+def bus_name() -> str:
+    """A well-known name only this run owns (pid + per-process counter)."""
+    return f"{IFACE}.p{os.getpid()}_{next(_counter)}"
+
+
+def script_js(name: str) -> str:
+    """The KWin script, calling back to `name` rather than a shared name."""
+    return (
+        f'callDBus("{name}", "{OBJ_PATH}", "{IFACE}", '
+        '"Report", workspace.cursorPos.x, workspace.cursorPos.y);'
+    )
 
 
 def main() -> int:
@@ -36,18 +50,20 @@ def main() -> int:
     got: dict[str, tuple[int, int]] = {}
 
     class _Svc(dbus.service.Object):
-        @dbus.service.method(BUS_NAME, in_signature="ii", out_signature="")
+        @dbus.service.method(IFACE, in_signature="ii", out_signature="")
         def Report(self, x, y):  # noqa: N802 - DBus method name
             got["xy"] = (int(x), int(y))
             print(f"{int(x)} {int(y)}", flush=True)
             loop.quit()
 
-    name = dbus.service.BusName(BUS_NAME, bus)
+    unique = bus_name()
+    # do_not_queue: fail fast rather than wait behind another owner.
+    name = dbus.service.BusName(unique, bus, do_not_queue=True)
     _svc = _Svc(name, OBJ_PATH)
 
     fd, path = tempfile.mkstemp(suffix=".js", prefix="vinopop-cursor-")
     try:
-        os.write(fd, _JS.encode("utf-8"))
+        os.write(fd, script_js(unique).encode("utf-8"))
         os.close(fd)
         scripting = dbus.Interface(
             bus.get_object("org.kde.KWin", "/Scripting"),
