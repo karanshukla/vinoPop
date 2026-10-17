@@ -346,43 +346,144 @@ class SettingsDialog:
         gtk4_app.init()
         self._on_changed = on_changed
         self._settings = get_settings()
-        self._window: Adw.PreferencesWindow | None = None
+        self._window: Adw.Window | None = None
+        # Kept across a rebuild (Reset to defaults) so the user stays put.
+        self._page_name = "activation"
 
     def show(self) -> None:
         if self._window is not None and self._window.get_visible():
             _force_to_front(self._window)
             return
 
-        win = Adw.PreferencesWindow()
-        win.set_title("vinoPop")
-        win.set_search_enabled(False)
-        win.set_default_size(720, 640)
+        win = Adw.Window()
+        win.set_title("vinoPop Settings")
+        win.set_default_size(860, 640)
+        win.set_size_request(360, 360)
         win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
         # GTK 4 may keep the destroyed window alive while Python holds a
         # ref, so drop our references on close-request as well.
         win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
-
-        page = Adw.PreferencesPage()
-        page.set_title("General")
-        page.set_icon_name("preferences-system-symbolic")
-
-        # Snippets & Clipboard first - that's the core of what people use
-        # vinoPop for. Activation comes second because users new to
-        # the app reach for "what's my hotkey" before anything else.
-        page.add(self._build_activation_group())
-        page.add(self._build_appearance_group())
-        page.add(self._build_timing_group())
-        page.add(self._build_filter_group())
-        page.add(self._build_search_group())
-        page.add(self._build_terminal_group())
-        page.add(self._build_advanced_group())
-
-        win.add(page)
-        self._decorate_badges(page)
+        # Set before the groups are built: their modal editors use it as
+        # their parent.
         self._window = win
+
+        # One page per topic in a sidebar (like vinoWhisper's settings),
+        # instead of every group stacked in one long scroll.
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        for name, title, icon, builders in self._pages():
+            page = Adw.PreferencesPage()
+            for build in builders:
+                group = build()
+                # The header already names the page.
+                if group.get_title() == title:
+                    group.set_title("")
+                page.add(group)
+            self._decorate_badges(page)
+            stack.add_titled(page, name, title).set_icon_name(icon)
+
+        content_page = Adw.NavigationPage()
+        content_header = Adw.HeaderBar()
+        content_view = Adw.ToolbarView()
+        content_view.add_top_bar(content_header)
+        content_view.set_content(stack)
+        content_page.set_child(content_view)
+
+        sidebar = Gtk.ListBox()
+        sidebar.add_css_class("navigation-sidebar")
+        names: list[str] = []
+        for name, title, icon, _builders in self._pages():
+            names.append(name)
+            item = Gtk.Box(spacing=12)
+            item.set_margin_top(6)
+            item.set_margin_bottom(6)
+            item.set_margin_start(6)
+            item.append(Gtk.Image.new_from_icon_name(icon))
+            item.append(Gtk.Label(label=title, xalign=0))
+            sidebar.append(item)
+        sidebar_page = Adw.NavigationPage(title="Settings")
+        sidebar_view = Adw.ToolbarView()
+        sidebar_view.add_top_bar(Adw.HeaderBar())
+        sidebar_scroll = Gtk.ScrolledWindow()
+        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_scroll.set_child(sidebar)
+        sidebar_view.set_content(sidebar_scroll)
+        sidebar_page.set_child(sidebar_view)
+
+        split = Adw.NavigationSplitView()
+        split.set_sidebar(sidebar_page)
+        split.set_content(content_page)
+        split.set_min_sidebar_width(190)
+        split.set_max_sidebar_width(230)
+
+        def _show_page(name: str) -> None:
+            stack.set_visible_child_name(name)
+            child = stack.get_child_by_name(name)
+            content_page.set_title(stack.get_page(child).get_title() or "")
+            self._page_name = name
+
+        def _on_row(_box, row) -> None:
+            if row is None:
+                return
+            _show_page(names[row.get_index()])
+            split.set_show_content(True)
+
+        sidebar.connect("row-activated", _on_row)
+        sidebar.connect("row-selected", _on_row)
+        current = self._page_name if self._page_name in names else names[0]
+        _show_page(current)
+        sidebar.select_row(sidebar.get_row_at_index(names.index(current)))
+
+        # Narrow windows show one pane at a time: the page list, then the
+        # page with a back button.
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 600sp"))
+        narrow.add_setter(split, "collapsed", True)
+        win.add_breakpoint(narrow)
+        win.set_content(split)
         _force_to_front(win)
+
+    def _pages(self) -> list[tuple[str, str, str, list[Callable[[], Adw.PreferencesGroup]]]]:
+        """(id, sidebar title, icon, group builders) for each Settings page."""
+        return [
+            (
+                "activation",
+                "Activation",
+                "input-keyboard-symbolic",
+                [self._build_activation_group, self._build_timing_group],
+            ),
+            (
+                "appearance",
+                "Appearance",
+                "applications-graphics-symbolic",
+                [self._build_appearance_group],
+            ),
+            (
+                "clipboard",
+                "Clipboard & Snippets",
+                "edit-paste-symbolic",
+                [self._build_snippets_clipboard_group],
+            ),
+            (
+                "filters",
+                "Filters",
+                "security-medium-symbolic",
+                [self._build_filter_group],
+            ),
+            (
+                "actions",
+                "Search & Terminal",
+                "edit-find-symbolic",
+                [self._build_search_group, self._build_terminal_group],
+            ),
+            (
+                "advanced",
+                "Advanced",
+                "emblem-system-symbolic",
+                [self._build_advanced_group],
+            ),
+        ]
 
     def _on_destroy(self, win=None, *_):
         # Ignore a late signal from a window we already replaced.
@@ -518,9 +619,7 @@ class SettingsDialog:
 
         theme_row = self._combo_row(
             "Theme",
-            "Dark uses the cobalt + violet palette. Light gives you the "
-            "same layout on a clean off-white. 'Follow system' picks one "
-            "based on your desktop theme.",
+            "'Follow system' matches your desktop's light or dark setting.",
             [
                 ("dark", "Dark"),
                 ("light", "Light"),
@@ -546,11 +645,8 @@ class SettingsDialog:
         size_row = _plain(Adw.SpinRow.new(size_adj, 1, 0))
         size_row.set_title("Popup button size")
         size_row.set_subtitle(
-            "How big each action button in the popup is, in pixels. "
-            "16 is small and dense; 32 is roomy and easy to click. "
-            "Tip: smaller buttons also fit more actions on a single row "
-            "before the popup has to wrap or expand (see ‘When actions "
-            "overflow’ below)."
+            "Size of each popup button in pixels, from 16 (dense) to 32 "
+            "(roomy). Smaller buttons fit more actions on one row."
         )
         size_row.set_numeric(True)
 
@@ -656,10 +752,7 @@ class SettingsDialog:
         count_row = _plain(Adw.SpinRow.new(count_adj, 1, 0))
         count_row.set_title("Maximum buttons in the popup")
         count_row.set_subtitle(
-            "Cap on how many actions the popup shows. Extras wrap to "
-            "a second row first; beyond that, a '+N' chip lets you open "
-            "Plugin Manager to reorder. Raise this if you have lots of "
-            "plugins enabled and want them all visible."
+            "Actions past this are hidden behind a '+N' chip that opens the Plugin Manager."
         )
         count_row.set_numeric(True)
         count_row.connect(
@@ -824,14 +917,10 @@ class SettingsDialog:
         # (Paste / Select all / Backspace). PopClip's text-field gesture.
         dbl_row = self._switch_row(
             "Modifier+double-click for the edit menu",
-            "Hold the modifier key below and double-click inside any "
-            "text field to bring up Paste / Select all / Backspace at "
-            "the cursor. The modifier is required so it never collides "
-            "with the app's own double-click-to-select-a-word gesture. "
-            "Requires watching mouse clicks globally (nothing is logged or "
-            "sent). On Wayland this reaches XWayland windows only - for "
-            "native Wayland apps, press the popup hotkey instead; it shows "
-            "the same menu when nothing is selected.",
+            "Hold the modifier below and double-click in a text field for "
+            "Paste / Select all / Backspace. Watches mouse clicks locally; "
+            "nothing is logged. On Wayland it only reaches XWayland apps - "
+            "the popup hotkey shows the same menu everywhere.",
             self._settings.get("double_click_popup_enabled", False),
         )
         # Live-apply happens through the settings on_changed callback in
@@ -841,9 +930,7 @@ class SettingsDialog:
 
         mod_row = self._combo_row(
             "Modifier key",
-            "Which key must be held during the double-click. "
-            "Ctrl is the safest default; pick another if Ctrl is "
-            "already mapped to something you do with the mouse.",
+            "The key to hold while double-clicking.",
             [
                 ("ctrl", "Ctrl"),
                 ("shift", "Shift"),
@@ -870,14 +957,9 @@ class SettingsDialog:
         # squeezes it into a tall narrow ribbon.
         force_row = self._combo_row(
             "Force all plugins modifier",
-            "Hold this key while making a selection to bypass the "
-            "content-type filter and surface every installed action. "
-            "Every option conflicts with something - pick what hurts "
-            "least. Alt and Super are usually bound to the window-"
-            "manager's move gesture (Alt+drag = move window in Cinnamon "
-            "by default). Ctrl breaks word-by-word text selection in "
-            'many editors. Shift extends a selection. Pick "None" to '
-            "leave the feature off.",
+            "Hold this key while selecting to show every action, not just "
+            "the ones that fit the text. Each key clashes with something: "
+            "Alt/Super often move windows, Ctrl and Shift change selection.",
             [
                 ("", "None (off)"),
                 ("ctrl", "Ctrl"),
@@ -946,9 +1028,8 @@ class SettingsDialog:
         clip_row = _plain(Adw.ActionRow())
         clip_row.set_title("Optional clipboard shortcut")
         clip_row.set_subtitle(
-            "A direct shortcut that opens the clipboard picker at the "
-            "cursor. You don't have to set one - the popup hotkey above "
-            "already gets you there when nothing is highlighted."
+            "Opens the clipboard picker at the cursor. Optional: the popup "
+            "hotkey (Activation page) opens it too when nothing is highlighted."
         )
         clip_recorder = HotkeyRecorder(
             self._settings.get("clipboard_hotkey") or "",
@@ -1202,10 +1283,8 @@ class SettingsDialog:
         # threshold. The spinner only goes 'live' when the toggle is on.
         min_toggle_row = self._switch_row(
             "Skip short auto-popup selections",
-            "If on, the auto-popup ignores selections shorter than the "
-            "number below - useful if you keep getting popups for "
-            "single-character misclicks. The hotkey is unaffected and "
-            "always opens the popup, even with no text selected.",
+            "The auto-popup ignores selections shorter than the number "
+            "below. The hotkey always works.",
             self._settings.get("min_selection_length_enabled"),
         )
         min_toggle_row.connect("notify::active", self._on_switch, "min_selection_length_enabled")
@@ -1363,10 +1442,8 @@ class SettingsDialog:
 
         poll_row = self._switch_row(
             "Trigger hotkey on first press",
-            "Some desktops (especially Cinnamon) swallow the first "
-            "hotkey press, so the popup only appears after 2-3 tries. "
-            "Turn this on to fix it. Runs a tiny background check - no "
-            "noticeable impact on performance.",
+            "Turn on if the popup only appears after pressing the hotkey "
+            "2-3 times (common on Cinnamon).",
             self._settings.get("hotkey_use_polling", False),
         )
         poll_row.connect("notify::active", self._on_switch, "hotkey_use_polling")
