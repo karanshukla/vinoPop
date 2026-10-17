@@ -8,7 +8,7 @@ from enum import Enum
 
 # Invisible / formatting characters that often sneak in from rich-text copies
 # (object replacement, zero-width spaces, BOM, soft hyphen, etc.)
-_INVISIBLE_CHARS = "￼​‌‍⁠﻿­᠎"
+_INVISIBLE_CHARS = "\ufffc\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e"
 
 
 class ContentType(Enum):

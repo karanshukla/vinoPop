@@ -252,7 +252,9 @@ def _install_mock_css() -> None:
 
 
 def _icon(name: str, size: int) -> Gtk.Image:
-    img = Gtk.Image.new_from_icon_name(name)
+    import icon_style
+
+    img = Gtk.Image.new_from_icon_name(icon_style.available(name))
     img.set_pixel_size(size)
     return img
 

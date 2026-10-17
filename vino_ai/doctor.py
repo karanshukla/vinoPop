@@ -128,6 +128,14 @@ def collect() -> list[Result]:
 
 
 def main(as_json: bool = False) -> int:
+    # A diagnostic must not create files (or print "[settings] wrote defaults"
+    # into --json output on a fresh machine).
+    try:
+        import settings
+
+        settings.write_defaults = False
+    except Exception:  # noqa: BLE001
+        pass
     results = collect()
     failed = [r.label for r in results if r.status == FAIL]
     if as_json:

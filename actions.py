@@ -20,6 +20,26 @@ from classifier import _normalize as _strip_invisible
 _local = threading.local()
 
 
+def notify(title: str, body: str, icon: str = "vinopop", timeout_ms: int = 3000) -> None:
+    """Best-effort desktop notification; a missing notify-send is not an error."""
+    try:
+        subprocess.run(
+            [
+                "notify-send",
+                "--hint=byte:transient:1",
+                "-t",
+                str(timeout_ms),
+                "-i",
+                icon,
+                title,
+                body,
+            ],
+            check=False,
+        )
+    except FileNotFoundError:
+        pass
+
+
 def force_copy_active() -> bool:
     return bool(getattr(_local, "force_copy", False))
 
@@ -294,7 +314,8 @@ def search_web(text: str) -> None:
 _TERMINALS = [
     ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c"]),
     ("konsole", ["konsole", "-e", "bash", "-c"]),
-    ("xfce4-terminal", ["xfce4-terminal", "-e"]),
+    # -e takes ONE command string; -x takes the rest of argv, as the others do
+    ("xfce4-terminal", ["xfce4-terminal", "-x", "bash", "-c"]),
     ("alacritty", ["alacritty", "-e", "bash", "-c"]),
     ("kitty", ["kitty", "bash", "-c"]),
     ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-c"]),
@@ -588,9 +609,12 @@ def open_path(text: str) -> None:
 
 
 def compose_email(text: str) -> None:
-    addr = _strip_invisible(text)
-    subprocess.Popen(
-        ["xdg-open", f"mailto:{addr}"],
-        start_new_session=True,
-        env=_desktop_env(),
-    )
+    addr = urllib.parse.quote(_strip_invisible(text), safe="@,+")
+    try:
+        subprocess.Popen(
+            ["xdg-open", f"mailto:{addr}"],
+            start_new_session=True,
+            env=_desktop_env(),
+        )
+    except FileNotFoundError:
+        print("[actions] xdg-open not available")

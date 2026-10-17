@@ -7,8 +7,10 @@ the user can hand-edit and add comments-as-keys.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,6 @@ from xdg_paths import CONFIG_DIR
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
 DEFAULTS: dict[str, Any] = {
-    # Show popup automatically when the X11 PRIMARY selection changes
     # UI theme: "dark", "light", or "system" (auto-detect from the
     # GTK theme name + prefer-dark-theme flag). Dark by default - the
     # premium palette was designed against the cobalt + violet scheme.
@@ -26,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     # height of each button in the floating selection popup. Icon
     # scales proportionally. Clamped to [14, 48] by popup.py.
     "popup_button_size": 22,
+    # Show the popup automatically when the PRIMARY selection changes
     "show_on_selection": True,
     # PopClip-style: modifier+double-click anywhere pops the edit menu
     # (Paste / Select all / Backspace) at the cursor. The modifier
@@ -58,7 +60,7 @@ DEFAULTS: dict[str, Any] = {
     "popup_force_all_modifier": "",
     # Hotkey to summon the popup with the current PRIMARY selection at the cursor.
     # Format: "<modifiers>+<key>", e.g. "super+shift+y", "ctrl+alt+y", "super+space".
-    # Set to null/empty to disable. Use the recorder in Innstillinger to capture
+    # Set to null/empty to disable. Use the recorder in Settings to capture
     # a combo by pressing it.
     "hotkey": "super+shift+y",
     # Master on/off for the clipboard plugin. When False, the background
@@ -71,8 +73,8 @@ DEFAULTS: dict[str, Any] = {
     # is False.
     # Default avoids Meta+V, which KDE Klipper / clipboard managers grab.
     "clipboard_hotkey": "super+shift+v",
-    # Hotkey to capture a screen region and OCR it. Requires `maim` and
-    # `tesseract-ocr` on PATH. Empty string disables. Useful for
+    # Hotkey to capture a screen region and OCR it (offline, via RapidOCR;
+    # needs a screen-capture tool, see Settings). Empty string disables. Useful for
     # reaching text inside PDF viewers, video frames, OS chrome, and
     # custom editors that don't propagate to X11 PRIMARY selection.
     "ocr_hotkey": "shift+super+o",
@@ -237,7 +239,7 @@ DEFAULTS: dict[str, Any] = {
     "terminal_confirm_run": True,
     # Which search engine the "Search the web" popup button uses. Recognised
     # values: "google", "duckduckgo", "bing", "brave", "startpage", "ecosia",
-    # "kagi", "qwant", "yandex", "wikipedia", "youtube", or "custom".
+    # "kagi", "qwant", "yandex", or "custom".
     # See actions.SEARCH_ENGINES for the full table.
     "search_engine": "google",
     # Used when search_engine == "custom". Must contain '{q}' which gets
@@ -292,19 +294,33 @@ class Settings:
                     print(f"[settings] {self.path} is not a JSON object, ignoring")
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"[settings] failed to read {self.path}: {exc}")
+                self._keep_backup()
+
+    def _keep_backup(self) -> None:
+        """Park an unreadable file next to itself: the next save() would
+        otherwise replace the user's hand-edited (and merely malformed)
+        settings with defaults."""
+        backup = self.path.with_suffix(self.path.suffix + ".bak")
+        try:
+            shutil.copy2(self.path, backup)
+            print(f"[settings] kept a copy of the unreadable file at {backup}")
+        except OSError:
+            pass
 
     def get(self, key: str, default: Any = None) -> Any:
         if key in self._data:
             return self._data[key]
         if key in DEFAULTS:
-            return DEFAULTS[key]
+            # Lists/dicts are copied so a caller mutating the result can't
+            # change the defaults for everyone else.
+            return copy.deepcopy(DEFAULTS[key])
         return default
 
     def set(self, key: str, value: Any) -> None:
         self._data[key] = value
 
     def save(self) -> None:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         merged = {**DEFAULTS, **self._data}
         # Atomic write: write to tmp, fsync, then rename. Avoids losing
         # all settings if the process dies (OOM, power) mid-write.
@@ -329,10 +345,15 @@ class Settings:
 # Module-level singleton for convenience
 _singleton: Settings | None = None
 
+# `--doctor` and other read-only callers switch this off so merely looking at
+# a setting never creates ~/.config/vinopop/settings.json.
+write_defaults = True
+
 
 def get_settings() -> Settings:
     global _singleton
     if _singleton is None:
         _singleton = Settings()
-        _singleton.ensure_written()
+        if write_defaults:
+            _singleton.ensure_written()
     return _singleton

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import random as _random
+import re
 import shlex
 import shutil
 import subprocess
@@ -32,6 +33,13 @@ from pathlib import Path
 from classifier import ContentType
 from plugin_base import Plugin
 from xdg_paths import CONFIG_DIR
+
+
+def notify(title: str, body: str, icon: str = "vinopop", timeout_ms: int = 3000) -> None:
+    import actions
+
+    actions.notify(title, body, icon, timeout_ms)
+
 
 RECIPES_DIR = CONFIG_DIR / "recipes"
 
@@ -156,15 +164,23 @@ def _render(template: str, text: str) -> str:
         # falls back to the input if not, mirroring the json helpers.
         "text_b64_decode": _safe_b64_decode(text),
     }
+    # The selection is untrusted. Render the template with opaque markers in
+    # place of the values, expand snippet-style placeholders (date, clipboard,
+    # {shell:...}) over the TEMPLATE only, then drop the values in. Expanding
+    # after substitution would run `{shell:...}` found in the selected text and
+    # mangle selections that merely contain `{date}`.
+    marked = {key: f"\x00{key}\x00" for key in safe}
     try:
-        first = template.format_map(_DefaultMissing(safe))
+        first = template.format_map(_DefaultMissing(marked))
     except Exception as exc:  # noqa: BLE001
         print(f"[recipe] template render failed: {exc}")
         return template
-    # Second pass: snippet-style dynamic placeholders (date, name,
-    # clipboard, etc.). Adds the snippet engine's vocabulary to recipes
-    # without duplicating the code.
-    return _apply_snippet_placeholders(first)
+    expanded = _apply_snippet_placeholders(first)
+    # One pass, so a value that looks like a marker is never expanded again.
+    return _MARKER_RE.sub(lambda m: safe.get(m.group(1), m.group(0)), expanded)
+
+
+_MARKER_RE = re.compile(r"\x00(\w+)\x00")
 
 
 class _DefaultMissing(dict):
@@ -367,20 +383,9 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     # Put text on clipboard, then send Ctrl+V to whichever
                     # window currently holds focus. Same pattern the
                     # editing_actions plugin uses.
-                    subprocess.run(
-                        ["xclip", "-selection", "clipboard"],
-                        input=current.encode("utf-8"),
-                        check=False,
-                        timeout=2.0,
-                    )
-                    import time as _t
+                    import actions
 
-                    _t.sleep(0.05)
-                    if shutil.which("xdotool"):
-                        subprocess.run(
-                            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-                            check=False,
-                        )
+                    actions.replace_selection(current)
                 elif stype == "notify":
                     subprocess.run(
                         [
@@ -412,25 +417,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                 return
             # If we fell off the loop with only transforms, push the
             # final value onto the clipboard as a sensible default.
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=current.encode("utf-8"),
-                check=False,
-                timeout=2.0,
-            )
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "2500",
-                    "-i",
-                    icon,
-                    title or "Chain",
-                    current[:200],
-                ],
-                check=False,
-            )
+            from platform_backend import get_backend
+
+            get_backend().set_clipboard(current)
+            notify(title or "Chain", current[:200], icon, 2500)
 
         return handler
 
@@ -450,6 +440,8 @@ def _content_types(recipe: dict) -> tuple:
 
 def validate(recipe: dict) -> list[str]:
     """Return a list of human-readable validation errors (empty = OK)."""
+    if not isinstance(recipe, dict):
+        return ["recipe must be a JSON object"]
     errors = []
     name = (recipe.get("name") or "").strip()
     if not name:
@@ -457,6 +449,8 @@ def validate(recipe: dict) -> list[str]:
     elif not all(c.isalnum() or c in "-_" for c in name):
         errors.append("'name' must be alphanumeric / '-' / '_'")
     action = recipe.get("action") or {}
+    if not isinstance(action, dict):
+        return [*errors, "'action' must be an object"]
     atype = action.get("type")
     if atype not in VALID_ACTION_TYPES:
         errors.append(f"action.type must be one of {VALID_ACTION_TYPES}")
@@ -489,6 +483,15 @@ def validate(recipe: dict) -> list[str]:
     else:
         if not action.get("template", ""):
             errors.append("action.template is required")
+    # An unrecognised name used to be dropped, and an all-unrecognised list
+    # then meant "every content type": a typo made the button universal.
+    names = recipe.get("content_types") or []
+    if not isinstance(names, list):
+        errors.append("'content_types' must be a list")
+    else:
+        unknown = [n for n in names if n not in _CTYPE_BY_NAME]
+        if unknown:
+            errors.append(f"unknown content_types {unknown}; use {sorted(_CTYPE_BY_NAME)}")
     return errors
 
 
@@ -521,7 +524,6 @@ def _seed_default_recipes() -> None:
     if not repo_dir.is_dir():
         _SEED_MARKER.touch()
         return
-    import shutil
 
     for filename in _DEFAULT_RECIPE_SEEDS:
         src = repo_dir / filename
@@ -597,7 +599,10 @@ def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
     """Persist a recipe as <name>.json (or to the supplied path). Atomic write."""
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
     if target_path is None:
-        target_path = RECIPES_DIR / f"{recipe['name']}.json"
+        name = str(recipe.get("name") or "")
+        if not name or not all(c.isalnum() or c in "-_" for c in name):
+            raise ValueError(f"invalid recipe name {name!r}")
+        target_path = RECIPES_DIR / f"{name}.json"
     tmp = target_path.with_suffix(target_path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(recipe, f, indent=2, ensure_ascii=False)
