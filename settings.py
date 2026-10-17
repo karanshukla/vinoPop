@@ -101,6 +101,11 @@ DEFAULTS: dict[str, Any] = {
     # Capture image content too (not just text). PNG copies from
     # screenshot tools or browser drag-out land here as well.
     "clipboard_history_images": True,
+    # Copies bigger than this aren't kept in history (a 20 MB log would
+    # otherwise be rewritten to disk on every later copy). Text in KB,
+    # images in MB.
+    "clipboard_history_max_text_kb": 1024,
+    "clipboard_history_max_image_mb": 20,
     # Fallback poll interval when the XFixes selection-event path
     # isn't available. Most modern X servers do support XFixes so
     # this rarely fires.
