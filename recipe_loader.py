@@ -70,7 +70,8 @@ def _mock_case(text: str) -> str:
     format. Seeded with the text itself so the same input always gives
     the same result (so previews and clipboard contents are stable;
     re-clicking won't produce a different jumble each time)."""
-    rng = _random.Random(text)
+    # Text styling, not security, so a seeded PRNG is what we want.
+    rng = _random.Random(text)  # nosec B311
     return "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in text)
 
 

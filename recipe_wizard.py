@@ -40,7 +40,7 @@ _ACTIONS = [
         # at the end - instantly shows where the selection will land.
         detail_placeholder="https://www.google.com/search?q={text_url}",
         insert_label="Insert the selected text here",
-        insert_token="{text_url}",  # URL-safe encoded
+        insert_text="{text_url}",  # URL-safe encoded
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Opens this address in your browser:",
         examples=[
@@ -64,7 +64,7 @@ _ACTIONS = [
         # user can see how to use it.
         detail_placeholder="notify-send 'You selected:' {text_shell}",
         insert_label="Insert the selected text here",
-        insert_token="{text_shell}",  # shell-quoted
+        insert_text="{text_shell}",  # shell-quoted
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Runs this command in the background:",
         warning="Commands can change or delete files. Test with something harmless first.",
@@ -90,7 +90,7 @@ _ACTIONS = [
         # Show the {text} token inline so the placement is obvious.
         detail_placeholder="Selected: {text}",
         insert_label="Insert the selected text",
-        insert_token="{text}",
+        insert_text="{text}",
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Shows this notification:",
         examples=[
@@ -113,7 +113,7 @@ _ACTIONS = [
         # esoteric.
         detail_placeholder="=={text}==",
         insert_label="Insert the selected text",
-        insert_token="{text}",
+        insert_text="{text}",
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Copies this to your clipboard:",
         examples=[
@@ -834,7 +834,7 @@ class RecipeWizard:
                 )
                 + " at the cursor."
             )
-            btn.connect("clicked", self._on_insert, spec["insert_token"])
+            btn.connect("clicked", self._on_insert, spec["insert_text"])
             inserter_row.append(btn)
         self._detail_container.append(inserter_row)
 
