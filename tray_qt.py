@@ -32,7 +32,7 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 
 def _tray_icon_style() -> str:
-    """User's chosen tray-icon style: 'color' (coloured badge, default),
+    """User's chosen tray-icon style: 'color' (panel-recoloured glyph, default),
     'light' (light monochrome - for dark panels), or 'dark' (dark
     monochrome - for light panels)."""
     try:
@@ -104,11 +104,10 @@ class TrayQt:
     def _load_icon(self) -> QIcon:
         """Tray icon per the user's `tray_icon_style` setting.
 
-        Auto-recolouring isn't reliable on KDE (plasmashell won't recolour a
-        custom symbolic icon - verified it stays solid black; and the app's
-        colour scheme can differ from the panel theme, e.g. light Breeze
-        under dark WhiteSur-alt), so the user picks:
-          color -> the coloured brand badge; legible on any panel (default)
+        Plasma only recolours parts marked ColorScheme-Text, and only when
+        it loads the icon by name; where that fails the user picks a fixed
+        mono colour:
+          color -> symbolic glyph Plasma recolours to the panel (default)
           light -> light monochrome glyph; for DARK panels
           dark  -> dark monochrome glyph; for LIGHT panels
         """
@@ -119,7 +118,12 @@ class TrayQt:
             if ic is not None and not ic.isNull():
                 return ic
             # fall through to the coloured badge if rendering failed
-        for name in ("vinopop", "vinopop-tray-symbolic"):
+        # By theme name, so the SNI carries an IconName and Plasma recolours
+        # the ColorScheme-Text parts to the panel, like the other vino trays.
+        ic = QIcon.fromTheme("vinopop-tray-symbolic")
+        if not ic.isNull():
+            return ic
+        for name in ("vinopop-tray-symbolic", "vinopop"):
             p = Path(ICON_DIR) / f"{name}.svg"
             if p.is_file():
                 ic = QIcon(str(p))

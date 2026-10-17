@@ -789,7 +789,7 @@ class SettingsDialog:
         _rebuild_icon_preview(_cur_style)
         group.add(icon_preview)
 
-        # ----- Tray icon: coloured badge vs mono glyph for light/dark panels -----
+        # ----- Tray icon: panel-recoloured glyph vs fixed light/dark mono -----
         _cur_tray = self._settings.get("tray_icon_style") or "color"
         if _cur_tray not in ("color", "light", "dark"):
             _cur_tray = "color"
@@ -801,11 +801,10 @@ class SettingsDialog:
 
         tray_row = self._combo_row(
             "Tray icon",
-            "The colour badge is visible on any panel. The mono styles let you "
-            "match your panel manually (KDE won't recolour it automatically): "
-            "Light for a dark panel, Dark for a light panel.",
+            "Auto follows your panel colour. If it doesn't on your desktop, "
+            "pick Light for a dark panel or Dark for a light panel.",
             [
-                ("color", "Colour (any panel)"),
+                ("color", "Auto (follows panel)"),
                 ("light", "Light mono (dark panels)"),
                 ("dark", "Dark mono (light panels)"),
             ],

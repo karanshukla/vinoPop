@@ -206,7 +206,7 @@ DEFAULTS: dict[str, Any] = {
     # System-tray icon appearance. Auto-recolouring isn't reliable on KDE
     # (plasmashell won't recolour a custom symbolic icon, and the app's own
     # colour scheme can differ from the panel theme), so the user picks:
-    #   "color" -> the coloured brand badge; visible on any panel (default)
+    #   "color" -> symbolic glyph recoloured to the panel (default)
     #   "light" -> light monochrome glyph; for DARK panels
     #   "dark"  -> dark monochrome glyph; for LIGHT panels
     "tray_icon_style": "color",
