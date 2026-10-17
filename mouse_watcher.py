@@ -79,14 +79,30 @@ class DoubleClickWatcher:
         )
         self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, timeout: float = 1.0) -> None:
+        """Stop recording and wait (briefly) for the thread to exit.
+
+        record_enable_context blocks its connection inside the RECORD reply
+        loop, so the disable request has to go out on the OTHER one
+        (_local_display) - which is why enable runs on _record_display."""
         self._stop.set()
-        try:
-            if self._local_display is not None and self._ctx is not None:
-                self._local_display.record_disable_context(self._ctx)
-                self._local_display.flush()
-        except Exception:
-            pass
+        thread = self._thread
+        deadline = time.monotonic() + timeout
+        while True:
+            # Re-sent until the thread exits: a disable that lands just
+            # before the thread's enable would otherwise be lost.
+            local, ctx = self._local_display, self._ctx
+            try:
+                if local is not None and ctx is not None:
+                    local.record_disable_context(ctx)
+                    local.flush()
+            except Exception:
+                pass
+            if thread is None or thread is threading.current_thread():
+                return
+            thread.join(timeout=0.2)
+            if not thread.is_alive() or time.monotonic() >= deadline:
+                return
 
     def _run(self) -> None:
         try:
@@ -123,8 +139,13 @@ class DoubleClickWatcher:
                 }
             ],
         )
+        # Make sure the server has the context before the other connection
+        # enables it (and before stop() may disable it).
+        self._local_display.sync()
 
         def handler(reply):
+            if self._stop.is_set():
+                return
             if reply.category != record.FromServer:
                 return
             if reply.client_swapped:
@@ -149,15 +170,26 @@ class DoubleClickWatcher:
                     self._on_left_click(event.root_x, event.root_y)
 
         try:
-            self._local_display.record_enable_context(self._ctx, handler)
+            # stop() may have run before the context existed.
+            if not self._stop.is_set():
+                # Blocks until stop() disables the context from _local_display.
+                self._record_display.record_enable_context(self._ctx, handler)
         except Exception as exc:
             print(f"[dblclick] record_enable_context exited: {exc}")
         finally:
             try:
                 self._local_display.record_free_context(self._ctx)
+                self._local_display.flush()
             except Exception:
                 pass
             self._ctx = None
+            for dpy in (self._record_display, self._local_display):
+                try:
+                    dpy.close()
+                except Exception:
+                    pass
+            self._record_display = None
+            self._local_display = None
 
     def _on_left_click(self, x: int, y: int) -> None:
         """Handle a Ctrl+Left-click. We see only the Ctrl-modified

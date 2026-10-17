@@ -9,10 +9,11 @@ Two-layer detection:
      has both editable and read-only areas (Claude desktop, Slack,
      Discord, web browsers). Time-bounded so it can't freeze the
      popup path. Returns three states: True / False / None (no answer).
-  2. WM_CLASS blocklist - coarse but predictable. Catches pure-viewer
+  2. Window-class blocklist - coarse but predictable. Catches pure-viewer
      apps that don't respond to AT-SPI (Evince, image viewers, file
-     managers, media players). Reads via xprop because xdotool's
-     getwindowclassname is missing on several distro builds.
+     managers, media players). The class comes from the platform
+     backend's active_window_haystacks(): xprop on X11, KWin on KDE
+     Wayland.
 
 Strategy: trust AT-SPI when it answers. Otherwise consult the blocklist.
 Default to True (editable) when neither produces a signal - better to
@@ -22,10 +23,11 @@ show a button that does nothing than to hide one the user wanted.
 from __future__ import annotations
 
 import logging
-import shutil
-import subprocess
 import threading
 import time as _time
+from collections.abc import Callable
+
+from platform_backend import get_backend
 
 _log = logging.getLogger("vinopop")
 
@@ -509,50 +511,36 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
     return result[0]
 
 
-def _wm_class_lower() -> str:
-    """Return the focused window's WM_CLASS in lower-case, or '' on failure.
+def _window_class(haystacks: list[str]) -> str:
+    """The focused window's class, lower-cased, from the backend's
+    active-window haystacks, or '' when unknown.
 
-    Reads via xprop, NOT `xdotool getwindowclassname` - the latter doesn't
-    exist on all xdotool builds (older Debian/Mint ship a version that
-    refuses the command, returning empty silently and breaking every
-    'is the focused widget editable?' check). xprop is part of x11-utils
-    and present on every X11 desktop we care about.
+    Only the class is matched, never the title: needles like "eog" or "feh"
+    would hit titles such as "Geography notes". X11 returns [title, xprop
+    WM_CLASS line] (`wm_class(string) = "instance", "class"`, so either field
+    can match); KDE Wayland returns [resourceClass, caption] via KWin.
     """
-    if not shutil.which("xdotool") or not shutil.which("xprop"):
-        return ""
-    try:
-        wid = subprocess.run(
-            ["xdotool", "getactivewindow"],
-            capture_output=True,
-            text=True,
-            timeout=0.3,
-        ).stdout.strip()
-        if not wid:
-            return ""
-        out = subprocess.run(
-            ["xprop", "-id", wid, "WM_CLASS"],
-            capture_output=True,
-            text=True,
-            timeout=0.3,
-        ).stdout.strip()
-        # xprop format: WM_CLASS(STRING) = "instance", "Class"
-        # Lower-case everything and let the blocklist substring-match
-        # either field - apps with different instance vs class names
-        # (Firefox: "Navigator", "firefox") fail with class-only checks.
-        return out.lower()
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    for h in haystacks:
+        if h.startswith("wm_class"):
+            return h
+    if get_backend().name == "x11":
+        return ""  # xprop gave no WM_CLASS; the remaining entry is the title
+    return haystacks[0] if haystacks else ""
 
 
-def is_focus_editable(extra_readonly_classes: tuple[str, ...] = ()) -> bool:
+def is_focus_editable(
+    extra_readonly_classes: tuple[str, ...] = (),
+    haystacks: Callable[[], list[str]] | None = None,
+) -> bool:
     """True if the focused widget accepts edits.
 
     Resolution order, most-precise first:
       1. AT-SPI focus-event cache (async listener) - works for Electron
          apps where the tree-walk fails. Recent events authoritative.
       2. AT-SPI tree walk (synchronous probe) - works for GTK/Qt/Firefox.
-      3. WM_CLASS blocklist - coarse but predictable, catches pure-viewer
-         apps that don't expose accessibility at all.
+      3. Window-class blocklist - coarse but predictable, catches
+         pure-viewer apps that don't expose accessibility at all. The class
+         comes from the platform backend (xprop on X11, KWin on KDE Wayland).
       4. Permissive default (True) - better to show a button that does
          nothing than to hide one the user wanted.
 
@@ -570,7 +558,13 @@ def is_focus_editable(extra_readonly_classes: tuple[str, ...] = ()) -> bool:
         _log.info("[editable] AT-SPI tree-walk authoritative: editable=%s", atspi_answer)
         return atspi_answer
 
-    wm = _wm_class_lower()
+    # Through the backend so it also works on native Wayland windows, which
+    # xdotool/xprop can't see. `haystacks` lets the caller share one lookup.
+    try:
+        wm = _window_class((haystacks or get_backend().active_window_haystacks)())
+    except Exception as exc:  # noqa: BLE001
+        _log.info("[editable] active-window lookup failed: %s", exc)
+        wm = ""
     blocklist = _READONLY_APP_CLASSES + tuple(c.lower() for c in extra_readonly_classes)
     if not wm:
         _log.info("[editable] no WM_CLASS + no AT-SPI signal - defaulting to True")

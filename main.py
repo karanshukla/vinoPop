@@ -189,6 +189,11 @@ def _acquire_single_instance_lock() -> None:
 
 log = logging.getLogger("vinopop")
 
+# One OCR capture at a time (see App._on_ocr_hotkey).
+_ocr_busy = threading.Lock()
+# One popup lookup at a time (see App._off_main).
+_popup_prep = threading.Lock()
+
 
 def _setup_logging(debug: bool) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,13 +223,27 @@ def _pointer_position() -> tuple[int, int]:
     return get_backend().pointer_position()
 
 
-def _active_window_blocked(patterns: list[str]) -> bool:
+def _once(fn: Callable[[], list[str]]) -> Callable[[], list[str]]:
+    """Memoise a no-argument lookup, so one popup costs one KWin round-trip."""
+    cache: list[list[str]] = []
+
+    def get() -> list[str]:
+        if not cache:
+            cache.append(fn())
+        return cache[0]
+
+    return get
+
+
+def _active_window_blocked(
+    patterns: list[str], haystacks_fn: Callable[[], list[str]] | None = None
+) -> bool:
     """Return True if the focused window's title or class matches any of the
     user's block patterns (case-insensitive substring). The backend supplies
-    the haystacks (X11: xdotool+xprop; Wayland: none yet)."""
+    the haystacks (X11: xdotool+xprop; KDE Wayland: KWin script)."""
     if not patterns:
         return False
-    haystacks = get_backend().active_window_haystacks()
+    haystacks = (haystacks_fn or get_backend().active_window_haystacks)()
     if not haystacks:
         return False
     for p in patterns:
@@ -271,7 +290,7 @@ class App:
         # Same mirror for the polling toggle - flipping it has to
         # rebuild both hotkey threads (poll vs grab is decided at
         # thread start, not per-event).
-        self._bound_use_polling: bool = False
+        self._bound_use_polling: bool = bool(self.settings.get("hotkey_use_polling", False))
         self._watcher_active = False
         self.tray = None
         self.restart_requested = False
@@ -317,8 +336,38 @@ class App:
             log.exception("model prefetch failed to start")
 
     # ---- popup invocation ----------------------------------------------------
+    #
+    # Everything that can block - xclip, the KWin pointer and active-window
+    # helpers (up to 3 s each), xdotool/xprop, AT-SPI - runs on a worker
+    # thread under _popup_prep. Only the final show goes back to the GTK
+    # thread, so a slow KWin round-trip can't freeze the UI.
+
+    def _off_main(self, fn: Callable[..., None], *args: object, drop_if_busy: bool = False) -> None:
+        """Run fn(*args) on a worker thread, one popup lookup at a time.
+        drop_if_busy (the hotkey) ignores the call while another lookup is
+        running, so autorepeat or a triple-press can't queue three popups."""
+        if drop_if_busy and not _popup_prep.acquire(blocking=False):
+            log.info("[popup] previous trigger still being handled - ignoring")
+            return
+
+        def _run() -> None:
+            if not drop_if_busy:
+                _popup_prep.acquire()
+            try:
+                fn(*args)
+            except Exception:
+                log.exception("[popup] preparing the popup failed")
+            finally:
+                _popup_prep.release()
+
+        threading.Thread(target=_run, daemon=True, name="vinopop-popup-prep").start()
 
     def _show_for_text(self, text: str, x: int, y: int) -> None:
+        """Show the selection popup for text. Safe from any thread."""
+        self._off_main(self._prepare_popup, text, x, y)
+
+    def _prepare_popup(self, text: str, x: int, y: int) -> None:
+        """Worker thread: filters and probes, then shows on the GTK thread."""
         # No min-length check here on purpose - that filter belongs to
         # the watcher (auto-popup on selection), not to this routine.
         # show_popup_now() routes empty text into the no-selection
@@ -332,11 +381,14 @@ class App:
         if self.ignore_ws and not text.strip():
             log.info("[show-for] suppressed -- whitespace-only")
             return
+        # One active-window lookup shared by the blocklist and the
+        # read-only check (on KDE each one is a KWin round-trip).
+        haystacks = _once(get_backend().active_window_haystacks)
         # Skip when the active app/site is on the user's blocklist.
         # Checked here (just before the popup would appear) so plugins
         # and the watcher don't have to know about it.
         patterns = list(self.settings.get("blocklist_patterns") or [])
-        if _active_window_blocked(patterns):
+        if _active_window_blocked(patterns, haystacks):
             log.info("[blocked] suppressed popup -- active window matches blocklist")
             return
         ctype = classify(text)
@@ -347,7 +399,7 @@ class App:
         # accessibility-agnostic and we can pipe extra user blocklist
         # classes in from settings without circular imports.
         extra_ro = tuple(self.settings.get("readonly_app_classes") or [])
-        editable = is_focus_editable(extra_readonly_classes=extra_ro)
+        editable = is_focus_editable(extra_readonly_classes=extra_ro, haystacks=haystacks)
         # Try to anchor the popup to the selected-text rectangle (via
         # AT-SPI screen-coord extents) instead of the mouse pointer. Returns
         # None - and we fall back to (x, y) - whenever AT-SPI is off /
@@ -360,23 +412,31 @@ class App:
             except Exception as exc:  # noqa: BLE001
                 log.info("[anchor] selection-rect lookup failed: %s", exc)
                 rect = None
-        self.popup.show_for(text, x, y, ctype, editable=editable, rect=rect)
+
+        def _show() -> bool:
+            self.popup.show_for(text, x, y, ctype, editable=editable, rect=rect)
+            return False
+
+        GLib.idle_add(_show)
 
     def show_popup_now(self) -> None:
+        """Hotkey / tray entry point. Returns at once; the lookup runs on a
+        worker and presses that arrive meanwhile are dropped."""
+        self._off_main(self._gather_hotkey_popup, drop_if_busy=True)
+
+    def _gather_hotkey_popup(self) -> None:
         # Stamped so a "had to press the hotkey 3 times" report comes
         # with breadcrumbs in vinopop.log: did the trigger reach us at
         # all? did xclip return empty? did the popup get suppressed by
         # the min-length / blocklist filters?
-        import time as _t
-
-        t0 = _t.monotonic()
+        t0 = time.monotonic()
         source = self.settings.get("hotkey_source") or "primary"
         text = _read_selection(source)
         log.info(
             "[hotkey-fire] read %s: %d chars in %.0f ms",
             source,
             len(text),
-            (_t.monotonic() - t0) * 1000,
+            (time.monotonic() - t0) * 1000,
         )
         try:
             x, y = _pointer_position()
@@ -390,23 +450,27 @@ class App:
             # the single portal; the dedicated clipboard hotkey stays
             # available as a power-user shortcut.
             log.info("[hotkey-fire] no selection - showing paste menu")
-            self._show_no_selection_popup(x, y)
+            self._prepare_no_selection_popup(x, y)
             return
         log.info("[hotkey-fire] showing popup at (%d, %d) for %d-char selection", x, y, len(text))
-        self._show_for_text(text, x, y)
+        self._prepare_popup(text, x, y)
 
-    def _show_no_selection_popup(self, x: int, y: int) -> None:
+    def _prepare_no_selection_popup(self, x: int, y: int) -> None:
+        """Worker thread: blocklist check, then the edit menu on the GTK thread."""
+        if _active_window_blocked(list(self.settings.get("blocklist_patterns") or [])):
+            log.info("[blocked] suppressed no-selection popup -- active window blocked")
+            return
+        GLib.idle_add(self._show_no_selection_popup, x, y)
+
+    def _show_no_selection_popup(self, x: int, y: int) -> bool:
         """Build a PopClip-style edit menu for the no-selection case.
 
         Shown when the popup hotkey fires while you're sitting in an
         editable field with nothing selected. Mirrors PopClip's "click
         in text field" popup: paste, select-all, backspace, plus the
         clipboard picker as the dedicated entry point for snippets and
-        recent items.
+        recent items. GTK thread; returns False so idle_add runs it once.
         """
-        if _active_window_blocked(list(self.settings.get("blocklist_patterns") or [])):
-            log.info("[blocked] suppressed no-selection popup -- active window blocked")
-            return
 
         def _send_keys(combo: str) -> Callable[[], None]:
             def _fire() -> None:
@@ -457,7 +521,9 @@ class App:
                 (
                     "vinopop-clipboard-symbolic",
                     "Paste from history",
-                    self._on_clipboard_hotkey,
+                    # Popup callbacks run on a worker thread; the picker
+                    # and the fallback popup are GTK, so hop back first.
+                    lambda: GLib.idle_add(self._on_clipboard_hotkey),
                 )
             )
         items.append(
@@ -475,6 +541,7 @@ class App:
             )
         )
         self.popup.show_actions(items, x, y)
+        return False
 
     def _maybe_start_dblclick_watcher(self) -> None:
         """Honour the double_click_popup_enabled setting. Idempotent.
@@ -498,12 +565,15 @@ class App:
         the watcher dropped the call entirely, so by the time we're
         here we know it's a real "double-click in empty field" gesture.
         We only need to confirm the focused widget is editable."""
+        self._off_main(self._prepare_double_click_popup, x, y)
+
+    def _prepare_double_click_popup(self, x: int, y: int) -> None:
         try:
             if not is_focus_editable():
                 return
         except Exception:
             return
-        self._show_no_selection_popup(x, y)
+        self._prepare_no_selection_popup(x, y)
 
     # ---- watcher -------------------------------------------------------------
 
@@ -523,7 +593,7 @@ class App:
             if bool(self.settings.get("min_selection_length_enabled")) and len(text) < self.min_len:
                 log.info("[watcher] skipping short selection (%d < %d)", len(text), self.min_len)
                 return
-            GLib.idle_add(self._show_for_text, text, x, y)
+            self._show_for_text(text, x, y)
 
         self.watcher = get_backend().make_selection_watcher(
             on_selection,
@@ -580,7 +650,6 @@ class App:
         )
         self.hotkey.start()
         self._bound_hotkey = hotkey_str
-        self._bound_use_polling = use_polling
 
     def _start_ocr_hotkey(self) -> None:
         hotkey_str = (self.settings.get("ocr_hotkey") or "").strip()
@@ -605,15 +674,30 @@ class App:
         log.info("[ocr] hotkey '%s' bound (polling=%s)", hotkey_str, use_polling)
 
     def _on_ocr_hotkey(self) -> None:
-        from screen_ocr import run_ocr_to_clipboard
+        # One capture at a time: KWin passes key autorepeat through to
+        # KGlobalAccel and the first capture spends seconds importing the
+        # OCR stack, so a held chord used to stack three overlays.
+        if not _ocr_busy.acquire(blocking=False):
+            log.info("[ocr] capture already running - ignoring trigger")
+            return
+
+        def _capture() -> None:
+            try:
+                from screen_ocr import run_ocr_to_clipboard
+
+                run_ocr_to_clipboard()
+            except Exception:
+                log.exception("[ocr] capture failed")
+            finally:
+                _ocr_busy.release()
 
         # Capture runs on a worker thread - the daemon's main loop must
         # stay responsive while the user is dragging the region.
-        threading.Thread(
-            target=run_ocr_to_clipboard,
-            daemon=True,
-            name="ocr-capture",
-        ).start()
+        try:
+            threading.Thread(target=_capture, daemon=True, name="ocr-capture").start()
+        except Exception:
+            _ocr_busy.release()
+            raise
 
     def _start_clipboard_hotkey(self) -> None:
         if not bool(self.settings.get("clipboard_history_enabled", True)):
@@ -642,30 +726,83 @@ class App:
         """
         mod = sys.modules.get("vinopop_user_clipboard_history")
         if mod is None or not hasattr(mod, "open_picker"):
-            text = _read_selection("clipboard")
-            if text:
-                try:
-                    x, y = _pointer_position()
-                except Exception:
-                    x, y = 0, 0
-                self._show_for_text(text, x, y)
-            else:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "3000",
-                        "-i",
-                        "dialog-information",
-                        "vinoPop",
-                        "Install the Clipboard plugin to get the picker.",
-                    ],
-                    check=False,
-                )
+            self._off_main(self._clipboard_fallback)
             return
         target = mod._get_active_window()
         mod.open_picker(target)
+
+    def _clipboard_fallback(self) -> None:
+        """No Clipboard plugin: pop up the clipboard text instead (worker)."""
+        text = _read_selection("clipboard")
+        if not text:
+            _notify("vinoPop", "Install the Clipboard plugin to get the picker.")
+            return
+        try:
+            x, y = _pointer_position()
+        except Exception:
+            x, y = 0, 0
+        self._prepare_popup(text, x, y)
+
+    def _apply_hotkey_settings(self) -> None:
+        """Rebind whichever hotkeys changed since they were grabbed. Compares
+        against the _bound_* mirrors, not the settings singleton (settings_gui
+        has already mutated it by the time on_changed runs)."""
+        new_hotkey = (self.settings.get("hotkey") or "").strip()
+        new_clip = (self.settings.get("clipboard_hotkey") or "").strip()
+        new_polling = bool(self.settings.get("hotkey_use_polling", False))
+        # Polling is an X11-only grab mode; the Wayland backend ignores it, so a
+        # flip there must not tear down (and re-register) every shortcut.
+        polling_changed = get_backend().name == "x11" and new_polling != self._bound_use_polling
+        if polling_changed:
+            log.info(
+                "hotkey polling mode changed: %s → %s - rebuilding the hotkey threads",
+                self._bound_use_polling,
+                new_polling,
+            )
+        # Tracked on its own, not only when the main hotkey binds: with the main
+        # hotkey cleared it used to stay False, so every save rebound the rest.
+        self._bound_use_polling = new_polling
+        if new_hotkey != self._bound_hotkey or polling_changed:
+            log.info(
+                "hotkey: %r → %r (polling=%s) - rebinding",
+                self._bound_hotkey,
+                new_hotkey,
+                new_polling,
+            )
+            if self.hotkey is not None:
+                self.hotkey.stop()
+                self.hotkey = None
+            self._bound_hotkey = ""
+            if new_hotkey:
+                self._start_hotkey()
+        if new_clip != self._bound_clipboard_hotkey or polling_changed:
+            log.info(
+                "clipboard hotkey: %r → %r (polling=%s) - rebinding",
+                self._bound_clipboard_hotkey,
+                new_clip,
+                new_polling,
+            )
+            if self.clipboard_hotkey is not None:
+                self.clipboard_hotkey.stop()
+                self.clipboard_hotkey = None
+            self._bound_clipboard_hotkey = ""
+            if new_clip:
+                self._start_clipboard_hotkey()
+        # Rebind the OCR hotkey when it was edited or cleared, and bind it
+        # if it just became usable (the user installed the OCR dependencies
+        # via the Settings Install button), so neither needs a restart.
+        new_ocr = (self.settings.get("ocr_hotkey") or "").strip()
+        if (
+            new_ocr != self._bound_ocr_hotkey
+            or polling_changed
+            or (new_ocr and self.ocr_hotkey is None)
+        ):
+            if self.ocr_hotkey is not None:
+                self.ocr_hotkey.stop()
+                self.ocr_hotkey = None
+            self._bound_ocr_hotkey = ""
+            if new_ocr:
+                self._start_ocr_hotkey()
 
     # ---- tray + dialogs ------------------------------------------------------
 
@@ -703,8 +840,6 @@ class App:
                 # before reaching us, so a singleton-vs-singleton diff
                 # always reports "no change".
                 self.settings = get_settings()
-                new_hotkey = (self.settings.get("hotkey") or "").strip()
-                new_clip = (self.settings.get("clipboard_hotkey") or "").strip()
                 self.min_len = self.settings.get_int("min_selection_length")
                 self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
                 self.popup._initial_grace_ms = self.settings.get_int("auto_hide_initial_ms")
@@ -723,55 +858,7 @@ class App:
                 # a burst of saves (textarea editing, multi-toggle bulk
                 # changes) only triggers one reload after activity quiets.
                 self._schedule_plugin_reload()
-                new_polling = bool(self.settings.get("hotkey_use_polling", False))
-                polling_changed = new_polling != self._bound_use_polling
-                if polling_changed:
-                    log.info(
-                        "hotkey polling mode changed: %s → %s - rebuilding both hotkey threads",
-                        self._bound_use_polling,
-                        new_polling,
-                    )
-                if new_hotkey != self._bound_hotkey or polling_changed:
-                    log.info(
-                        "hotkey: %r → %r (polling=%s) - rebinding",
-                        self._bound_hotkey,
-                        new_hotkey,
-                        new_polling,
-                    )
-                    if self.hotkey is not None:
-                        self.hotkey.stop()
-                        self.hotkey = None
-                    self._bound_hotkey = ""
-                    if new_hotkey:
-                        self._start_hotkey()
-                if new_clip != self._bound_clipboard_hotkey or polling_changed:
-                    log.info(
-                        "clipboard hotkey: %r → %r (polling=%s) - rebinding",
-                        self._bound_clipboard_hotkey,
-                        new_clip,
-                        new_polling,
-                    )
-                    if self.clipboard_hotkey is not None:
-                        self.clipboard_hotkey.stop()
-                        self.clipboard_hotkey = None
-                    self._bound_clipboard_hotkey = ""
-                    if new_clip:
-                        self._start_clipboard_hotkey()
-                # Rebind the OCR hotkey when it was edited or cleared, and bind it
-                # if it just became usable (the user installed the OCR dependencies
-                # via the Settings Install button), so neither needs a restart.
-                new_ocr = (self.settings.get("ocr_hotkey") or "").strip()
-                if (
-                    new_ocr != self._bound_ocr_hotkey
-                    or polling_changed
-                    or (new_ocr and self.ocr_hotkey is None)
-                ):
-                    if self.ocr_hotkey is not None:
-                        self.ocr_hotkey.stop()
-                        self.ocr_hotkey = None
-                    self._bound_ocr_hotkey = ""
-                    if new_ocr:
-                        self._start_ocr_hotkey()
+                self._apply_hotkey_settings()
                 # Live-apply the double-click watcher toggle.
                 self._maybe_start_dblclick_watcher()
                 # The model download switch starts it now, not at next launch.
@@ -911,6 +998,20 @@ class App:
         self.quit()
 
 
+def _install_signal_handlers(app: App) -> None:
+    """Quit cleanly on Ctrl+C, `kill`/`pkill` (SIGTERM) and a closed terminal
+    or logout (SIGHUP). The shutdown path in main() unregisters the hotkeys;
+    skipping it left KGlobalAccel actions registered, still holding the chords.
+    GLib-level handlers fire reliably while the main loop sits in C."""
+
+    def _quit(*_args: object) -> bool:
+        app.quit()
+        return True  # GLib.SOURCE_CONTINUE: a second signal still quits
+
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, _quit)
+
+
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="vinopop",
@@ -972,8 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = App(enable_tray=not args.no_tray)
 
-    # GLib-level SIGINT handler: fires reliably while the main loop sits in C.
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *_: (app.quit(), True)[1])
+    _install_signal_handlers(app)
     log.info(
         "vinoPop %s running (tray=%s, hotkey=%s, watcher=%s)",
         __version__,
