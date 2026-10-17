@@ -1035,7 +1035,10 @@ def _fire_trigger_expansion(
     _bump_usage(snippet.id)
 
     def worker_x11():
-        if not shutil.which("xdotool"):
+        # Check every tool up front: bailing out after the BackSpaces below
+        # would leave the user with neither their trigger nor the expansion.
+        if not shutil.which("xdotool") or not shutil.which("xclip"):
+            print("[triggers] xdotool/xclip not found - cannot expand")
             return
         # Wait for the user to physically release the boundary key
         # (space/tab/enter) before we start synthesising keystrokes.
@@ -1102,8 +1105,8 @@ def _fire_trigger_expansion(
         )
 
     def worker_wayland():
-        if not shutil.which("ydotool"):
-            print("[triggers] ydotool not found - cannot expand on Wayland")
+        if not shutil.which("ydotool") or not shutil.which("wl-copy"):
+            print("[triggers] ydotool/wl-copy not found - cannot expand on Wayland")
             return
         global _kbd_suppress_until
         env = _ydotool_env()
@@ -1743,6 +1746,13 @@ def _read_primary_selection() -> str:
     """Read the current X11 PRIMARY selection (the highlighted text).
     Returns empty string if nothing is highlighted or xclip is missing."""
     try:
+        # Backend-aware: wl-paste on Wayland, where xclip can't see PRIMARY
+        from platform_backend import get_backend
+
+        return get_backend().read_selection("primary") or ""
+    except Exception:  # noqa: BLE001 - fall back to the X11 tool below
+        pass
+    try:
         out = subprocess.run(
             ["xclip", "-selection", "primary", "-o"],
             capture_output=True,
@@ -1781,7 +1791,7 @@ def _render_shell_token(cmd: str) -> str:
 # Sentinel for the cursor position. U+E000 is in the BMP private-use area
 # and will never appear in real clipboard text; safer than NUL which some
 # pipelines drop.
-_CURSOR_SENTINEL = "CURSOR"
+_CURSOR_SENTINEL = "\ue000CURSOR\ue000"
 
 
 _DATE_MATH_RE = re.compile(r"^([+-]\d+)([dwmy])(?::(.+))?$")

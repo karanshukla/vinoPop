@@ -404,18 +404,20 @@ def _shutdown_user_plugins() -> None:
     """Let the previous copy of each user plugin stop its background threads
     before a fresh copy of the file is executed: a plugin with a
     `shutdown()` function gets it called, so reloading doesn't stack watchers
-    on top of each other."""
+    on top of each other. The stale module objects are dropped too, so code
+    that looks a plugin up in sys.modules doesn't find one whose file has
+    since been removed (the fresh copies re-register themselves on load)."""
     for name, module in list(sys.modules.items()):
         if not name.startswith("vinopop_user_"):
             continue
         hook = getattr(module, "shutdown", None)
-        if not callable(hook):
-            continue
-        try:
-            hook()
-        except Exception:
-            print(f"[plugin_loader] shutdown of {name} failed:")
-            traceback.print_exc()
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                print(f"[plugin_loader] shutdown of {name} failed:")
+                traceback.print_exc()
+        sys.modules.pop(name, None)
 
 
 def load_all() -> None:

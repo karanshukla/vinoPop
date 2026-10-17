@@ -94,3 +94,6 @@ def test_plugin_loader_shuts_down_the_previous_copy_before_reloading(monkeypatch
 
     plugin_loader._shutdown_user_plugins()
     assert calls == ["good"]  # a failing hook doesn't stop the others; non-plugins are left alone
+    # stale copies are gone, so a removed plugin can't be found via sys.modules
+    assert not any(n.startswith("vinopop_user_") for n in sys.modules)
+    assert "somebody_else" in sys.modules
