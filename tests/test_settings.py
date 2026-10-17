@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 
 import settings
 from settings import DEFAULTS, Settings
@@ -20,6 +22,25 @@ def test_save_creates_the_files_own_directory(tmp_path):
     s.save()
     assert json.loads(path.read_text())["theme"] == "light"
     assert Settings(path).get("theme") == "light"
+
+
+def test_settings_file_is_private(tmp_path):
+    path = tmp_path / "vinopop" / "settings.json"
+    old = os.umask(0o022)
+    try:
+        Settings(path).save()
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+def test_an_old_world_readable_settings_file_is_made_private(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"theme": "light"}))
+    path.chmod(0o644)
+    assert Settings(path).get("theme") == "light"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_unknown_keys_survive_a_save(tmp_path):

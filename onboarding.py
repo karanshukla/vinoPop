@@ -3,7 +3,8 @@
 A multi-page first-run walkthrough with hand-drawn, choreographed Cairo
 animations. A friendly little guide ("Pip", the vinoPop blob) walks new users
 through: select text -> actions popup, how to summon it, how to add ready-made
-plugins, and how to build their own with the recipe builder. Fully skippable,
+plugins, how to build their own with the recipe builder, and (when OpenVINO is
+installed) whether to download the offline AI model now. Fully skippable,
 with a "don't show this again" checkbox that flips the `show_welcome_dialog`
 setting.
 
@@ -763,7 +764,76 @@ def _draw_recipe(cr, w, h, t):
     )
 
 
-# ── scene 5: you're all set ──────────────────────────────────────────────────
+# ── scene 5: offline AI model (only when there's one to download) ──────────
+def _draw_ai(cr, w, h, t):
+    sx, sy, sw, sh = _stage(cr, w, h)
+    T = 6.0
+    lt = t % T
+    # a download card: chip icon, model size, a bar that fills and resets
+    cw, ch = 300, 92
+    cx, cy = sx + sw / 2 - cw / 2 + 50, sy + 30
+    a = _eo(_seg(lt, 0.0, 0.4))
+    _shadow(cr, cx, cy, cw, ch, 14)
+    _rrect(cr, cx, cy, cw, ch, 14)
+    cr.set_source_rgba(1, 1, 1, a)
+    cr.fill_preserve()
+    cr.set_source_rgba(*VIOLET, 0.30 * a)
+    cr.set_line_width(1.2)
+    cr.stroke()
+    _rrect(cr, cx + 16, cy + 18, 34, 34, 9)
+    cr.set_source_rgba(*VIOLET, a)
+    cr.fill()
+    # down arrow on the chip
+    cr.set_source_rgba(1, 1, 1, a)
+    cr.set_line_width(2.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(cx + 33, cy + 25)
+    cr.line_to(cx + 33, cy + 44)
+    cr.move_to(cx + 26, cy + 37)
+    cr.line_to(cx + 33, cy + 44)
+    cr.line_to(cx + 40, cy + 37)
+    cr.stroke()
+    _text(cr, cx + 64, cy + 32, "On-device AI model", 14, INK, a, bold=True)
+    size = getattr(_draw_ai, "size", "")
+    _text(cr, cx + 64, cy + 50, f"{size}, one time" if size else "one time", 12, MUTE, a)
+    fill = _eio(_seg(lt, 0.6, 4.6))
+    _bar(cr, cx + 16, cy + 66, cw - 32, 8, (0.88, 0.90, 0.95), a)
+    if fill > 0.01:
+        _bar(cr, cx + 16, cy + 66, (cw - 32) * fill, 8, GREEN if fill >= 1 else VIOLET, a)
+    _mascot(
+        cr,
+        sx + 70,
+        sy + sh - 52,
+        1.0,
+        look=(0.6, -0.3),
+        blink=_blink_at(t),
+        mouth="happy" if fill >= 1 else "smile",
+        bob=2 * math.sin(t * 2),
+    )
+    _speech(
+        cr,
+        sx + 40,
+        sy + sh - 118,
+        "Stays on your machine",
+        a=_eo(_seg(lt, 4.6, 5.0)) * (1 - _seg(lt, T - 0.3, T)),
+    )
+
+
+def _model_to_offer():
+    """The LLM to offer on the download page, or None when there's nothing
+    to ask: OpenVINO isn't installed, or the model is already on disk."""
+    try:
+        from vino_ai import available, models
+
+        if not available()[0]:
+            return None
+        model = models.llm_model()
+        return None if models.is_downloaded(model) else model
+    except Exception:
+        return None
+
+
+# ── scene 6: you're all set ──────────────────────────────────────────────────
 def _draw_done(cr, w, h, t):
     sx, sy, sw, sh = _stage(cr, w, h)
     cx, cy = sx + sw / 2, sy + sh / 2 + 6
@@ -821,6 +891,20 @@ def _build_pages(settings):
 
     _draw_summon.keys = [p.strip().capitalize() for p in popup_key.split("+") if p.strip()]
     _draw_summon.clip_keys = [p.strip().capitalize() for p in clip_key.split("+") if p.strip()]
+    model = _model_to_offer()
+    ai_pages = []
+    if model is not None:
+        _draw_ai.size = model.size
+        ai_pages.append(
+            dict(
+                title="Offline AI, on your machine",
+                body="Summarize, rewrite, explain and translate run on this "
+                f"computer, from a one-time <b>{model.size}</b> download. Get it "
+                "now, or the first time you use an AI action.",
+                draw=_draw_ai,
+                ask_model=True,
+            )
+        )
     return [
         dict(
             title="Select text, get instant actions",
@@ -852,6 +936,7 @@ def _build_pages(settings):
             "command or open a URL. That's a real plugin.",
             draw=_draw_recipe,
         ),
+        *ai_pages,
         dict(
             title="You're all set",
             body="Everything lives in the tray icon in your panel: Settings, "
@@ -890,10 +975,11 @@ def _install_css() -> None:
 
 
 class OnboardingWindow(Adw.Window):
-    def __init__(self, settings, on_open_plugins=None):
+    def __init__(self, settings, on_open_plugins=None, on_download_model=None):
         super().__init__(title="Welcome to vinoPop")
         self._settings = settings
         self._on_open_plugins = on_open_plugins
+        self._on_download_model = on_download_model
         self._pages = _build_pages(settings)
         self._index = 0
         self._t0 = GLib.get_monotonic_time()
@@ -941,6 +1027,8 @@ class OnboardingWindow(Adw.Window):
             body.set_wrap(True)
             body.set_max_width_chars(54)
             box.append(body)
+            if pg.get("ask_model"):
+                box.append(self._model_choice())
             self._carousel.append(box)
         self._carousel.connect("page-changed", self._on_page_changed)
         root.append(self._carousel)
@@ -994,6 +1082,51 @@ class OnboardingWindow(Adw.Window):
         # Frame-clock driven animation (replaces the old 33 ms timeout)
         self._timer = self._area.add_tick_callback(self._tick)
         self._update_controls()
+
+    def _model_choice(self) -> Gtk.Widget:
+        """Download now / Later for the AI model page. Moving on without
+        answering leaves the setting off, same as Later."""
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        wrap.set_margin_top(4)
+        buttons = Gtk.Box(spacing=10)
+        buttons.set_halign(Gtk.Align.CENTER)
+        status = Gtk.Label(xalign=0.5)
+        status.set_wrap(True)
+        status.add_css_class("dim-label")
+        status.set_visible(False)
+        now = Gtk.Button(label="Download now")
+        now.add_css_class("suggested-action")
+        now.add_css_class("pill")
+        now.connect("clicked", lambda _b: self._answer_model(True, buttons, status))
+        later = Gtk.Button(label="Later")
+        later.add_css_class("pill")
+        later.connect("clicked", lambda _b: self._answer_model(False, buttons, status))
+        buttons.append(now)
+        buttons.append(later)
+        wrap.append(buttons)
+        wrap.append(status)
+        return wrap
+
+    def _answer_model(self, download: bool, buttons: Gtk.Widget, status: Gtk.Label) -> None:
+        try:
+            self._settings.set("ai_prefetch_model", download)
+            self._settings.set("ai_prefetch_asked", True)
+            self._settings.save()
+        except Exception:
+            pass
+        buttons.set_visible(False)
+        status.set_label(
+            "Downloading in the background. You'll get a notification when it's ready."
+            if download
+            else "OK. It downloads the first time you use an AI action. "
+            "You can change this in Settings → Advanced."
+        )
+        status.set_visible(True)
+        if download and self._on_download_model:
+            try:
+                self._on_download_model()
+            except Exception:
+                pass
 
     def _on_draw(self, _area, cr, w, h):
         t = (GLib.get_monotonic_time() - self._t0) / 1_000_000.0
@@ -1068,13 +1201,15 @@ class OnboardingWindow(Adw.Window):
             self._timer = None
 
 
-def show_onboarding(settings, on_open_plugins=None, parent=None) -> bool:
+def show_onboarding(settings, on_open_plugins=None, parent=None, on_download_model=None) -> bool:
     try:
         if not bool(settings.get("show_welcome_dialog")):
             return False
     except Exception:
         pass
-    win = OnboardingWindow(settings, on_open_plugins=on_open_plugins)
+    win = OnboardingWindow(
+        settings, on_open_plugins=on_open_plugins, on_download_model=on_download_model
+    )
     if parent is not None:
         try:
             win.set_transient_for(parent)

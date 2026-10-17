@@ -97,6 +97,8 @@ show_missing = true
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", ".git", "build", "dist", "docs"]
 skips = [
+    "B110",  # try/except/pass: desktop probes (GTK, X11, KWin, AT-SPI) are best-effort
+    "B112",  # try/except/continue: same, while walking AT-SPI trees
     "B404",  # import subprocess: launching desktop tools is the app's job
     "B603",  # subprocess without shell
     "B606",  # os.exec* without shell: the Settings restart re-execs vinoPop itself

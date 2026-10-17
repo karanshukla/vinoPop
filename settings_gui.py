@@ -417,6 +417,7 @@ _SETTING_ICONS = {
     "Don't show in these apps or pages": "security-medium-symbolic",
     "Search engine": "edit-find-symbolic",
     "Custom search URL ({q} = the selection)": "insert-link-symbolic",
+    "Share anonymous OpenVINO usage stats with Intel": "network-transmit-symbolic",
     "Trigger hotkey on first press": "media-playback-start-symbolic",
     "Reset settings to defaults": "view-refresh-symbolic",
     "Keep terminal open after running": "utilities-terminal-symbolic",
@@ -577,7 +578,7 @@ class SettingsDialog:
                 "advanced",
                 "Advanced",
                 "emblem-system-symbolic",
-                [self._build_advanced_group],
+                [self._build_ai_group, self._build_privacy_group, self._build_advanced_group],
             ),
             (
                 "debug",
@@ -1533,6 +1534,55 @@ class SettingsDialog:
         custom_row.connect("changed", _on_custom_changed)
         return group
 
+    def _build_ai_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
+        group.set_title("Offline AI")
+        try:
+            from vino_ai import models
+
+            model = models.llm_model()
+            size = f"{model.label}, {model.size}"
+        except Exception:
+            size = "about 4 GB"
+        prefetch_row = self._switch_row(
+            "Download the AI model in the background",
+            f"One-time download ({size}) when vinoPop starts, so the first AI "
+            "action doesn't wait for it. Off: it downloads on the first AI action.",
+            self._settings.get("ai_prefetch_model", False),
+        )
+        prefetch_row.connect("notify::active", self._on_prefetch_switch)
+        group.add(prefetch_row)
+        return group
+
+    def _on_prefetch_switch(self, switch: Adw.SwitchRow, _param) -> None:
+        # Flipping it is an answer, so a stored True now counts as a yes
+        # (see vino_ai.models.prefetch_consented).
+        self._settings.set("ai_prefetch_asked", True)
+        self._save_key("ai_prefetch_model", bool(switch.get_active()))
+
+    def _build_privacy_group(self) -> Adw.PreferencesGroup:
+        from vino_ai import telemetry
+
+        group = Adw.PreferencesGroup()
+        group.set_title("Privacy")
+        # Shows the consent file, not just the setting: a file written by
+        # Intel's opt_in_out wins until the user flips this.
+        row = self._switch_row(
+            "Share anonymous OpenVINO usage stats with Intel",
+            "OpenVINO's own telemetry, sent to Intel through Google Analytics "
+            "when the AI actions load. Usage counts only, never your selected "
+            "text. Saved in ~/intel/openvino_telemetry.",
+            telemetry.enabled(),
+        )
+
+        def _on_toggled(sw: Adw.SwitchRow, _pspec) -> None:
+            if telemetry.set_enabled(bool(sw.get_active())) and self._on_changed:
+                self._on_changed()
+
+        row.connect("notify::active", _on_toggled)
+        group.add(row)
+        return group
+
     def _build_advanced_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Advanced")
@@ -1601,6 +1651,12 @@ class SettingsDialog:
     def _on_reset_response(self, _dialog: Adw.AlertDialog, response: str) -> None:
         if response != "reset":
             return
+        from settings import DEFAULTS
+        from vino_ai import telemetry
+
+        # A consent file vinoPop wrote goes back to the default (off) too;
+        # one from Intel's opt_in_out stays the user's call.
+        owned = bool(self._settings.get(telemetry.OWNED_SETTING, False))
         try:
             self._settings.reset_to_defaults()
         except Exception as exc:
@@ -1611,6 +1667,8 @@ class SettingsDialog:
         # Theme, button size and icon style are applied here rather than
         # by the daemon, same as when they're changed one at a time.
         _apply_theme(self._settings.get("theme") or "dark")
+        if owned:
+            telemetry.set_enabled(bool(DEFAULTS[telemetry.SETTING]))
         # Trigger the daemon-side reload so hotkeys / watchers / etc.
         # pick up the new state without restart, then rebuild this
         # window so its widgets reflect what's on disk.

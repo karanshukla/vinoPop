@@ -195,7 +195,8 @@ class WaylandSelectionWatcher:
         except OSError as exc:
             print(f"[wayland] could not start wl-paste --watch: {exc}")
             return
-        assert self._proc.stdout is not None
+        if self._proc.stdout is None:
+            return
         fd = self._proc.stdout.fileno()
         self._last_clipboard = self._backend.read_selection("clipboard")
         first = True

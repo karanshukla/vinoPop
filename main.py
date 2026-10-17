@@ -278,6 +278,9 @@ class App:
         # Single-instance dialogs: created lazily, reused on subsequent opens
         self._settings_dialog = None
         self._plugin_dialog = None
+        # Background model download, so a second start (Settings switch,
+        # onboarding) doesn't stack another thread on the same download.
+        self._prefetch_thread: threading.Thread | None = None
 
         if bool(self.settings.get("show_on_selection")):
             self._start_watcher()
@@ -292,19 +295,24 @@ class App:
         self._maybe_prefetch_model()
 
     def _maybe_prefetch_model(self) -> None:
+        """Start the background model download if the user said yes
+        (onboarding or Settings). Without that the first AI click downloads
+        it, so nobody gets a ~4 GB pull they didn't ask for."""
         if not self.settings.get("ai_prefetch_model"):
+            return
+        if self._prefetch_thread is not None and self._prefetch_thread.is_alive():
             return
         try:
             from vino_ai import available, models
 
-            if not available()[0]:
+            if not available()[0] or not models.prefetch_consented(self.settings):
                 return
 
             def _done(model, error):
                 body = f"{model.label} is ready." if error is None else f"Download failed: {error}"
                 _notify("vinoPop AI model", body)
 
-            models.prefetch(_done)
+            self._prefetch_thread = models.prefetch(_done)
         except Exception:
             log.exception("model prefetch failed to start")
 
@@ -766,6 +774,8 @@ class App:
                         self._start_ocr_hotkey()
                 # Live-apply the double-click watcher toggle.
                 self._maybe_start_dblclick_watcher()
+                # The model download switch starts it now, not at next launch.
+                self._maybe_prefetch_model()
                 log.info("settings reloaded")
 
             self._settings_dialog = SettingsDialog(
@@ -843,6 +853,7 @@ class App:
                 show_onboarding(
                     self.settings,
                     on_open_plugins=self.open_plugins,
+                    on_download_model=self._maybe_prefetch_model,
                 )
             except Exception:
                 log.exception("onboarding failed; falling back to welcome dialog")

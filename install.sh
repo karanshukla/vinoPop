@@ -88,6 +88,11 @@ if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
     fi
 fi
 
+# Opt out of OpenVINO's telemetry before anything imports it (no-op without
+# OpenVINO; the daemon does the same). Not Intel's `opt_in_out --opt_out`:
+# that sends an "opted out" event to Google Analytics.
+(cd "$REPO_DIR" && "$PYTHON" -c "from vino_ai import telemetry; telemetry.prepare()") 2>/dev/null || true
+
 # Write the autostart .desktop with the absolute path to main.py
 mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$PLUGIN_DIR"
 

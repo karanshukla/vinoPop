@@ -37,6 +37,10 @@ label.vinopop-ai-text {
     color: #f4f6fb;
     font-size: 13pt;
 }
+label.vinopop-ai-warning {
+    color: #f0b45a;
+    font-size: 9pt;
+}
 label.vinopop-ai-title {
     color: #8a92a8;
     font-size: 9pt;
@@ -122,6 +126,9 @@ class ResultBubble:
         self._x, self._y = x, y
         self._text = ""
         self._busy = True
+        # Set when the answer is incomplete (input cut or output capped):
+        # Replace would paste a partial text over the whole selection.
+        self._incomplete = False
         self._dismiss_id: int | None = None
         self._pointer_in_bubble = False
         self.keep_open = False  # set while a header dropdown is open
@@ -181,6 +188,13 @@ class ResultBubble:
         self._text_lbl.add_css_class("vinopop-ai-text")
         self._text_lbl.set_vexpand(True)
         bubble.append(self._text_lbl)
+
+        self._warn_lbl = Gtk.Label(xalign=0)
+        self._warn_lbl.set_wrap(True)
+        self._warn_lbl.set_max_width_chars(48)
+        self._warn_lbl.add_css_class("vinopop-ai-warning")
+        self._warn_lbl.set_visible(False)
+        bubble.append(self._warn_lbl)
 
         self._set_status("…")
 
@@ -248,10 +262,13 @@ class ResultBubble:
             self._text_lbl.set_text(self._text.lstrip())
         return False
 
-    def _finish(self, text: str | None, error: str | None) -> bool:
+    def _finish(self, text: str | None, error: str | None, warning: str | None = None) -> bool:
         if self._dead:
             return False
         self._busy = False
+        self._incomplete = bool(warning) and not error
+        self._warn_lbl.set_text(warning or "")
+        self._warn_lbl.set_visible(self._incomplete)
         if error:
             self._text = ""
             self._text_lbl.set_text(error)
@@ -266,15 +283,23 @@ class ResultBubble:
         ready = not self._busy and bool(self._text)
         self._copy_btn.set_sensitive(ready)
         if self._replace_btn is not None:
-            self._replace_btn.set_sensitive(ready)
+            self._replace_btn.set_sensitive(ready and not self._incomplete)
+            self._replace_btn.set_tooltip_text(
+                "The answer is incomplete, so it can't replace the selection; use Copy"
+                if self._incomplete
+                else None
+            )
 
     def restart(self) -> None:
         """Clear for a new run (e.g. the translate target changed). Feed the
-        new run through `for_run()`: the previous run can't be cancelled and
-        keeps streaming, and its late output must not land in this one."""
+        new run through `for_run()`: the previous run stops at its next token
+        (see _RunSink.cancelled), and output already queued must not land in
+        this one."""
         self._gen += 1
         self._text = ""
         self._busy = True
+        self._incomplete = False
+        self._warn_lbl.set_visible(False)
         if self._dismiss_id is not None:
             GLib.source_remove(self._dismiss_id)
             self._dismiss_id = None
@@ -287,8 +312,15 @@ class ResultBubble:
     def push_token(self, chunk: str) -> None:
         GLib.idle_add(self._append, chunk)
 
-    def push_done(self, text: str | None = None, error: str | None = None) -> None:
-        GLib.idle_add(self._finish, text, error)
+    def push_done(
+        self, text: str | None = None, error: str | None = None, warning: str | None = None
+    ) -> None:
+        GLib.idle_add(self._finish, text, error, warning)
+
+    def cancelled(self) -> bool:
+        """True once the bubble is closed: the run feeding it can stop.
+        Polled from the worker thread."""
+        return self._dead
 
     def for_run(self) -> _RunSink:
         """A feeder for the run starting now; once restart() is called it goes
@@ -343,8 +375,14 @@ class _RunSink:
     def push_token(self, chunk: str) -> None:
         GLib.idle_add(lambda: self._current() and self._bubble._append(chunk))
 
-    def push_done(self, text: str | None = None, error: str | None = None) -> None:
-        GLib.idle_add(lambda: self._current() and self._bubble._finish(text, error))
+    def push_done(
+        self, text: str | None = None, error: str | None = None, warning: str | None = None
+    ) -> None:
+        GLib.idle_add(lambda: self._current() and self._bubble._finish(text, error, warning))
+
+    def cancelled(self) -> bool:
+        """True once this run is superseded or its bubble is closed."""
+        return not self._current() or self._bubble._dead
 
 
 def replace_selection(text: str) -> None:
