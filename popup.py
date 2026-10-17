@@ -703,6 +703,13 @@ class PopupWindow:
         editable: bool = True,
         rect: tuple[int, int, int, int] | None = None,
     ) -> None:
+        if self.win.get_visible() and self._pointer_in_popup:
+            # The user is reaching for a button, so this isn't a selection
+            # they just made. On Wayland it's usually an app re-claiming
+            # PRIMARY on focus (a terminal with old text selected), and
+            # swapping the buttons now would run them on that text.
+            log.info("[popup] ignored a selection change while the pointer is on the popup")
+            return
         self._current_text = text
         self._anchor = (int(x), int(y))
         self._clear_buttons()
