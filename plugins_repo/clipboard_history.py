@@ -14,6 +14,8 @@ the global clipboard_hotkey (default Super+Shift+V).
 Settings (~/.config/vinopop/settings.json):
   "clipboard_history_size":   25
   "clipboard_history_images": true
+  "clipboard_history_max_text_kb": 1024    (bigger copies aren't kept)
+  "clipboard_history_max_image_mb": 20
   "clipboard_hotkey":         "super+shift+v"   (handled by main.py)
 """
 
@@ -171,6 +173,14 @@ def _poll_interval() -> float:
     return max(0.1, _cfg_number("clipboard_poll_interval", 0.5, float))
 
 
+def _max_text_bytes() -> int:
+    return max(1, _cfg_number("clipboard_history_max_text_kb", 1024, int)) * 1024
+
+
+def _max_image_bytes() -> int:
+    return max(1, _cfg_number("clipboard_history_max_image_mb", 20, int)) * 1024 * 1024
+
+
 # Kept for backwards compat with the startup log line. These constants
 # only reflect the value at import; treat them as informational, not
 # authoritative.
@@ -180,6 +190,7 @@ POLL_INTERVAL = _poll_interval()
 
 from xdg_paths import CACHE_DIR as _LP_CACHE
 from xdg_paths import CONFIG_DIR as _LP_CONFIG
+from xdg_paths import make_private, open_private, private_dir
 
 CACHE_DIR = _LP_CACHE / "clipboard"
 HISTORY_FILE = CACHE_DIR / "history.json"
@@ -221,11 +232,26 @@ class Entry:
             return self.name
         if self.kind == "image":
             return f"🖼  Image - {Path(self.image_path).name}"
-        s = self.text.replace("\n", "↵").replace("\t", "  ")
+        # Slice before replacing: the picker builds a row per entry, and a
+        # long copy shouldn't be walked in full for an 80-char label.
+        s = self.text[: max_len + 1].replace("\n", "↵").replace("\t", "  ")
         return s[:max_len] + "…" if len(s) > max_len else s
 
     def search_haystack(self) -> str:
-        return f"{self.name}\n{self.trigger}\n{self.text}\n{self.image_path}".lower()
+        # The image path is a home folder plus a hex id, so searching for
+        # "home", the username or "a1" would match every image.
+        body = "image" if self.kind == "image" else self.text
+        src = (self.name, self.trigger, body)
+        # Cached per entry because the picker filter calls this for every
+        # row on every keystroke. Keyed on the fields (not invalidated by
+        # setters) so renaming or editing a snippet can't leave it stale;
+        # the tuple compare is an identity check while they're unchanged.
+        cached = self.__dict__.get("_haystack")
+        if cached is not None and cached[0] == src:
+            return cached[1]
+        hay = "\n".join(src).lower()
+        self.__dict__["_haystack"] = (src, hay)
+        return hay
 
 
 _history: list[Entry] = []
@@ -240,9 +266,9 @@ _watcher_stop = threading.Event()
 
 
 def _atomic_write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(path.parent)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
+    with open_private(tmp) as f:
         json.dump(data, f, ensure_ascii=False)
         f.flush()
         try:
@@ -324,6 +350,33 @@ def _add_entry(entry: Entry) -> None:
                 except OSError:
                     pass
     _save_history()
+
+
+def _snippet_uses_image(image_path: str) -> bool:
+    """True if a snippet points at this image file. Pinning shares the file
+    rather than copying it, so history must not delete it from under one."""
+    with _snippets_lock:
+        return any(s.kind == "image" and s.image_path == image_path for s in _snippets)
+
+
+def _remove_history_entry(entry_id: str) -> bool:
+    """Delete one history entry (the picker's per-row Delete) and its image
+    file unless a snippet still uses it. Saves straight away: this is how
+    you get rid of something you shouldn't have copied. Returns False if
+    the entry was already gone."""
+    with _history_lock:
+        removed = [e for e in _history if e.id == entry_id]
+        if not removed:
+            return False
+        _history[:] = [e for e in _history if e.id != entry_id]
+    _save_history()
+    for e in removed:
+        if e.kind == "image" and e.image_path and not _snippet_uses_image(e.image_path):
+            try:
+                Path(e.image_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return True
 
 
 def _pin_entry(entry: Entry, name: str = "") -> None:
@@ -999,14 +1052,7 @@ def _trigger_blocked() -> bool:
     patterns = list(_cfg("trigger_blocklist_patterns", []) or [])
     if not patterns:
         return False
-    haystacks = _active_window_haystacks()
-    if not haystacks:
-        return False
-    for p in patterns:
-        p_lc = (p or "").strip().lower()
-        if p_lc and any(p_lc in h for h in haystacks):
-            return True
-    return False
+    return _matches_blocklist(patterns, _active_window_haystacks())
 
 
 def _fire_trigger_expansion(
@@ -1200,6 +1246,73 @@ def _read_clipboard_targets() -> list[str]:
         return []
 
 
+def _read_clipboard_target(target: str) -> bytes | None:
+    """Raw bytes of one clipboard target, or None if it can't be read."""
+    if _is_wayland():
+        args = ["wl-paste", "-n", "-t", target]
+    else:
+        args = ["xclip", "-selection", "clipboard", "-t", target, "-o"]
+    try:
+        out = subprocess.run(args, capture_output=True, timeout=0.5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+# Password managers mark their copies so clipboard managers leave them alone:
+# KeePassXC, KWallet and Plasma offer x-kde-passwordManagerHint with the value
+# "secret"; some apps use the macOS concealed type instead. Matched
+# case-insensitively because X11 atom names are echoed as the app wrote them.
+_PASSWORD_HINT_TARGET = "x-kde-passwordmanagerhint"  # nosec B105
+_CONCEALED_TARGETS = ("application/x-nspasteboard-concealed-type",)
+
+
+def _is_password_copy(targets: list[str]) -> bool:
+    lowered = {t.strip().lower(): t.strip() for t in targets}
+    if any(t in lowered for t in _CONCEALED_TARGETS):
+        return True
+    if _PASSWORD_HINT_TARGET not in lowered:
+        return False
+    # Only "secret" is defined, but skip too if the value can't be read:
+    # keeping a password by mistake is worse than missing one copy.
+    value = _read_clipboard_target(lowered[_PASSWORD_HINT_TARGET])
+    if not value:
+        return True
+    return value.decode("utf-8", errors="replace").strip().lower() == "secret"
+
+
+def _matches_blocklist(patterns: list[str], haystacks: list[str]) -> bool:
+    for p in patterns:
+        p_lc = (p or "").strip().lower()
+        if p_lc and any(p_lc in h for h in haystacks):
+            return True
+    return False
+
+
+def _capture_blocked() -> bool:
+    """True if the focused window (normally the app the copy came from)
+    matches the popup's blocklist_patterns. People list their password
+    manager and bank there; their copies shouldn't land in history either."""
+    patterns = list(_cfg("blocklist_patterns", []) or [])
+    if not patterns:
+        return False
+    try:
+        from platform_backend import get_backend
+
+        haystacks = get_backend().active_window_haystacks()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[clipboard] active-window check failed: {exc}")
+        return False
+    return _matches_blocklist(patterns, haystacks)
+
+
+def _skip_capture(targets: list[str]) -> bool:
+    """Checked once per new copy, after the dedup check, so polling doesn't
+    re-run the active-window query every interval. Silent on purpose: not
+    even the log should note that a password went by."""
+    return _is_password_copy(targets) or _capture_blocked()
+
+
 def _read_clipboard_text() -> str:
     if _is_wayland():
         # Prefer plain text; fall back to whatever wl-paste offers. -n so we
@@ -1267,8 +1380,9 @@ def _load_dedup_state() -> None:
 
 def _save_dedup_state(h: bytes) -> None:
     try:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        _DEDUP_STATE_FILE.write_bytes(h)
+        private_dir(CACHE_DIR)
+        with open_private(_DEDUP_STATE_FILE, "wb") as f:
+            f.write(h)
     except OSError:
         pass
 
@@ -1300,6 +1414,20 @@ def _sweep_orphan_images() -> None:
         print(f"[clipboard] swept {removed} orphan image(s) from cache")
 
 
+def _tighten_permissions() -> None:
+    """One-time fix-up for files older versions wrote with the default
+    umask (0644 files in 0755 folders): only the user should be able to
+    read what they copied."""
+    for d in (_LP_CACHE, CACHE_DIR, IMAGES_DIR, _LP_CONFIG):
+        make_private(d)
+    for f in (HISTORY_FILE, SNIPPETS_FILE, _DEDUP_STATE_FILE):
+        make_private(f)
+        make_private(f.with_suffix(f.suffix + ".unreadable"))
+    if IMAGES_DIR.is_dir():
+        for p in IMAGES_DIR.glob("*.png"):
+            make_private(p)
+
+
 def _capture_current_clipboard() -> None:
     if _watcher_stop.is_set():
         return  # this copy of the module was replaced by a reload
@@ -1319,11 +1447,18 @@ def _capture_current_clipboard() -> None:
                 if h != _state["last_image_hash"]:
                     _state["last_image_hash"] = h
                     _save_dedup_state(h)
-                    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+                    if _skip_capture(targets):
+                        return
+                    if len(data) > _max_image_bytes():
+                        print(f"[clipboard] not keeping a {len(data) // 1024} KB image (too big)")
+                        return
+                    private_dir(CACHE_DIR)
+                    private_dir(IMAGES_DIR)
                     eid = uuid.uuid4().hex[:12]
                     path = IMAGES_DIR / f"{eid}.png"
                     try:
-                        path.write_bytes(data)
+                        with open_private(path, "wb") as f:
+                            f.write(data)
                         _add_entry(
                             Entry(
                                 id=eid,
@@ -1338,6 +1473,14 @@ def _capture_current_clipboard() -> None:
             text = _read_clipboard_text()
             if text and text != _state["last_text"] and text.strip():
                 _state["last_text"] = text
+                if _skip_capture(targets):
+                    return
+                size = len(text.encode("utf-8", errors="replace"))
+                if size > _max_text_bytes():
+                    # Skipped rather than cut: pasting half a log back
+                    # would be worse than not having it in history.
+                    print(f"[clipboard] not keeping a {size // 1024} KB copy (too big)")
+                    return
                 _add_entry(
                     Entry(
                         id=uuid.uuid4().hex[:12],
@@ -1425,6 +1568,7 @@ def _start_watcher_once() -> None:
     global _watcher_thread
     if _watcher_thread is not None and _watcher_thread.is_alive():
         return
+    _tighten_permissions()
     history_ok = _load_list(HISTORY_FILE, _history)
     snippets_ok = _load_list(SNIPPETS_FILE, _snippets)
     _load_dedup_state()  # keep dedup hash across daemon restarts
@@ -1908,54 +2052,54 @@ def render_placeholders(
         nonlocal clipboard_value, cancelled
         if cancelled:
             return ""
-        token = m.group(1)
+        field = m.group(1)
         now = time.localtime()
-        if token == "date":
+        if field == "date":
             return time.strftime("%Y-%m-%d", now)
-        if token.startswith("date:"):
+        if field.startswith("date:"):
             # Three shapes:
             #   {date:%A}        - strftime now
             #   {date:+7d}       - now + 7d, default %Y-%m-%d
             #   {date:+7d:%A}    - now + 7d, formatted
             # Math units: d (day), w (week), m (≈30 days), y (≈365 days).
-            spec = token[5:]
+            spec = field[5:]
             try:
                 return _render_date_token(spec, now)
             except (ValueError, TypeError):
                 return m.group(0)
-        if token == "time":
+        if field == "time":
             return time.strftime("%H:%M", now)
-        if token == "datetime":
+        if field == "datetime":
             return time.strftime("%Y-%m-%d %H:%M", now)
-        if token == "weekday":
+        if field == "weekday":
             # %A is locale-aware: "Tirsdag" on nb_NO, "Tuesday" on en_US.
             return time.strftime("%A", now)
-        if token == "name":
+        if field == "name":
             return _full_user_name()
-        if token == "clipboard":
+        if field == "clipboard":
             if clipboard_value is None:
                 clipboard_value = _read_clipboard_text() or ""
             return clipboard_value
-        if token == "selection":
+        if field == "selection":
             # PRIMARY (the currently highlighted text). Captured fresh
             # at expansion time - whatever the user has selected when
             # the snippet fires gets pulled in. Enables transform-style
             # snippets: "Quote: {selection}", "TODO: {selection}".
             return _read_primary_selection()
-        if token == "cursor":
+        if field == "cursor":
             return _CURSOR_SENTINEL
-        if token.startswith("ask:"):
-            spec = token[4:]
+        if field.startswith("ask:"):
+            spec = field[4:]
             # Strip off |options to get just the label key used in the
             # answers dict.
             label = spec.split("|", 1)[0].strip() or "Value"
             if ask_answers is not None and label in ask_answers:
                 return ask_answers[label]
             return ""
-        if token.startswith("shell:"):
-            return _render_shell_token(token[6:])
-        if token.startswith("var:"):
-            return _resolve_var(token[4:])
+        if field.startswith("shell:"):
+            return _render_shell_token(field[6:])
+        if field.startswith("var:"):
+            return _resolve_var(field[4:])
         return m.group(0)
 
     rendered = _PLACEHOLDER_RE.sub(repl, text)
@@ -2236,7 +2380,7 @@ class _PickerDialog:
         # Hint
         hint = Gtk.Label(xalign=0, margin_top=6)
         hint.set_markup(
-            "<small>Enter to paste · Tab to switch tab · Ctrl+P pin · "
+            "<small>Enter to paste · Tab to switch tab · Ctrl+P pin · Del remove · "
             "Ctrl+R rename · Snippets support <tt>{date} {time} {datetime} "
             "{clipboard} {cursor} {ask:Label}</tt> · Esc to close</small>"
         )
@@ -2553,6 +2697,16 @@ class _PickerDialog:
             rename_btn.connect("clicked", self._on_rename_clicked, entry)
             hbox.append(rename_btn)
         else:
+            # No confirmation, unlike snippets: this is how you get rid of
+            # a password you copied by mistake, and the copy is still on
+            # the clipboard if you change your mind.
+            delete_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+            delete_btn.set_valign(Gtk.Align.CENTER)
+            delete_btn.add_css_class("flat")
+            delete_btn.set_tooltip_text("Remove from history (Delete)")
+            delete_btn.connect("clicked", self._on_delete_history_clicked, entry)
+            hbox.append(delete_btn)
+
             pin_btn = Gtk.Button.new_from_icon_name("non-starred-symbolic")
             pin_btn.set_valign(Gtk.Align.CENTER)
             pin_btn.add_css_class("flat")
@@ -2830,6 +2984,26 @@ class _PickerDialog:
             return
         _unpin_snippet(entry.id)
         self._populate_snippets()
+
+    def _on_delete_history_clicked(self, _btn, entry: Entry) -> None:
+        listbox = self.recent_listbox
+        if listbox is None:
+            return
+
+        def visible_rows():
+            return [r for r in self._rows(listbox) if r.get_selectable() and self._row_filter(r)]
+
+        # Remember the position so keyboard users land on the next entry.
+        index = next((i for i, r in enumerate(visible_rows()) if r.entry is entry), 0)
+        _remove_history_entry(entry.id)
+        self._populate_recent()
+        visible = visible_rows()
+        if visible:
+            row = visible[min(index, len(visible) - 1)]
+            listbox.select_row(row)
+            row.grab_focus()
+        elif self.search_entry is not None:
+            self.search_entry.grab_focus()
 
     def _on_rename_clicked(self, _btn, entry: Entry) -> None:
         result = self._ask_edit_snippet_meta(
@@ -3631,6 +3805,16 @@ class _PickerDialog:
         if state & Gdk.ModifierType.CONTROL_MASK and keyval == Gdk.KEY_p:
             self._action_on_selected("pin")
             return True
+        # Delete → remove the focused Recent row from history. Plain Delete
+        # only while a row has focus (in the search box it edits the text);
+        # Ctrl+Delete works from anywhere, like Ctrl+P.
+        if keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
+            ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+            on_recent = self.notebook is not None and self.notebook.get_current_page() == 0
+            if on_recent and (ctrl or self._focus_within(self.recent_listbox)):
+                self._action_on_selected("delete")
+                return True
+            return False
         # Ctrl+R → rename (if in Snippets)
         if state & Gdk.ModifierType.CONTROL_MASK and keyval == Gdk.KEY_r:
             self._action_on_selected("rename")
@@ -3674,6 +3858,8 @@ class _PickerDialog:
             return
         if action == "pin" and page == 0:
             self._on_pin_clicked(None, entry)
+        elif action == "delete" and page == 0:
+            self._on_delete_history_clicked(None, entry)
         elif action == "rename" and page == 1:
             self._on_rename_clicked(None, entry)
 

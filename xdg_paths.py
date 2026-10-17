@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import IO, Any
 
 APP = "vinopop"
 # The project's previous name; its folders are moved over on first run.
@@ -58,3 +59,47 @@ LOG_FILE = CACHE_DIR / "vinopop.log"
 # the hicolor theme folder GTK and the tray search for per-user icons.
 USER_ICONS_DIR = CONFIG_DIR / "icons"
 HICOLOR_APPS = DATA_HOME / "icons" / "hicolor" / "scalable" / "apps"
+
+
+# ---- private files --------------------------------------------------------
+# Clipboard history, snippets and settings can hold whatever the user copied,
+# so they're written 0600 in 0700 folders whatever the umask or the mode of
+# ~/.cache is (not every distro makes the home folder private).
+
+
+def private_dir(path: Path) -> Path:
+    """Create `path` if needed and make it 0700. Parents that don't exist
+    yet are created with the default mode, so callers tighten each of
+    vinoPop's own folders themselves."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    make_private(path)
+    return path
+
+
+def make_private(path: Path) -> None:
+    """chmod an existing file to 0600 or folder to 0700; a no-op when it's
+    already private or missing. Used to tighten files written by older
+    versions with the default umask."""
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    want = 0o700 if path.is_dir() else 0o600
+    if st.st_mode & 0o777 != want:
+        try:
+            os.chmod(path, want)
+        except OSError:
+            pass
+
+
+def open_private(path: Path, mode: str = "w") -> IO[Any]:
+    """open() for writing, but the file is created (or truncated) as 0600.
+    `mode` is "w" (UTF-8 text) or "wb"."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)  # an existing file keeps its old mode otherwise
+    except OSError:
+        pass
+    if "b" in mode:
+        return os.fdopen(fd, mode)
+    return os.fdopen(fd, mode, encoding="utf-8")

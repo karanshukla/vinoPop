@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 
 import settings
 from settings import DEFAULTS, Settings
@@ -20,6 +22,25 @@ def test_save_creates_the_files_own_directory(tmp_path):
     s.save()
     assert json.loads(path.read_text())["theme"] == "light"
     assert Settings(path).get("theme") == "light"
+
+
+def test_settings_file_is_private(tmp_path):
+    path = tmp_path / "vinopop" / "settings.json"
+    old = os.umask(0o022)
+    try:
+        Settings(path).save()
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+def test_an_old_world_readable_settings_file_is_made_private(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"theme": "light"}))
+    path.chmod(0o644)
+    assert Settings(path).get("theme") == "light"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_unknown_keys_survive_a_save(tmp_path):
@@ -141,7 +162,7 @@ def test_migration_keeps_consent_and_privacy_switches(tmp_path, monkeypatch):
     s.ensure_written()
     on_disk = json.loads(path.read_text())
     assert on_disk["ai_prefetch_model"] is True
-    assert "ai_prefetch_asked" not in on_disk
+    assert not on_disk.get("ai_prefetch_asked")  # never turned into a yes
     assert on_disk["openvino_telemetry"] is False
     for key in ("snippet_shell_enabled", "snippet_triggers_enabled", "clipboard_history_enabled"):
         assert on_disk[key] == DEFAULTS[key]
@@ -203,3 +224,28 @@ def test_get_float_rejects_nan_and_text(tmp_path):
     s = Settings(path)
     assert s.get_float("ai_idle_unload_minutes") == DEFAULTS["ai_idle_unload_minutes"]
     assert s.get_float("clipboard_poll_interval") == DEFAULTS["clipboard_poll_interval"]
+
+
+def test_reset_keeps_plugin_choices_and_resets_preferences(tmp_path):
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("theme", "light")
+    s.set("show_on_selection", False)
+    s.set("disabled_plugins", ["paste-enter"])
+    s.set("plugin_order", ["copy", "search"])
+    s.reset_to_defaults()
+    assert s.get("theme") == DEFAULTS["theme"]
+    assert s.get("show_on_selection") == DEFAULTS["show_on_selection"]
+    assert s.get("disabled_plugins") == ["paste-enter"]
+    assert s.get("plugin_order") == ["copy", "search"]
+    on_disk = json.loads(path.read_text())
+    assert "theme" not in on_disk  # follows the default from now on
+    assert on_disk["disabled_plugins"] == ["paste-enter"]
+
+
+def test_reset_does_not_alias_mutable_defaults(tmp_path):
+    s = Settings(tmp_path / "settings.json")
+    s.set("snippet_variables", {"a": "b"})
+    s.reset_to_defaults()
+    assert "snippet_variables" not in s._data
+    assert DEFAULTS["snippet_variables"] == {}

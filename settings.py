@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
 
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
@@ -106,6 +106,11 @@ DEFAULTS: dict[str, Any] = {
     # Capture image content too (not just text). PNG copies from
     # screenshot tools or browser drag-out land here as well.
     "clipboard_history_images": True,
+    # Copies bigger than this aren't kept in history (a 20 MB log would
+    # otherwise be rewritten to disk on every later copy). Text in KB,
+    # images in MB.
+    "clipboard_history_max_text_kb": 1024,
+    "clipboard_history_max_image_mb": 20,
     # Fallback poll interval when the XFixes selection-event path
     # isn't available. Most modern X servers do support XFixes so
     # this rarely fires.
@@ -137,9 +142,16 @@ DEFAULTS: dict[str, Any] = {
     # Local LLM for summarize / rewrite / explain / translate. Keys are in
     # vino_ai/models.py: "gemma-4-e2b" (default) or "gemma-4-e4b".
     "ai_llm_model": "gemma-4-e2b",
-    # Download the LLM in the background at daemon start (first launch and
-    # onboarding included), so the first AI click doesn't wait for the download.
-    "ai_prefetch_model": True,
+    # Download the LLM in the background at daemon start, so the first AI
+    # click doesn't wait for it. It's ~4 GB, so it's off until the user says
+    # yes: onboarding asks, and Settings > Advanced has the switch. Left off,
+    # the model downloads on the first AI click instead.
+    "ai_prefetch_model": False,
+    # Set once the user has answered (onboarding or the Settings switch).
+    # ai_prefetch_model used to default to True and save() writes every
+    # default into settings.json, so a stored True without this isn't a
+    # yes. See vino_ai.models.prefetch_consented.
+    "ai_prefetch_asked": False,
     # Seconds to wait for a device to load the LLM before falling back to
     # the next (NPU -> GPU -> CPU). A slow first NPU compile keeps running
     # in the background and the model moves to the NPU once it's done.
@@ -148,6 +160,14 @@ DEFAULTS: dict[str, Any] = {
     # memory (~4 GB). The compile cache keeps the next load quick. 0 keeps
     # it loaded for the life of the daemon.
     "ai_idle_unload_minutes": 5.0,
+    # Let OpenVINO's bundled telemetry send Intel its anonymous usage stats
+    # (through Google Analytics; never your text). Off by default: vinoPop
+    # writes "0" to ~/intel/openvino_telemetry before the first OpenVINO
+    # import. See vino_ai/telemetry.py.
+    "openvino_telemetry": False,
+    # Set once vinoPop has written that file. A file it didn't write (from
+    # Intel's opt_in_out script) is left alone until the toggle is flipped.
+    "openvino_telemetry_file_owned": False,
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.
@@ -322,6 +342,12 @@ def as_number(key: str, value: Any, kind: type[int] | type[float], fallback: Any
         return fallback
 
 
+# What "Reset to defaults" leaves alone: which plugins are switched off and
+# their button order belong to the Plugin Manager, and the reset dialog
+# promises installed plugins are kept.
+RESET_KEEPS = ("disabled_plugins", "plugin_order")
+
+
 class Settings:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
@@ -333,6 +359,7 @@ class Settings:
     def reload(self) -> None:
         self._data = {}
         if self.path.is_file():
+            make_private(self.path)  # files from older versions were 0644
             try:
                 with self.path.open("r", encoding="utf-8") as f:
                     loaded = json.load(f)
@@ -406,7 +433,7 @@ class Settings:
         self._data = {VERSION_KEY: SETTINGS_VERSION}
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.path.parent)
         # Only what the user set, so a later change to a default reaches them.
         merged = dict(self._data)
         if not _current(merged.get(VERSION_KEY)):
@@ -415,7 +442,7 @@ class Settings:
         # Atomic write: write to tmp, fsync, then rename. Avoids losing
         # all settings if the process dies (OOM, power) mid-write.
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
+        with open_private(tmp) as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
             f.write("\n")
             f.flush()
@@ -424,6 +451,15 @@ class Settings:
             except OSError:
                 pass
         os.replace(tmp, self.path)
+
+    def reset_to_defaults(self) -> None:
+        """Put every preference back to its default and save. Keys in
+        RESET_KEEPS are plugin choices made in the Plugin Manager, not
+        preferences, so they survive."""
+        kept = {k: self._data[k] for k in RESET_KEEPS if k in self._data}
+        self.reset()
+        self._data.update(kept)
+        self.save()
 
     def ensure_written(self) -> None:
         """Create the file if it doesn't exist yet (it holds no defaults,

@@ -82,9 +82,12 @@ pip install --user -r requirements-ai.txt
 `--break-system-packages` or run vinoPop from a venv created with
 `--system-site-packages` so it still sees PyGObject.)
 
-The first AI action downloads the model once (Gemma 4 E2B, about 4 GB, fast and
-light on RAM, or set `"ai_llm_model": "gemma-4-e4b"` for the more accurate 5 GB one). After that nothing goes
-online. `"ai_device"` forces `"NPU"`, `"GPU"` or `"CPU"`.
+The model downloads once (Gemma 4 E2B, about 4 GB, fast and light on RAM, or
+set `"ai_llm_model": "gemma-4-e4b"` for the more accurate 5 GB one). Onboarding
+asks whether to get it now, in the background; otherwise the first AI action
+downloads it. Settings → Advanced → *Download the AI model in the background*
+changes that answer later. After that nothing goes online. `"ai_device"`
+forces `"NPU"`, `"GPU"` or `"CPU"`.
 
 `python3 main.py --doctor` (add `--json` for a bug report) checks the AI
 packages, which devices OpenVINO sees and the order each model will try them

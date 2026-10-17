@@ -79,8 +79,9 @@ def _translate(text: str) -> None:
 
     def _run(bubble) -> None:
         state["bubble"] = bubble
-        # A feeder tied to this run: after a language switch the previous run
-        # is still streaming, and must not write into the new one.
+        # A feeder tied to this run: a language switch makes it stale, which
+        # stops the run at its next token (or before it starts, if it was
+        # still queued) and drops anything it already sent.
         sink = bubble.for_run()
         ai_worker.run_into(sink, "translate", text, lang=_ENGLISH_NAME[state["code"]])
 
