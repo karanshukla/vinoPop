@@ -99,5 +99,6 @@ exclude_dirs = ["tests", ".venv", ".git", "build", "dist", "docs"]
 skips = [
     "B404",  # import subprocess: launching desktop tools is the app's job
     "B603",  # subprocess without shell
+    "B606",  # os.exec* without shell: the Settings restart re-execs vinoPop itself
     "B607",  # partial executable path: tools are resolved from PATH on purpose
 ]
