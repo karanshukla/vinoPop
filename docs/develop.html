@@ -76,10 +76,17 @@
 
   <pre><code>{text}        the raw selection
 {text_url}    URL-encoded (use this in href="...?q={text_url}")
-{text_shell}  shell-quoted (use this inside a command line)
+{text_shell}  shell-quoted (in a command, the same as {text})
 {text_upper}  uppercased
 {text_lower}  lowercased
 {text_strip}  whitespace-trimmed</code></pre>
+
+  <p>In <em>Run a command</em> quoting is automatic. Every placeholder, <code>{selection}</code>,
+  <code>{clipboard}</code> and <code>{ask:...}</code> included, reaches the command as one argument
+  and is never read as shell code, so <code>notify-send {text}</code> and
+  <code>notify-send "{text}"</code> are both safe for any selection. Two things are refused:
+  a conversion or format spec on a text placeholder (<code>{text:.3}</code>), and a placeholder
+  inside shell arithmetic (<code>$(( {text} + 1 ))</code>), which would evaluate the text.</p>
 
   <p>Click any variable chip under the field to insert it at the cursor.</p>
 
