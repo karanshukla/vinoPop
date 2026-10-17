@@ -21,6 +21,12 @@ from xdg_paths import CACHE_DIR as SOCKET_DIR
 
 TRAY_SCRIPT = str(Path(__file__).resolve().parent / "tray_qt.py")
 
+# A tray process that keeps dying (PySide6 missing, no StatusNotifier host)
+# is restarted a few times with growing pauses, then left alone: poll() runs
+# on the GTK main loop and must never spend its time waiting for it.
+_RESTART_PAUSES_S = (2.0, 5.0, 15.0, 30.0, 60.0)
+_PYSIDE_HINT = "install PySide6 (pip install --user PySide6, or your distro's python3-pyside6)"
+
 
 def _tray_preexec() -> None:
     """Runs in the tray child between fork and exec.
@@ -53,26 +59,50 @@ def _tray_preexec() -> None:
         pass
 
 
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("Socket closed")
-        buf += chunk
-    return buf
+class FrameReader:
+    """Reassembles the length-prefixed JSON frames of the tray protocol from a
+    non-blocking socket (shared with tray_qt.py).
 
+    Reading frame by frame with recv(n) loses the bytes of a half-arrived
+    message, and cannot tell "nothing yet" from "the other side is gone": both
+    looked like an empty read, so a dead peer was never noticed."""
 
-def _recv_message(sock: socket.socket) -> dict | None:
-    try:
-        raw_len = _recv_exact(sock, 4)
-        msg_len = struct.unpack("!I", raw_len)[0]
-        if msg_len > 1_000_000:
-            return None
-        raw = _recv_exact(sock, msg_len)
-        return json.loads(raw.decode("utf-8"))
-    except (ConnectionError, OSError, json.JSONDecodeError):
-        return None
+    MAX_FRAME = 1_000_000
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._closed = False
+
+    def read(self, sock: socket.socket) -> list[dict]:
+        """Every complete message that has arrived. Raises ConnectionError once
+        the peer has closed the socket and its last messages were handed out."""
+        while not self._closed:
+            try:
+                chunk = sock.recv(65536)
+            except BlockingIOError:
+                break
+            if not chunk:
+                self._closed = True
+                break
+            self._buf += chunk
+        messages: list[dict] = []
+        while len(self._buf) >= 4:
+            (size,) = struct.unpack("!I", self._buf[:4])
+            if size > self.MAX_FRAME:
+                raise ConnectionError(f"oversized frame ({size} bytes)")
+            if len(self._buf) < 4 + size:
+                break
+            raw = bytes(self._buf[4 : 4 + size])
+            del self._buf[: 4 + size]
+            try:
+                message = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(message, dict):
+                messages.append(message)
+        if self._closed and not messages:
+            raise ConnectionError("socket closed")
+        return messages
 
 
 def _send_message(sock: socket.socket, msg: dict) -> None:
@@ -104,13 +134,18 @@ class Tray:
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
         self._connected = False
+        self._reader = FrameReader()
+        self._restarts = 0
+        self._next_restart_at = 0.0
+        self._gave_up = False
 
         if not os.path.isfile(TRAY_SCRIPT):
             print("[tray] tray_qt.py not found - tray disabled")
+            self._gave_up = True
             return
 
         self._start_process()
-        self._connect()
+        self._connect(wait=True)
 
     def _start_process(self) -> None:
         """Launch the Qt tray subprocess."""
@@ -132,29 +167,53 @@ class Tray:
             print(f"[tray] failed to start tray process: {exc}")
             self._proc = None
 
-    def _connect(self) -> None:
-        """Connect to the tray subprocess's Unix socket with retries."""
+    def _child_died(self) -> bool:
+        return self._proc is not None and self._proc.poll() is not None
+
+    def _connect(self, wait: bool = False) -> bool:
+        """Connect to the tray subprocess's Unix socket.
+
+        With `wait` (startup only) retry for up to ~3 s, but stop at once if the
+        child has already exited. Otherwise make a single, non-blocking attempt:
+        this runs from poll() on the GTK main loop."""
         socket_path = str(SOCKET_DIR / "tray.sock")
-        for _attempt in range(30):  # wait up to ~3 seconds
-            if not os.path.exists(socket_path):
+        for _attempt in range(30 if wait else 1):
+            if self._child_died():
+                break
+            if os.path.exists(socket_path):
+                sock = None
+                try:
+                    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    sock.settimeout(3)
+                    sock.connect(socket_path)
+                    sock.setblocking(True)
+                except OSError:
+                    if sock is not None:
+                        sock.close()
+                else:
+                    self._sock = sock
+                    self._reader = FrameReader()
+                    self._connected = True
+                    self._restarts = 0
+                    # Sync initial watcher state
+                    self.refresh()
+                    print("[tray] connected to tray subprocess")
+                    return True
+            if wait:
                 time.sleep(0.1)
-                continue
-            try:
-                self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                self._sock.settimeout(3)
-                self._sock.connect(socket_path)
-                self._sock.setblocking(True)
-                self._connected = True
-                # Sync initial watcher state
-                self.refresh()
-                print("[tray] connected to tray subprocess")
-                return
-            except (OSError, ConnectionRefusedError):
-                time.sleep(0.1)
-        print("[tray] WARNING: could not connect to tray subprocess")
+        if wait:
+            if self._child_died():
+                print(
+                    f"[tray] tray process exited with code {self._proc.poll()}: {_PYSIDE_HINT}"  # type: ignore[union-attr]
+                )
+            else:
+                print("[tray] WARNING: could not connect to tray subprocess")
+        return False
 
     def _reconnect(self) -> bool:
-        """Try to reconnect if the socket was lost."""
+        """Try to reconnect if the socket was lost. Never blocks."""
+        if self._gave_up:
+            return False
         if self._sock:
             try:
                 self._sock.close()
@@ -162,11 +221,37 @@ class Tray:
                 pass
             self._sock = None
         self._connected = False
-        # If the subprocess died, restart it
-        if self._proc is None or self._proc.poll() is not None:
+        # If the subprocess died, restart it - a bounded number of times,
+        # with a growing pause between tries.
+        if self._proc is None or self._child_died():
+            if self._restarts >= len(_RESTART_PAUSES_S):
+                self._gave_up = True
+                print(f"[tray] the tray process keeps exiting; giving up ({_PYSIDE_HINT})")
+                self._notify_gave_up()
+                return False
+            now = time.monotonic()
+            if now < self._next_restart_at:
+                return False
+            self._next_restart_at = now + _RESTART_PAUSES_S[self._restarts]
+            self._restarts += 1
             self._start_process()
-        self._connect()
-        return self._connected
+        return self._connect(wait=False)
+
+    @staticmethod
+    def _notify_gave_up() -> None:
+        try:
+            subprocess.run(
+                [
+                    "notify-send",
+                    "-i",
+                    "vinopop",
+                    "vinoPop tray icon unavailable",
+                    f"The tray process keeps exiting. To get the tray icon, {_PYSIDE_HINT}.",
+                ],
+                check=False,
+            )
+        except OSError:
+            pass
 
     def _dispatch(self, event: str, value: object) -> None:
         """Route an event from the tray subprocess to the right callback."""
@@ -217,17 +302,13 @@ class Tray:
             return
         try:
             self._sock.setblocking(False)
-            while True:
-                try:
-                    msg = _recv_message(self._sock)
-                    if msg is None:
-                        break
-                    self._dispatch(msg.get("event", ""), msg.get("value"))
-                except BlockingIOError:
-                    break
-        except (OSError, ConnectionError):
+            messages = self._reader.read(self._sock)
+        except OSError:  # includes ConnectionError: the tray process is gone
             self._connected = False
             self._reconnect()
+            return
+        for msg in messages:
+            self._dispatch(msg.get("event", ""), msg.get("value"))
 
     def shutdown(self) -> None:
         """Tell tray subprocess to quit and wait for it."""

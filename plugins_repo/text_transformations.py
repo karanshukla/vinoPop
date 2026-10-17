@@ -5,6 +5,7 @@ Each transforms the selection and copies the result to the clipboard.
 
 from __future__ import annotations
 
+import html
 import random as _random
 import re
 import subprocess
@@ -66,23 +67,25 @@ _TAG_RE = re.compile(r"<\/?[a-zA-Z][^<>]*>")
 
 
 def _strip_html(text: str) -> None:
-    cleaned = _TAG_RE.sub("", text)
-    # Collapse the common entities; lazy decode without importing html module
-    cleaned = (
-        cleaned.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", '"')
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-    )
+    # One pass: chained .replace() calls turn "&amp;lt;" into "<" (double decode)
+    cleaned = html.unescape(_TAG_RE.sub("", text)).replace("\xa0", " ")
     _copy(cleaned, "HTML stripped")
 
 
+# Japanese voiced/semi-voiced marks are part of the kana, not a diacritic to drop
+_KEEP_MARKS = "\u3099\u309a"
+
+
+def _strip_marks(text: str) -> str:
+    """Drop combining accents. NFD (not NFKD) so compatibility characters such
+    as "²" or "™" survive, and recompose afterwards so Hangul stays intact."""
+    decomposed = unicodedata.normalize("NFD", text)
+    kept = "".join(c for c in decomposed if c in _KEEP_MARKS or not unicodedata.combining(c))
+    return unicodedata.normalize("NFC", kept)
+
+
 def _remove_diacritics(text: str) -> None:
-    normalized = unicodedata.normalize("NFKD", text)
-    out = "".join(c for c in normalized if not unicodedata.combining(c))
-    _copy(out, "Diacritics removed")
+    _copy(_strip_marks(text), "Diacritics removed")
 
 
 def _ascii_only(text: str) -> None:
@@ -117,8 +120,8 @@ def _has_html_tags(text: str) -> bool:
 
 
 def _has_diacritics(text: str) -> bool:
-    """Any combining mark (NFKD decomposition unique vs original)."""
-    return unicodedata.normalize("NFKD", text) != text
+    """True only when removing accents would actually change the text."""
+    return _strip_marks(text) != text
 
 
 def _has_non_ascii(text: str) -> bool:

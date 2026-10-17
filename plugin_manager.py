@@ -660,7 +660,9 @@ class PluginManagerDialog:
             row.set_title(plugin.tooltip or plugin.name)
             row.set_subtitle(plugin.name)
             try:
-                img = Gtk.Image.new_from_icon_name(plugin.icon)
+                import icon_style
+
+                img = Gtk.Image.new_from_icon_name(icon_style.resolve(plugin.icon))
                 img.set_pixel_size(20)
                 row.add_prefix(img)
             except Exception:

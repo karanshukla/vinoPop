@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from pathlib import Path
 
 import gi
 
@@ -21,10 +20,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-from xdg_paths import CONFIG_DIR  # noqa: E402
-
-USER_ICONS_DIR = CONFIG_DIR / "icons"
-HICOLOR_APPS = Path.home() / ".local/share/icons/hicolor/scalable/apps"
+from xdg_paths import HICOLOR_APPS, USER_ICONS_DIR  # noqa: E402
 
 # How many icons to render per "page". GTK FlowBox is fast enough that
 # 1000+ per page is fine on modern hardware; lazy loading was solving a

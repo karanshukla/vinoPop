@@ -220,13 +220,14 @@ class _Selector(Gtk.Window):
 
 def select_and_capture(callback) -> bool:
     """Show the overlay and call callback(crop_png_or_None). Main thread only.
-    Returns False (and never calls back) if we couldn't grab the screen."""
+    Returns True once the overlay is up; False (and never calls back) if we
+    couldn't grab the screen, so the caller can fall back to something else."""
     shot = _capture_fullscreen()
     if not shot:
         return False
     sel = _Selector(shot, callback)
     sel.present()
-    return False  # idle_add: run once
+    return True
 
 
 def available() -> bool:

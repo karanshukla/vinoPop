@@ -133,6 +133,15 @@ def install_argv() -> list[str] | None:
     return None
 
 
+def _has_image(path: Path) -> bool:
+    """The capture target is created empty up front, so existing isn't enough:
+    a cancelled capture leaves a zero-byte file behind."""
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _capture_region(out_path: Path) -> bool:
     """Use whichever region-capture tool is installed to grab a user-
     drawn rectangle and write it as a PNG. Returns False if the user
@@ -148,7 +157,7 @@ def _capture_region(out_path: Path) -> bool:
                 capture_output=True,
                 timeout=120,
             )
-            return out_path.is_file() and out_path.stat().st_size > 0
+            return _has_image(out_path)
         except subprocess.TimeoutExpired:
             log.warning("[ocr] spectacle timed out")
             return False
@@ -164,7 +173,7 @@ def _capture_region(out_path: Path) -> bool:
                 capture_output=True,
                 timeout=30,
             )
-            return res.returncode == 0 and out_path.is_file()
+            return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
     if shutil.which("maim"):
@@ -180,7 +189,7 @@ def _capture_region(out_path: Path) -> bool:
             if res.returncode != 0:
                 log.info("[ocr] maim exited %d (user cancelled?)", res.returncode)
                 return False
-            return out_path.is_file() and out_path.stat().st_size > 0
+            return _has_image(out_path)
         except subprocess.TimeoutExpired:
             log.warning("[ocr] maim timed out after 60 s")
             return False
@@ -193,7 +202,7 @@ def _capture_region(out_path: Path) -> bool:
                 capture_output=True,
                 timeout=60,
             )
-            return res.returncode == 0 and out_path.is_file()
+            return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
     return False
@@ -255,9 +264,23 @@ def _capture_via_overlay() -> str | None:
         holder["path"] = path
         done.set()
 
-    GLib.idle_add(ocr_selector.select_and_capture, _cb)
+    def _start() -> bool:
+        # Without this a failed grab (or an exception building the overlay,
+        # which GLib swallows) would leave us waiting the full timeout for a
+        # callback that never comes.
+        try:
+            if not ocr_selector.select_and_capture(_cb):
+                raise RuntimeError("could not grab the screen for the overlay")
+        except Exception as exc:  # noqa: BLE001
+            holder["error"] = exc
+            done.set()
+        return False  # idle_add: run once
+
+    GLib.idle_add(_start)
     if not done.wait(180):
         return None
+    if "error" in holder:
+        raise holder["error"]
     return holder.get("path")
 
 

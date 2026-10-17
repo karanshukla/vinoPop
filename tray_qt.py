@@ -23,8 +23,9 @@ from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tray import FrameReader  # the same wire protocol as the daemon side
 from xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, HICOLOR_APPS
 
 ICON_DIR = str(Path(__file__).resolve().parent / "icons")
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -43,28 +44,6 @@ def _tray_icon_style() -> str:
 
 
 # ─── Wire helpers ───────────────────────────────────────────────────
-
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("Socket closed")
-        buf += chunk
-    return buf
-
-
-def _recv_message(sock: socket.socket) -> dict | None:
-    try:
-        raw_len = _recv_exact(sock, 4)
-        msg_len = struct.unpack("!I", raw_len)[0]
-        if msg_len > 1_000_000:
-            return None
-        raw = _recv_exact(sock, msg_len)
-        return json.loads(raw.decode("utf-8"))
-    except (ConnectionError, OSError, json.JSONDecodeError):
-        return None
 
 
 def _send_message(sock: socket.socket, msg: dict) -> None:
@@ -100,6 +79,7 @@ class TrayQt:
         # Socket
         self._sock: socket.socket | None = None
         self._client: socket.socket | None = None
+        self._reader = FrameReader()
         self._running = True
         self._setup_socket()
 
@@ -177,7 +157,7 @@ class TrayQt:
     def _install_icon(self) -> None:
         import shutil
 
-        user_dir = Path.home() / ".local/share/icons/hicolor/scalable/apps"
+        user_dir = HICOLOR_APPS
         user_dir.mkdir(parents=True, exist_ok=True)
         for name in ("vinopop-tray-symbolic", "vinopop"):
             src = Path(ICON_DIR) / f"{name}.svg"
@@ -266,18 +246,16 @@ class TrayQt:
             if self._client is None:
                 try:
                     self._client, _addr = self._sock.accept()
-                    self._client.setblocking(True)
                 except BlockingIOError:
                     return
+                self._reader = FrameReader()
             self._client.setblocking(False)
-            try:
-                msg = _recv_message(self._client)
-                if msg is not None:
-                    self._handle_command(msg)
-            except BlockingIOError:
-                pass
-        except OSError:
+            messages = self._reader.read(self._client)
+        except OSError:  # includes ConnectionError: the daemon hung up; free the slot
             self._disconnect_client()
+            return
+        for msg in messages:
+            self._handle_command(msg)
 
     def _disconnect_client(self) -> None:
         if self._client:

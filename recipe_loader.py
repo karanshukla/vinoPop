@@ -22,8 +22,10 @@ from __future__ import annotations
 import json
 import os
 import random as _random
+import re
 import shlex
 import shutil
+import string
 import subprocess
 import urllib.parse
 from collections.abc import Callable
@@ -32,6 +34,13 @@ from pathlib import Path
 from classifier import ContentType
 from plugin_base import Plugin
 from xdg_paths import CONFIG_DIR
+
+
+def notify(title: str, body: str, icon: str = "vinopop", timeout_ms: int = 3000) -> None:
+    import actions
+
+    actions.notify(title, body, icon, timeout_ms)
+
 
 RECIPES_DIR = CONFIG_DIR / "recipes"
 
@@ -156,15 +165,23 @@ def _render(template: str, text: str) -> str:
         # falls back to the input if not, mirroring the json helpers.
         "text_b64_decode": _safe_b64_decode(text),
     }
+    # The selection is untrusted. Render the template with opaque markers in
+    # place of the values, expand snippet-style placeholders (date, clipboard,
+    # {shell:...}) over the TEMPLATE only, then drop the values in. Expanding
+    # after substitution would run `{shell:...}` found in the selected text and
+    # mangle selections that merely contain `{date}`.
+    marked = {key: f"\x00{key}\x00" for key in safe}
     try:
-        first = template.format_map(_DefaultMissing(safe))
+        first = template.format_map(_DefaultMissing(marked))
     except Exception as exc:  # noqa: BLE001
         print(f"[recipe] template render failed: {exc}")
         return template
-    # Second pass: snippet-style dynamic placeholders (date, name,
-    # clipboard, etc.). Adds the snippet engine's vocabulary to recipes
-    # without duplicating the code.
-    return _apply_snippet_placeholders(first)
+    expanded = _apply_snippet_placeholders(first)
+    # One pass, so a value that looks like a marker is never expanded again.
+    return _MARKER_RE.sub(lambda m: safe.get(m.group(1), m.group(0)), expanded)
+
+
+_MARKER_RE = re.compile(r"\x00(\w+)\x00")
 
 
 class _DefaultMissing(dict):
@@ -175,12 +192,92 @@ class _DefaultMissing(dict):
         return "{" + key + "}"
 
 
+# Placeholders whose value is safe to drop UNQUOTED into a shell command line:
+# shlex-quoted, percent-encoded, or base64 (alphanumerics and + / =). Everything
+# else ({text}, {text_json}, {text_url_decode}, ...) can carry shell metacharacters
+# and would turn a click on attacker-controlled text into command execution.
+_SHELL_SAFE_PLACEHOLDERS = frozenset({"text_shell", "text_url", "text_b64"})
+# A replacement field's name, also when followed by a conversion or format spec
+# ({text!s}, {text:>5}) that str.format applies just the same.
+_FIELD_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?:[!:.\[][^{}]*)?\}")
+
+
+def unsafe_shell_placeholders(template: str) -> list[str]:
+    """Placeholders in `template` that must not reach a shell unquoted."""
+    names = set(_FIELD_RE.findall(template or "")) & set(_text_variables())
+    return sorted(names - _SHELL_SAFE_PLACEHOLDERS)
+
+
+def _text_variables() -> list[str]:
+    return [
+        "text",
+        "text_url",
+        "text_shell",
+        "text_upper",
+        "text_lower",
+        "text_strip",
+        "text_mock",
+        "text_json",
+        "text_json_min",
+        "text_b64",
+        "text_url_decode",
+        "text_b64_decode",
+    ]
+
+
+def safety_errors(recipe: dict) -> list[str]:
+    """Reasons a recipe must not be allowed to run shell commands. Kept apart
+    from validate(): an unsafe recipe still loads, as a button that explains
+    why it was disabled, rather than silently vanishing."""
+    action = recipe.get("action") if isinstance(recipe, dict) else None
+    if not isinstance(action, dict):
+        return []
+    quoting = "use {text_shell} (shell-quoted) or {text_url} (URL-encoded)"
+    errors = []
+    if action.get("type") == "run_command":
+        bad = unsafe_shell_placeholders(action.get("template", ""))
+        if bad:
+            errors.append(f"the command uses {bad} unquoted; {quoting}")
+    elif action.get("type") == "chain":
+        for i, step in enumerate(action.get("steps") or []):
+            if not isinstance(step, dict) or step.get("type") != "run_command":
+                continue
+            if not step.get("template"):
+                # An empty template would run the (transformed) selection itself
+                errors.append(f"chain.steps[{i}] (run_command) needs a command template")
+                continue
+            bad = unsafe_shell_placeholders(step["template"])
+            if bad:
+                errors.append(f"chain.steps[{i}] uses {bad} unquoted; {quoting}")
+    return errors
+
+
+def _disabled_handler(name: str) -> Callable[[str], None]:
+    def handler(_text: str) -> None:
+        notify(
+            "vinoPop recipe disabled",
+            f"{name}: unsafe command template - see ~/.cache/vinopop/vinopop.log",
+            "dialog-warning",
+            5000,
+        )
+
+    return handler
+
+
 def _build_handler(recipe: dict) -> Callable[[str], None]:
     action = recipe.get("action") or {}
     atype = action.get("type", "")
     template = action.get("template", "")
     title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "vinoPop")
     icon = recipe.get("icon") or "applications-other"
+
+    # Refuse to build a shell-running button that would feed the selection to
+    # the shell unquoted: the click then explains itself instead of running it.
+    problems = safety_errors(recipe)
+    if problems:
+        name = recipe.get("name") or recipe.get("tooltip") or "unnamed"
+        print(f"[recipe] REFUSED to load recipe {name!r}: {'; '.join(problems)}")
+        return _disabled_handler(name)
 
     if atype == "open_url":
 
@@ -193,45 +290,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
         return handler
 
     if atype == "run_command":
-        # Reject templates that embed the selection unquoted. Only
-        # {text_shell} and {text_url} survive shell evaluation safely;
-        # {text}, {text_upper}, {text_lower}, {text_strip} pass shell
-        # metacharacters through and turn the recipe into trivial RCE
-        # if the user ever clicks the button on attacker-controlled text.
-        # Refuse to register so the bug surfaces in logs instead of as
-        # a quiet wormhole.
-        import re as _re
-
-        unsafe = {"text", "text_upper", "text_lower", "text_strip", "text_mock"}
-        placeholders = set(_re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", template))
-        bad = placeholders & unsafe
-        if bad:
-            name = recipe.get("name") or recipe.get("tooltip") or "unnamed"
-            print(
-                f"[recipe] REFUSED to load run_command recipe {name!r}: "
-                f"template uses unsafe placeholder(s) {sorted(bad)} - "
-                f"replace with {{text_shell}} (shell-quoted) or "
-                f"{{text_url}} (URL-encoded)."
-            )
-
-            def disabled_handler(_text: str) -> None:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "5000",
-                        "-u",
-                        "critical",
-                        "-i",
-                        "dialog-warning",
-                        "vinoPop recipe disabled",
-                        f"{name}: unsafe template - see ~/.cache/vinopop/vinopop.log",
-                    ],
-                    check=False,
-                )
-
-            return disabled_handler
 
         def handler(text: str) -> None:
             cmd = _render(template, text)
@@ -367,20 +425,9 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     # Put text on clipboard, then send Ctrl+V to whichever
                     # window currently holds focus. Same pattern the
                     # editing_actions plugin uses.
-                    subprocess.run(
-                        ["xclip", "-selection", "clipboard"],
-                        input=current.encode("utf-8"),
-                        check=False,
-                        timeout=2.0,
-                    )
-                    import time as _t
+                    import actions
 
-                    _t.sleep(0.05)
-                    if shutil.which("xdotool"):
-                        subprocess.run(
-                            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-                            check=False,
-                        )
+                    actions.replace_selection(current)
                 elif stype == "notify":
                     subprocess.run(
                         [
@@ -412,25 +459,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                 return
             # If we fell off the loop with only transforms, push the
             # final value onto the clipboard as a sensible default.
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=current.encode("utf-8"),
-                check=False,
-                timeout=2.0,
-            )
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "2500",
-                    "-i",
-                    icon,
-                    title or "Chain",
-                    current[:200],
-                ],
-                check=False,
-            )
+            from platform_backend import get_backend
+
+            get_backend().set_clipboard(current)
+            notify(title or "Chain", current[:200], icon, 2500)
 
         return handler
 
@@ -448,8 +480,19 @@ def _content_types(recipe: dict) -> tuple:
     return tuple(_CTYPE_BY_NAME[n] for n in names if n in _CTYPE_BY_NAME)
 
 
+def _template_problem(template: str) -> str | None:
+    """Why `template` can't be rendered (an unbalanced brace), or None."""
+    try:
+        list(string.Formatter().parse(template))
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def validate(recipe: dict) -> list[str]:
     """Return a list of human-readable validation errors (empty = OK)."""
+    if not isinstance(recipe, dict):
+        return ["recipe must be a JSON object"]
     errors = []
     name = (recipe.get("name") or "").strip()
     if not name:
@@ -457,6 +500,8 @@ def validate(recipe: dict) -> list[str]:
     elif not all(c.isalnum() or c in "-_" for c in name):
         errors.append("'name' must be alphanumeric / '-' / '_'")
     action = recipe.get("action") or {}
+    if not isinstance(action, dict):
+        return [*errors, "'action' must be an object"]
     atype = action.get("type")
     if atype not in VALID_ACTION_TYPES:
         errors.append(f"action.type must be one of {VALID_ACTION_TYPES}")
@@ -486,9 +531,25 @@ def validate(recipe: dict) -> list[str]:
                     )
                 if stype == "transform" and not step.get("template"):
                     errors.append(f"chain.steps[{i}] (transform) needs a template")
+                problem = _template_problem(step.get("template") or "")
+                if problem:
+                    errors.append(f"chain.steps[{i}].template: {problem}")
     else:
         if not action.get("template", ""):
             errors.append("action.template is required")
+        else:
+            problem = _template_problem(action["template"])
+            if problem:
+                errors.append(f"action.template: {problem}")
+    # An unrecognised name used to be dropped, and an all-unrecognised list
+    # then meant "every content type": a typo made the button universal.
+    names = recipe.get("content_types") or []
+    if not isinstance(names, list):
+        errors.append("'content_types' must be a list")
+    else:
+        unknown = [n for n in names if n not in _CTYPE_BY_NAME]
+        if unknown:
+            errors.append(f"unknown content_types {unknown}; use {sorted(_CTYPE_BY_NAME)}")
     return errors
 
 
@@ -521,7 +582,6 @@ def _seed_default_recipes() -> None:
     if not repo_dir.is_dir():
         _SEED_MARKER.touch()
         return
-    import shutil
 
     for filename in _DEFAULT_RECIPE_SEEDS:
         src = repo_dir / filename
@@ -597,7 +657,16 @@ def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
     """Persist a recipe as <name>.json (or to the supplied path). Atomic write."""
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
     if target_path is None:
-        target_path = RECIPES_DIR / f"{recipe['name']}.json"
+        name = str(recipe.get("name") or "")
+        if not name or not all(c.isalnum() or c in "-_" for c in name):
+            raise ValueError(f"invalid recipe name {name!r}")
+        # Two buttons labelled "Search" must not overwrite each other. The name
+        # is also the plugin's identity (order, disable list), so it changes too.
+        unique, n = name, 2
+        while (RECIPES_DIR / f"{unique}.json").exists():
+            unique, n = f"{name}-{n}", n + 1
+        recipe = {**recipe, "name": unique}
+        target_path = RECIPES_DIR / f"{unique}.json"
     tmp = target_path.with_suffix(target_path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(recipe, f, indent=2, ensure_ascii=False)

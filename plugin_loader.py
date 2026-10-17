@@ -16,7 +16,7 @@ from pathlib import Path
 import actions
 from classifier import ContentType
 from plugin_base import Plugin
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, HICOLOR_APPS, USER_ICONS_DIR
 
 _PLUGINS: list[Plugin] = []
 
@@ -24,7 +24,6 @@ USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
 VINOPOP_DIR = str(Path(__file__).resolve().parent)
 REPO_PLUGIN_DIR = Path(VINOPOP_DIR) / "plugins_repo"
 ICONS_DIR = Path(VINOPOP_DIR) / "icons"
-HICOLOR_APPS = Path.home() / ".local/share/icons/hicolor/scalable/apps"
 
 # Curated set seeded into a brand-new install. Aim is "useful within
 # 5 seconds of first selection" without overwhelming the popup. Dev-
@@ -71,7 +70,7 @@ def _install_all_icons() -> None:
         return
     # Fast path: if neither the bundled icons dir nor the user icons dir
     # has been touched since the last run, skip the stat-storm + rescan.
-    user_icons_dir = Path.home() / ".config/vinopop/icons"
+    user_icons_dir = USER_ICONS_DIR
     bundled_mtime = _dir_mtime(ICONS_DIR)
     user_mtime = _dir_mtime(user_icons_dir)
     if (
@@ -127,7 +126,7 @@ def _icon_theme():
 
 
 def _sync_user_icons() -> None:
-    user_icons_dir = Path.home() / ".config/vinopop/icons"
+    user_icons_dir = USER_ICONS_DIR
     user_icons_dir.mkdir(parents=True, exist_ok=True)
     user_copied = False
     for src in list(user_icons_dir.glob("*.svg")) + list(user_icons_dir.glob("*.png")):
@@ -401,8 +400,29 @@ def _load_user_plugins() -> None:
             traceback.print_exc()
 
 
+def _shutdown_user_plugins() -> None:
+    """Let the previous copy of each user plugin stop its background threads
+    before a fresh copy of the file is executed: a plugin with a
+    `shutdown()` function gets it called, so reloading doesn't stack watchers
+    on top of each other. The stale module objects are dropped too, so code
+    that looks a plugin up in sys.modules doesn't find one whose file has
+    since been removed (the fresh copies re-register themselves on load)."""
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("vinopop_user_"):
+            continue
+        hook = getattr(module, "shutdown", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                print(f"[plugin_loader] shutdown of {name} failed:")
+                traceback.print_exc()
+        sys.modules.pop(name, None)
+
+
 def load_all() -> None:
     """Idempotent: clears existing registry and reloads everything."""
+    _shutdown_user_plugins()
     _PLUGINS.clear()
     _SOURCE_BY_NAME.clear()
     _install_all_icons()

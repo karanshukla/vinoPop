@@ -31,9 +31,6 @@ os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
 log = logging.getLogger("vinopop")
 
-
-log = logging.getLogger("vinopop")
-
 MODELS_DIR = DATA_DIR / "models"
 
 

@@ -50,3 +50,8 @@ for _home in (CONFIG_HOME, CACHE_HOME, DATA_HOME):
 CONFIG_DIR = CONFIG_HOME / APP
 CACHE_DIR = CACHE_HOME / APP
 DATA_DIR = DATA_HOME / APP
+
+# Icons the user drops in (picked up by the icon picker and plugin loader) and
+# the hicolor theme folder GTK and the tray search for per-user icons.
+USER_ICONS_DIR = CONFIG_DIR / "icons"
+HICOLOR_APPS = DATA_HOME / "icons" / "hicolor" / "scalable" / "apps"

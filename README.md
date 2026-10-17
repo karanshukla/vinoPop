@@ -45,6 +45,20 @@ sudo pacman -S python python-gobject gtk4 libadwaita \
 vinoPop uses GTK 4 (4.14 or newer) and libadwaita (1.5 or newer), so Ubuntu
 24.04, Fedora 40, Debian 13 or anything newer.
 
+For the tray icon, install PySide6 for the Python that runs vinoPop (it runs the
+icon in a small Qt process so it works natively on KDE and over StatusNotifier):
+
+```sh
+sudo apt-get install -y python3-pyside6.qtwidgets   # Ubuntu / Debian
+sudo dnf install -y python3-pyside6                 # Fedora
+sudo pacman -S pyside6                              # Arch
+# or, anywhere: pip install --user PySide6
+```
+
+Without it vinoPop runs fine but has no tray icon. Start with `--no-tray` to skip
+the attempt, and open the windows directly with `python3 settings_gui.py` and
+`python3 plugin_manager.py`.
+
 Optional: `qrencode` for the QR plugin, and gtk4-layer-shell for native popup
 placement on KDE Plasma / wlroots Wayland (`gir1.2-gtk4layershell-1.0` on
 Debian 13 / Ubuntu 24.10+, `gtk4-layer-shell` on Fedora and Arch).
@@ -124,7 +138,6 @@ Right-click the tray icon and pick **Settings**, or edit
 | `min_selection_length_enabled` | `false` | Enable the minimum-selection-length filter |
 | `min_selection_length` | `2` | When enabled, ignore selections shorter than this |
 | `terminal_keep_open` | `true` | Keep terminal open after running a command |
-| `ai_paste_delay_seconds` | `2.5` | Wait before auto-pasting into a chat AI |
 | `double_click_popup_enabled` | `false` | Hold a modifier + double-click a word to pop the bar |
 | `double_click_modifier` | `ctrl` | Modifier for the double-click trigger (`ctrl`/`alt`/`super`/`shift`) |
 | `translate_target_lang` | `en` | Target language for the Translate plugin (ISO code) |
@@ -151,7 +164,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="my-plugin",
-            icon="emblem-favorite",
+            icon="emblem-favorite-symbolic",
             tooltip="Do something",
             handler=_handler,
             content_types=(ContentType.PLAIN_TEXT,),

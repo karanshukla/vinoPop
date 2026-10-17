@@ -9,12 +9,12 @@ the chosen entry at the cursor of whichever app had focus when the
 picker was summoned (via xdotool windowactivate + ctrl+v).
 
 Activated either from the popup ("Clipboard…" plugin button) or from
-the global clipboard_hotkey (default Super+V).
+the global clipboard_hotkey (default Super+Shift+V).
 
 Settings (~/.config/vinopop/settings.json):
   "clipboard_history_size":   25
   "clipboard_history_images": true
-  "clipboard_hotkey":         "super+v"   (handled by main.py)
+  "clipboard_hotkey":         "super+shift+v"   (handled by main.py)
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import gi
@@ -255,14 +255,30 @@ def _load_list(path: Path, target: list[Entry]) -> bool:
     try:
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, list):
+            raise ValueError("expected a JSON list of entries")
+        known = {f.name for f in fields(Entry)}
         for item in data:
+            if not isinstance(item, dict):
+                continue
             try:
-                target.append(Entry(**item))
+                # Fields from a newer/older version are ignored, not a reason
+                # to drop the whole entry (it would be lost on the next save)
+                target.append(Entry(**{k: v for k, v in item.items() if k in known}))
             except TypeError:
                 continue
         return True
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
         print(f"[clipboard] could not load {path}: {exc}")
+        # The next save would replace the unreadable file with an empty list
+        # and lose everything in it, so keep a copy first.
+        try:
+            backup = path.with_suffix(path.suffix + ".unreadable")
+            if not backup.exists():
+                shutil.copy2(path, backup)
+                print(f"[clipboard] kept a copy at {backup}")
+        except OSError:
+            pass
         return False
 
 
@@ -1019,7 +1035,10 @@ def _fire_trigger_expansion(
     _bump_usage(snippet.id)
 
     def worker_x11():
-        if not shutil.which("xdotool"):
+        # Check every tool up front: bailing out after the BackSpaces below
+        # would leave the user with neither their trigger nor the expansion.
+        if not shutil.which("xdotool") or not shutil.which("xclip"):
+            print("[triggers] xdotool/xclip not found - cannot expand")
             return
         # Wait for the user to physically release the boundary key
         # (space/tab/enter) before we start synthesising keystrokes.
@@ -1086,8 +1105,8 @@ def _fire_trigger_expansion(
         )
 
     def worker_wayland():
-        if not shutil.which("ydotool"):
-            print("[triggers] ydotool not found - cannot expand on Wayland")
+        if not shutil.which("ydotool") or not shutil.which("wl-copy"):
+            print("[triggers] ydotool/wl-copy not found - cannot expand on Wayland")
             return
         global _kbd_suppress_until
         env = _ydotool_env()
@@ -1274,6 +1293,8 @@ def _sweep_orphan_images() -> None:
 
 
 def _capture_current_clipboard() -> None:
+    if _watcher_stop.is_set():
+        return  # this copy of the module was replaced by a reload
     try:
         targets = _read_clipboard_targets()
         has_image = _capture_images() and any(t.startswith("image/") for t in targets)
@@ -1286,7 +1307,7 @@ def _capture_current_clipboard() -> None:
             if data:
                 import hashlib
 
-                h = hashlib.sha1(data).digest()
+                h = hashlib.sha1(data, usedforsecurity=False).digest()
                 if h != _state["last_image_hash"]:
                     _state["last_image_hash"] = h
                     _save_dedup_state(h)
@@ -1359,7 +1380,7 @@ def _watcher_loop() -> None:
             while dpy.pending_events():
                 _ = dpy.next_event()
                 had_event = True
-            if had_event:
+            if had_event and not _watcher_stop.is_set():
                 time.sleep(0.05)
                 _capture_current_clipboard()
     finally:
@@ -1373,6 +1394,23 @@ def _poll_only_loop() -> None:
     while not _watcher_stop.is_set():
         _capture_current_clipboard()
         time.sleep(_poll_interval())
+
+
+def shutdown() -> None:
+    """Stop this copy's background threads. plugin_loader calls it before it
+    re-executes the file as a fresh module (every settings save or plugin
+    change), otherwise the old watcher keeps capturing and rewriting
+    history.json beside the new one, and the old trigger watcher expands
+    every snippet a second time."""
+    global _watcher_thread, _trigger_watcher
+    _watcher_stop.set()
+    _watcher_thread = None
+    if _trigger_watcher is not None:
+        try:
+            _trigger_watcher.stop()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[clipboard] trigger watcher did not stop cleanly: {exc}")
+        _trigger_watcher = None
 
 
 def _start_watcher_once() -> None:
@@ -1524,7 +1562,7 @@ def _paste_to_window(
             return
         paste_key = _paste_keystroke_for_window(target_window)
         is_terminal = paste_key == "ctrl+shift+v"
-        # The hotkey (e.g. ctrl+super+v) leaves modifiers logically held
+        # The hotkey (e.g. super+shift+v) leaves modifiers logically held
         # in X until the user releases them. Without an explicit keyup,
         # xdotool's --clearmodifiers races with the real key-up events
         # and the paste lands as garbage (or not at all). Mirror what
@@ -1708,6 +1746,13 @@ def _read_primary_selection() -> str:
     """Read the current X11 PRIMARY selection (the highlighted text).
     Returns empty string if nothing is highlighted or xclip is missing."""
     try:
+        # Backend-aware: wl-paste on Wayland, where xclip can't see PRIMARY
+        from platform_backend import get_backend
+
+        return get_backend().read_selection("primary") or ""
+    except Exception:  # noqa: BLE001 - fall back to the X11 tool below
+        pass
+    try:
         out = subprocess.run(
             ["xclip", "-selection", "primary", "-o"],
             capture_output=True,
@@ -1746,7 +1791,7 @@ def _render_shell_token(cmd: str) -> str:
 # Sentinel for the cursor position. U+E000 is in the BMP private-use area
 # and will never appear in real clipboard text; safer than NUL which some
 # pipelines drop.
-_CURSOR_SENTINEL = "CURSOR"
+_CURSOR_SENTINEL = "\ue000CURSOR\ue000"
 
 
 _DATE_MATH_RE = re.compile(r"^([+-]\d+)([dwmy])(?::(.+))?$")
@@ -2861,7 +2906,7 @@ class _PickerDialog:
                     "1.",
                     "Pick it from the list",
                     "Open the clipboard picker (your shortcut, usually "
-                    "<tt>Ctrl+Super+V</tt>), go to the <b>Snippets</b> tab, "
+                    "<tt>Super+Shift+V</tt>), go to the <b>Snippets</b> tab, "
                     "click the one you want. It pastes wherever your cursor is.",
                 ),
                 (

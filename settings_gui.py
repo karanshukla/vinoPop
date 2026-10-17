@@ -400,6 +400,9 @@ class SettingsDialog:
         box.add_css_class("lp-badge")
         box.add_css_class(f"lp-badge-{color_index % 4}")
         it = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        import icon_style
+
+        icon_name = icon_style.available(icon_name or "", it)
         name = icon_name if (icon_name and it.has_icon(icon_name)) else "emblem-system-symbolic"
         img = Gtk.Image.new_from_icon_name(name)
         img.set_pixel_size(17)

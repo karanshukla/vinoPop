@@ -50,11 +50,11 @@ def _qr(text: str) -> None:
     out_path = QR_CACHE / f"qr-{int(time.time() * 1000):x}.png"
     try:
         subprocess.run(
-            ["qrencode", "-s", "8", "-o", str(out_path), text],
+            ["qrencode", "-s", "8", "-o", str(out_path), "--", text],
             check=True,
         )
         subprocess.Popen(["xdg-open", str(out_path)], start_new_session=True)
-    except subprocess.CalledProcessError as exc:
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         subprocess.run(
             [
                 "notify-send",

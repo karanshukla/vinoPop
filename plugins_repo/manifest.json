@@ -317,7 +317,7 @@
       "developer",
       "utility"
     ],
-    "icon": "preferences-system-time-symbolic"
+    "icon": "alarm-symbolic"
   },
   {
     "file": "html_entities.py",
@@ -329,6 +329,6 @@
       "web",
       "encoding"
     ],
-    "icon": "text-html-symbolic"
+    "icon": "tag-symbolic"
   }
 ]

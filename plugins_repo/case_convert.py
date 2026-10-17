@@ -32,9 +32,27 @@ def _copy(text: str, label: str) -> None:
     )
 
 
+# Letters NFKD can't decompose into base + accent, so "ignore" would drop them
+_TRANSLITERATE = str.maketrans(
+    {"ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss", "đ": "d",
+     "Đ": "D", "ł": "l", "Ł": "L", "þ": "th", "Þ": "Th", "ð": "d", "Ð": "D", "ı": "i"}
+)  # fmt: skip
+
+
+def _slug(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text.translate(_TRANSLITERATE))
+    ascii_only = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-zA-Z0-9]+", "-", ascii_only).strip("-").lower()
+
+
 def _slugify(text: str) -> None:
-    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+    slug = _slug(text)
+    if not slug:
+        # e.g. Cyrillic/CJK: nothing survives, and pasting "" would delete the selection
+        import actions
+
+        actions.notify("Slugify", "Nothing in the selection can be written as a URL slug.")
+        return
     _copy(slug, "Slugified")
 
 
@@ -46,8 +64,16 @@ def _lower(text: str) -> None:
     _copy(text.lower(), "lowercase")
 
 
+_WORD_RE = re.compile(r"\w+(?:['’]\w+)*")
+
+
+def _title_case(text: str) -> str:
+    """str.title() turns "it's" into "It'S"; capitalise whole words instead."""
+    return _WORD_RE.sub(lambda m: m.group(0).capitalize(), text)
+
+
 def _title(text: str) -> None:
-    _copy(text.title(), "Title Case")
+    _copy(_title_case(text), "Title Case")
 
 
 # Predicates: only show a case button when clicking it would actually
@@ -68,7 +94,7 @@ def _not_already_lower(text: str) -> bool:
 
 
 def _not_already_title(text: str) -> bool:
-    return _has_letters(text) and text != text.title()
+    return _has_letters(text) and text != _title_case(text)
 
 
 def register(register_plugin) -> None:
