@@ -10,6 +10,7 @@ import threading
 import urllib.parse
 
 from classifier import _normalize as _strip_invisible
+from classifier import strip_shell_prompts
 
 # Thread-local 'force copy only' flag. When set, replace_selection
 # writes to the clipboard but skips the Ctrl+V step - the popup uses
@@ -373,14 +374,25 @@ def _spawn_terminal(argv: list[str], log) -> None:
         raise
 
 
-def _wrap_for_terminal(cmd: str) -> str:
+def _wrap_for_terminal(cmd: str, keep_open: bool | None = None) -> str:
     """Wrap a user command so the terminal echoes it first (looks like the
     user pasted it), then runs it, and optionally drops into an interactive
-    shell so output stays visible."""
+    shell so output stays visible.
+
+    The pieces are joined with newlines, not ';': a command ending in
+    '# comment' would otherwise comment out '; exec bash' and the
+    terminal closed straight away. A trailing backslash is dropped so it
+    can't continue the command onto the 'exec bash' line."""
+    if keep_open is None:
+        keep_open = _terminal_keep_open()
+    cmd = cmd.rstrip()
+    if cmd.endswith("\\"):
+        cmd = cmd[:-1].rstrip()
     echoed = shlex.quote(f"\033[1;32m$\033[0m {cmd}")
-    if _terminal_keep_open():
-        return f"printf '%s\\n' {echoed}; {cmd}; exec bash"
-    return f"printf '%s\\n' {echoed}; {cmd}"
+    wrapped = f"printf '%s\\n' {echoed}\n{cmd}"
+    if keep_open:
+        wrapped += "\nexec bash"
+    return wrapped
 
 
 def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
@@ -567,7 +579,10 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
 
 
 def run_in_terminal(text: str) -> None:
-    cmd = _strip_invisible(text)
+    # The classifier counts '$ cmd' / root '# cmd' lines as commands, so
+    # strip those prompts (and, in a copied session, the output lines)
+    # before bash sees them. The confirm dialog shows the cleaned text.
+    cmd = strip_shell_prompts(_strip_invisible(text))
     found = _find_terminal()
     if not found:
         print("[actions] no terminal emulator found")
