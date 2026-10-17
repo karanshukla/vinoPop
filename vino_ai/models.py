@@ -206,6 +206,18 @@ def ensure_llm(
     return path
 
 
+def prefetch_consented(settings) -> bool:
+    """True when the user agreed to download the model at startup. A True
+    ai_prefetch_model without ai_prefetch_asked is the old default, which
+    save() wrote into every settings.json; it still counts when a model is
+    already on disk, so installs that had prefetched carry on as before."""
+    if not settings.get("ai_prefetch_model"):
+        return False
+    if settings.get("ai_prefetch_asked"):
+        return True
+    return any(is_downloaded(m) for m in LLM_MODELS.values())
+
+
 def prefetch(
     on_done: Callable[[LlmModel, str | None], None] | None = None,
 ) -> threading.Thread | None:
