@@ -50,7 +50,17 @@ def _timestamp_convert(text: str) -> None:
         return
     except (ValueError, OSError, OverflowError):
         pass
-    # Try as ISO date / RFC-ish
+    # ISO 8601 first: handles the "Z" suffix and fractional seconds that the
+    # predicate lets through but the strptime formats below do not.
+    try:
+        when = dt.datetime.fromisoformat(s)
+    except ValueError:
+        pass
+    else:
+        if when.tzinfo is None:
+            when = when.astimezone()
+        _copy(str(int(when.timestamp())), f"To epoch from {s}")
+        return
     for fmt in (
         "%Y-%m-%dT%H:%M:%S%z",
         "%Y-%m-%dT%H:%M:%S",
@@ -84,7 +94,7 @@ def _timestamp_convert(text: str) -> None:
 
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _RGB_RE = re.compile(r"^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$", re.IGNORECASE)
-_HSL_RE = re.compile(r"^hsl\(\s*\d{1,3}\s*,\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*\)$", re.IGNORECASE)
+_HSL_RE = re.compile(r"^hsl\(\s*(\d{1,3})\s*,\s*(\d{1,3})%?\s*,\s*(\d{1,3})%?\s*\)$", re.IGNORECASE)
 # ISO-ish date shapes the timestamp converter accepts.
 _ISO_DATE_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?([+\-]\d{2}:?\d{2}|Z)?)?$"
@@ -121,7 +131,7 @@ def _looks_like_color(text: str) -> bool:
 
 
 def _color_convert(text: str) -> None:
-    """#hex ↔ rgb(r,g,b)."""
+    """#hex ↔ rgb(r,g,b); hsl(h,s%,l%) → #hex."""
     s = text.strip()
     m = _HEX_RE.match(s)
     if m:
@@ -136,6 +146,17 @@ def _color_convert(text: str) -> None:
         r, g, b = (max(0, min(255, int(v))) for v in m.groups())
         _copy(f"#{r:02x}{g:02x}{b:02x}", "rgb → hex")
         return
+    m = _HSL_RE.match(s)
+    if m:
+        import colorsys
+
+        h, sat, light = int(m.group(1)) % 360, int(m.group(2)), int(m.group(3))
+        r, g, b = (
+            round(v * 255)
+            for v in colorsys.hls_to_rgb(h / 360, min(light, 100) / 100, min(sat, 100) / 100)
+        )
+        _copy(f"#{r:02x}{g:02x}{b:02x}", "hsl → hex")
+        return
     subprocess.run(
         [
             "notify-send",
@@ -145,7 +166,7 @@ def _color_convert(text: str) -> None:
             "-i",
             "dialog-error",
             "Color converter",
-            "Couldn't recognise as #hex or rgb(r,g,b)",
+            "Couldn't recognise as #hex, rgb(r,g,b) or hsl(h,s%,l%)",
         ],
         check=False,
     )

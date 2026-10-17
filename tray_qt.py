@@ -24,7 +24,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, HICOLOR_APPS
 
 ICON_DIR = str(Path(__file__).resolve().parent / "icons")
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -177,7 +177,7 @@ class TrayQt:
     def _install_icon(self) -> None:
         import shutil
 
-        user_dir = Path.home() / ".local/share/icons/hicolor/scalable/apps"
+        user_dir = HICOLOR_APPS
         user_dir.mkdir(parents=True, exist_ok=True)
         for name in ("vinopop-tray-symbolic", "vinopop"):
             src = Path(ICON_DIR) / f"{name}.svg"

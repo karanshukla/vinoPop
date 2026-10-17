@@ -64,9 +64,22 @@ def _encode(text: str) -> None:
     _notify("Base64 encoded", f"Copied ({len(enc)} chars): {enc[:80]}")
 
 
+def _decode_base64(text: str) -> str:
+    """Decode standard or URL-safe base64, tolerating wrapped lines and
+    missing padding. Raises ValueError for non-base64 or non-text payloads."""
+    compact = "".join(text.split()).replace("-", "+").replace("_", "/")
+    compact += "=" * (-len(compact) % 4)
+    raw = base64.b64decode(compact, validate=True)
+    return raw.decode("utf-8")
+
+
 def _decode(text: str) -> None:
     try:
-        dec = base64.b64decode(text.strip(), validate=True).decode("utf-8", errors="replace")
+        dec = _decode_base64(text)
+    except UnicodeDecodeError:
+        # Pasting replacement characters over the selection would destroy it
+        _notify("Base64 decoded", "The data isn't text (binary), so nothing was replaced.")
+        return
     except Exception as exc:  # noqa: BLE001
         _notify("Base64 error", f"Could not decode: {exc}")
         return

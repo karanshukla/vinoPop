@@ -52,7 +52,7 @@ def _sha256(text: str) -> None:
 
 
 def _md5(text: str) -> None:
-    digest = hashlib.md5(text.encode("utf-8")).hexdigest()
+    digest = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
     _copy_and_notify(digest, "MD5")
 
 
@@ -97,6 +97,8 @@ def _jwt_decode(text: str) -> None:
             check=False,
         )
         return
+    if not isinstance(header, dict):
+        header = {}
     pretty = json.dumps(payload, indent=2, ensure_ascii=False)
     import actions
 

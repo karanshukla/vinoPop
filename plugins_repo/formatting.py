@@ -1,4 +1,4 @@
-"""Bold / Italic / Underline / Strikethrough - rich-text formatting.
+"""Bold / Italic / Underline - rich-text formatting.
 
 Standard Ctrl-key shortcuts that work in almost every modern rich-text
 editor (Google Docs, Word, LibreOffice, Notion, Obsidian, GitHub

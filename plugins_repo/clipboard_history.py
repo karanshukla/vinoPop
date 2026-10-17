@@ -1286,7 +1286,7 @@ def _capture_current_clipboard() -> None:
             if data:
                 import hashlib
 
-                h = hashlib.sha1(data).digest()
+                h = hashlib.sha1(data, usedforsecurity=False).digest()
                 if h != _state["last_image_hash"]:
                     _state["last_image_hash"] = h
                     _save_dedup_state(h)

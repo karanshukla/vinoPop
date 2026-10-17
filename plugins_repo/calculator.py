@@ -83,8 +83,6 @@ _FUNCS = {
 def _eval(node):
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
-    if isinstance(node, ast.Num):  # py<3.12
-        return node.n
     if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
         left = _eval(node.left)
         right = _eval(node.right)
@@ -104,10 +102,20 @@ def _eval(node):
     raise ValueError(f"not allowed: {ast.dump(node)}")
 
 
+def _format_result(result) -> str:
+    """Trim float noise (0.1 + 0.2 -> 0.3) while leaving integers exact."""
+    if isinstance(result, float) and math.isfinite(result):
+        if result.is_integer() and abs(result) < 1e15:
+            return str(int(result))
+        return format(result, ".15g")
+    return str(result)
+
+
 def _calc(text: str) -> None:
     expr = text.strip()
     try:
-        tree = ast.parse(expr, mode="eval")
+        # People write 2^8 meaning a power; in Python ^ is XOR
+        tree = ast.parse(expr.replace("^", "**"), mode="eval")
         result = _eval(tree.body)
     except Exception as exc:  # noqa: BLE001
         subprocess.run(
@@ -124,7 +132,7 @@ def _calc(text: str) -> None:
             check=False,
         )
         return
-    result_str = str(result)
+    result_str = _format_result(result)
     # Replace "2+2" with "4" in place, fallback to clipboard-only.
     import actions
 
@@ -136,7 +144,7 @@ def _calc(text: str) -> None:
             "-t",
             "2500",
             "-i",
-            "accessories-calculator",
+            "vinopop-calculator",
             "Result",
             f"{expr} = {result_str}",
         ],

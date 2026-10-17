@@ -10,14 +10,31 @@ so the user doesn't have to know where the file lives or edit it by hand.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
-AUTOSTART_DIR = Path(os.path.expanduser("~/.config/autostart"))
+from xdg_paths import CONFIG_HOME
+
+AUTOSTART_DIR = CONFIG_HOME / "autostart"
 AUTOSTART_FILE = AUTOSTART_DIR / "vinopop.desktop"
 # Written by releases from before the rename to vinoPop.
 LEGACY_AUTOSTART_FILE = AUTOSTART_DIR / "linuxpop.desktop"
+
+
+def _exec_quote(arg: str) -> str:
+    """One argument of a Desktop Entry `Exec=` line.
+
+    The spec has no single quotes: an argument with spaces or shell-special
+    characters is wrapped in double quotes, with `"`, backtick, `$` and `\\`
+    backslash-escaped, and the whole value is then a string whose backslashes
+    are escaped again. `%` introduces field codes, so a literal one is doubled.
+    """
+    arg = arg.replace("%", "%%")
+    if arg and not any(c in arg for c in " \t\n\"'\\><~|&;$*?#()`%"):
+        return arg
+    for ch in ("\\", '"', "`", "$"):
+        arg = arg.replace(ch, "\\" + ch)
+    return '"' + arg.replace("\\", "\\\\") + '"'
 
 
 def _desktop_file_contents(exec_path: str) -> str:
@@ -56,11 +73,9 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
             # Quote the path so checkouts in directories with spaces
             # (e.g. ~/My Code/vinopop/) don't produce a broken Exec line
             # that the DE silently fails to launch.
-            from shlex import quote as _q
-
             # The running interpreter, so a venv that holds the AI
             # packages keeps being used at login.
-            exec_line = f"{_q(sys.executable)} {_q(str(main_py))}"
+            exec_line = f"{_exec_quote(sys.executable)} {_exec_quote(str(main_py))}"
             AUTOSTART_FILE.write_text(
                 _desktop_file_contents(exec_line),
                 encoding="utf-8",
