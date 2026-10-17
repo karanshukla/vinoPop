@@ -225,6 +225,39 @@ def test_llm_warns_when_npu_fails_and_another_device_loads(monkeypatch, tmp_path
     assert notes and notes[0][0] == "notify-send"
 
 
+def test_llm_falls_back_when_npu_compile_times_out_then_moves_back(monkeypatch, tmp_path):
+    import threading
+
+    release, seen = threading.Event(), []
+
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **_props):
+            if dev == "NPU":
+                release.wait(5)
+            return dev
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm, "_late", None)
+    monkeypatch.setattr(llm, "_load_timeout", lambda: 0.05)
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
+    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: None)
+    assert llm._load(seen.append) == "GPU"
+    assert any("still compiling" in m for m in seen)
+
+    release.set()
+    for _ in range(100):
+        if llm._late is not None:
+            break
+        threading.Event().wait(0.01)
+    assert llm._load(seen.append) == "NPU"
+    assert llm.device() == "NPU"
+
+
 def test_llm_run_rejects_unknown_task():
     with pytest.raises(ValueError):
         llm.run("poem", "text")

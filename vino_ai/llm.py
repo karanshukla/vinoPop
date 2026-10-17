@@ -25,6 +25,10 @@ log = logging.getLogger("vinopop")
 # the instruction and chat template.
 MAX_INPUT_CHARS = 8000
 MAX_PROMPT_LEN = 3072
+# Seconds to wait for one device before trying the next. A first NPU
+# compile of a big model can take minutes; it carries on in the background
+# (see _construct) instead of holding the click hostage.
+LOAD_TIMEOUT = 120.0
 
 _PROMPTS = {
     "summarize": (
@@ -50,11 +54,61 @@ _MAX_NEW_TOKENS = {"summarize": 200, "rewrite": 600, "explain": 300, "translate"
 _lock = threading.Lock()
 _pipe = None
 _pipe_key: tuple[str, str] | None = None  # (model key, device)
+_late: tuple[object, tuple[str, str]] | None = None  # finished after its timeout
+
+
+def _load_timeout() -> float:
+    try:
+        from settings import get_settings
+
+        return float(get_settings().get("ai_load_timeout_seconds") or LOAD_TIMEOUT)
+    except Exception:
+        return LOAD_TIMEOUT
+
+
+def _construct(cls, path, dev: str, props: dict, key: tuple[str, str], timeout: float):
+    """Build the pipeline on a helper thread and stop waiting after
+    `timeout` seconds. A native compile can't be cancelled, so a slow one
+    keeps going: it fills the compile cache either way, and on success it
+    is parked in _late and swapped in on the next run."""
+    state: dict[str, object] = {}
+    guard = threading.Lock()
+    finished = threading.Event()
+
+    def work():
+        global _late
+        try:
+            state["pipe"] = cls(str(path), dev, **props)
+        except Exception as exc:  # noqa: BLE001 - re-raised in the caller
+            state["error"] = exc
+        with guard:
+            finished.set()
+            if state.get("abandoned") and "pipe" in state:
+                log.info("[vino_ai] LLM finished compiling on %s, using it from the next run", dev)
+                _late = (state["pipe"], key)
+
+    threading.Thread(target=work, name=f"vino-ai-load-{dev}", daemon=True).start()
+    finished.wait(timeout)
+    with guard:
+        if not finished.is_set():
+            state["abandoned"] = True
+            raise TimeoutError(
+                f"still compiling after {timeout:.0f}s (first run only), finishing in the background"
+            )
+    if "error" in state:
+        raise state["error"]  # type: ignore[misc]
+    return state["pipe"]
 
 
 def _load(on_status: Callable[[str], None]):
-    global _pipe, _pipe_key
+    global _pipe, _pipe_key, _late
     model = models.llm_model()
+    if _late is not None:
+        late, _late = _late, None
+        if late[1][0] == model.key:
+            log.info("[vino_ai] LLM moved to %s", late[1][1])
+            _pipe, _pipe_key = late
+            return _pipe
     if _pipe is not None and _pipe_key and _pipe_key[0] == model.key:
         return _pipe
     if not models.is_downloaded(model):
@@ -66,6 +120,7 @@ def _load(on_status: Callable[[str], None]):
     cache = CACHE_DIR / "ov-cache"
     cache.mkdir(parents=True, exist_ok=True)
     errors = []
+    timeout = _load_timeout()
     for dev in devices.candidates(devices.LLM_ORDER):
         on_status(f"Loading model on {dev}…")
         props: dict[str, object] = {"CACHE_DIR": str(cache)}
@@ -73,9 +128,10 @@ def _load(on_status: Callable[[str], None]):
             props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=512)
         try:
             if (path / "openvino_model.xml").is_file():
-                pipe = ov_genai.LLMPipeline(str(path), dev, **props)
+                cls = ov_genai.LLMPipeline
             else:  # multimodal export (Gemma 4): text-only use of the VLM pipeline
-                pipe = ov_genai.VLMPipeline(str(path), dev, **props)
+                cls = ov_genai.VLMPipeline
+            pipe = _construct(cls, path, dev, props, (model.key, dev), timeout)
         except Exception as exc:  # noqa: BLE001 - try the next device
             log.warning("[vino_ai] LLM on %s failed: %s", dev, exc)
             errors.append(f"{dev}: {exc}")
@@ -91,7 +147,10 @@ def _load(on_status: Callable[[str], None]):
 def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -> None:
     """The NPU is the point of vinoPop: say so loudly when the model ended
     up somewhere slower and hotter."""
-    msg = f"The NPU couldn't load the model, so it's running on {dev} (slower, warmer)."
+    if "still compiling" in npu_error:
+        msg = f"The NPU is still compiling the model, so it's running on {dev} until that's done."
+    else:
+        msg = f"The NPU couldn't load the model, so it's running on {dev} (slower, warmer)."
     log.warning("[vino_ai] %s %s", msg, npu_error)
     on_status(msg)
     try:
