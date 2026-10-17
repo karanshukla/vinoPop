@@ -151,8 +151,16 @@ def _cfg(key: str, default):
 # Live setters - read on each call so slider changes / settings.json
 # edits take effect without a daemon restart. The old module-level
 # snapshot froze these at import time.
+def _cfg_number(key: str, default, kind):
+    """_cfg() for a number: a hand-edited non-number falls back to `default`
+    instead of raising in the watcher (#24)."""
+    from settings import as_number
+
+    return as_number(key, _cfg(key, default), kind, default)
+
+
 def _history_size() -> int:
-    return max(1, int(_cfg("clipboard_history_size", 25)))
+    return max(1, _cfg_number("clipboard_history_size", 25, int))
 
 
 def _capture_images() -> bool:
@@ -160,7 +168,7 @@ def _capture_images() -> bool:
 
 
 def _poll_interval() -> float:
-    return max(0.1, float(_cfg("clipboard_poll_interval", 0.5)))
+    return max(0.1, _cfg_number("clipboard_poll_interval", 0.5, float))
 
 
 # Kept for backwards compat with the startup log line. These constants

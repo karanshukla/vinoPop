@@ -3,12 +3,17 @@
 Lives at ~/.config/vinopop/settings.json. Missing file or missing keys
 fall back to defaults. Unknown keys in the file are preserved on save so
 the user can hand-edit and add comments-as-keys.
+
+Only keys the user set are written, so a default changed in a later release
+reaches everyone who never touched it. Files from before that held every
+default; they're thinned once on load, see Settings._migrate().
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -267,10 +272,62 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+# Bumped when the file needs a one-off migration on load. 1: the file holds
+# only keys the user set, not every default.
+SETTINGS_VERSION = 1
+VERSION_KEY = "_settings_version"
+
+# Kept as stored by the version-1 migration even when they equal today's
+# default: consent and privacy switches, where the stored value may be an
+# answer the user gave, and a later default flip mustn't override it.
+# ai_prefetch_model's old default (True) is also read on purpose by
+# vino_ai.models.prefetch_consented (PR #47), so it has to stay put.
+_KEEP_ON_MIGRATION = frozenset(
+    {
+        "ai_prefetch_model",
+        "ai_prefetch_asked",
+        "openvino_telemetry",
+        "openvino_telemetry_file_owned",
+        "clipboard_history_enabled",
+        "clipboard_history_images",
+        "double_click_popup_enabled",
+        "snippet_triggers_enabled",
+        "snippet_shell_enabled",
+        "editable_atspi_listener_enabled",
+    }
+)
+
+
+def _current(version: Any) -> bool:
+    return type(version) is int and version >= SETTINGS_VERSION
+
+
+def _same(a: Any, b: Any) -> bool:
+    # type() too, so a hand-written 1 isn't taken for the default True
+    return type(a) is type(b) and a == b
+
+
+def as_number(key: str, value: Any, kind: type[int] | type[float], fallback: Any) -> Any:
+    """`value` as an int or float, or `fallback` (with a log line) when a
+    hand edit made it something else: text, true/false, null, NaN."""
+    try:
+        if isinstance(value, bool):
+            raise ValueError("true/false isn't a number")
+        num = kind(value)
+        if not math.isfinite(num):
+            raise ValueError("not a finite number")
+        return num
+    except (TypeError, ValueError, OverflowError) as exc:
+        print(f"[settings] {key} = {value!r} isn't usable ({exc}), using {fallback!r}")
+        return fallback
+
+
 class Settings:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
         self._data: dict[str, Any] = {}
+        # Set when reload() migrated the file; ensure_written() saves it.
+        self._migrated = False
         self.reload()
 
     def reload(self) -> None:
@@ -281,11 +338,34 @@ class Settings:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     self._data = loaded
+                    self._migrate()
                 else:
                     print(f"[settings] {self.path} is not a JSON object, ignoring")
-            except (OSError, json.JSONDecodeError) as exc:
+                    self._keep_backup()
+            # ValueError covers JSONDecodeError and UnicodeDecodeError (a
+            # hand edit saved as latin-1).
+            except (OSError, ValueError) as exc:
                 print(f"[settings] failed to read {self.path}: {exc}")
                 self._keep_backup()
+
+    def _migrate(self) -> None:
+        """Bring a file from an older version up to SETTINGS_VERSION.
+
+        Before version 1, save() wrote every default into the file, so a
+        stored value equal to today's default is almost always one the user
+        never chose. Those are dropped, once, so later default changes reach
+        them. The cost: a user who deliberately picked what is also the
+        default reads the same value today but follows the default if a
+        later release changes it."""
+        if _current(self._data.get(VERSION_KEY)):
+            return
+        for key, default in DEFAULTS.items():
+            if key in _KEEP_ON_MIGRATION or key not in self._data:
+                continue
+            if _same(self._data[key], default):
+                del self._data[key]
+        self._data[VERSION_KEY] = SETTINGS_VERSION
+        self._migrated = True
 
     def _keep_backup(self) -> None:
         """Park an unreadable file next to itself: the next save() would
@@ -307,12 +387,31 @@ class Settings:
             return copy.deepcopy(DEFAULTS[key])
         return default
 
+    def get_int(self, key: str) -> int:
+        """get() for a numeric setting that has a default in DEFAULTS. A
+        hand-edited value that isn't a number falls back to the default,
+        with a log line, instead of raising in whoever reads it."""
+        return int(as_number(key, self.get(key), int, DEFAULTS[key]))
+
+    def get_float(self, key: str) -> float:
+        """get_int() for a float setting."""
+        return float(as_number(key, self.get(key), float, DEFAULTS[key]))
+
     def set(self, key: str, value: Any) -> None:
         self._data[key] = value
 
+    def reset(self) -> None:
+        """Forget every preference (unknown keys too). Nothing is saved
+        until save()."""
+        self._data = {VERSION_KEY: SETTINGS_VERSION}
+
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        merged = {**DEFAULTS, **self._data}
+        # Only what the user set, so a later change to a default reaches them.
+        merged = dict(self._data)
+        if not _current(merged.get(VERSION_KEY)):
+            merged[VERSION_KEY] = SETTINGS_VERSION
+        self._migrated = False
         # Atomic write: write to tmp, fsync, then rename. Avoids losing
         # all settings if the process dies (OOM, power) mid-write.
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -327,10 +426,22 @@ class Settings:
         os.replace(tmp, self.path)
 
     def ensure_written(self) -> None:
-        """Write defaults to disk if the file doesn't exist yet."""
+        """Create the file if it doesn't exist yet (it holds no defaults,
+        only the version), or save it once reload() has migrated it so the
+        migration runs only once."""
         if not self.path.is_file():
             self.save()
-            print(f"[settings] wrote defaults to {self.path}")
+            print(f"[settings] created {self.path}")
+        elif self._migrated:
+            # The old file, for anyone who wants to see what was dropped.
+            old = self.path.with_suffix(self.path.suffix + f".pre-v{SETTINGS_VERSION}")
+            try:
+                if not old.exists():
+                    shutil.copy2(self.path, old)
+            except OSError:
+                pass
+            self.save()
+            print(f"[settings] dropped stored defaults from {self.path}, old file at {old}")
 
 
 # Module-level singleton for convenience

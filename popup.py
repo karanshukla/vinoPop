@@ -761,7 +761,7 @@ class PopupWindow:
         try:
             from settings import get_settings as _gs
 
-            max_btns = int(_gs().get("max_popup_buttons") or 10)
+            max_btns = _gs().get_int("max_popup_buttons") or 10
         except Exception:
             max_btns = 10
         hidden_count = 0
