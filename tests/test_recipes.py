@@ -85,46 +85,317 @@ def _run(template):
     return {"name": "x", "action": {"type": "run_command", "template": template}}
 
 
+@pytest.fixture
+def fake_desktop(tmp_path, monkeypatch):
+    """Runs a recipe's command for real, synchronously, with notify-send and
+    xdg-open replaced by scripts that log their argv. Returns run(handler,
+    text) -> (logged argv lines, stdout)."""
+    import os
+    import subprocess
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "argv.log"
+    for name in ("notify-send", "xdg-open"):
+        script = bin_dir / name
+        script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{log}'\n")
+        script.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    real_popen = subprocess.Popen
+    out = []
+
+    def popen(argv, **_kw):
+        with real_popen(argv, env=env, stdout=subprocess.PIPE, text=True) as proc:
+            out.append(proc.communicate(timeout=10)[0])
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    def run(handler, text):
+        handler(text)
+        logged = log.read_text().splitlines() if log.exists() else []
+        return logged, "".join(out)
+
+    return run
+
+
+@pytest.fixture
+def snippet_values(monkeypatch):
+    """A snippet engine whose {selection}, {clipboard} and {ask:} come from a
+    dict, like attacker-controlled PRIMARY, clipboard or a typed answer."""
+    values = {}
+
+    def render_placeholders(text, ask):
+        for token, value in values.items():
+            text = text.replace(token, value)
+        return text, 0, False
+
+    module = types.SimpleNamespace(render_placeholders=render_placeholders)
+    monkeypatch.setitem(sys.modules, "clipboard_history", module)
+    return values
+
+
+@pytest.mark.parametrize(
+    ("template", "token"),
+    [
+        ("echo {selection}", "{selection}"),
+        ("echo {clipboard}", "{clipboard}"),
+        ("echo {ask:Name}", "{ask:Name}"),
+        ('notify-send "{selection}"', "{selection}"),
+    ],
+)
+def test_selection_clipboard_and_ask_values_never_run(
+    template, token, tmp_path, fake_desktop, snippet_values
+):
+    canary = tmp_path / "PWNED"
+    payload = f"x; touch {canary}; y$(touch {canary})`touch {canary}`"
+    snippet_values[token] = payload
+    recipe = _run(template)
+    assert recipe_loader.validate(recipe) == []
+    assert recipe_loader.safety_errors(recipe) == []
+    logged, stdout = fake_desktop(recipe_loader._build_handler(recipe), "hi")
+    assert not canary.exists()
+    assert payload in (logged + [stdout.rstrip("\n")])
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        'notify-send "{text_shell}"',
+        "notify-send '{text_shell}'",
+        "notify-send {text_shell}",
+        "notify-send {text}",
+        "notify-send {text_upper}",
+        'notify-send "$(echo {text})"',
+        "notify-send `echo {text_shell}`",
+        "cat <<EOF\n{text_shell}\nEOF",
+        "cat <<-EOF\n\t{text}\n\tEOF",
+    ],
+)
+def test_quoting_in_the_template_never_lets_the_selection_run(template, tmp_path, fake_desktop):
+    canary = tmp_path / "PWNED"
+    for payload in (
+        f"$(touch {canary})",
+        f"`touch {canary}`",
+        f"x; touch {canary}",
+        f"x' ; touch {canary} ; '",
+        f'x" ; touch {canary} ; "',
+        f"EOF\ntouch {canary}\nEOF",
+    ):
+        recipe = _run(template)
+        assert recipe_loader.safety_errors(recipe) == [], template
+        fake_desktop(recipe_loader._build_handler(recipe), payload)
+        assert not canary.exists(), (template, payload)
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ('notify-send "{text_shell}"', ["a b's $HOME"]),
+        ("notify-send {text_shell}", ["a b's $HOME"]),
+        ("notify-send {text}", ["a b's $HOME"]),
+        ("notify-send 'You selected:' {text}", ["You selected:", "a b's $HOME"]),
+        ("notify-send 'say {text}!'", ["say a b's $HOME!"]),
+        ('notify-send "[{text_upper}]"', ["[A B'S $HOME]"]),
+        ("xdg-open https://x/?q={text_url}", ["https://x/?q=a%20b%27s%20%24HOME"]),
+        ("xdg-open {text} {text}", ["a b's $HOME", "a b's $HOME"]),
+    ],
+)
+def test_commands_get_the_value_as_one_argument(template, expected, fake_desktop):
+    logged, _ = fake_desktop(recipe_loader._build_handler(_run(template)), "a b's $HOME")
+    assert logged == expected
+
+
+def test_echo_text_prints_the_selection(fake_desktop):
+    _, stdout = fake_desktop(recipe_loader._build_handler(_run("echo {text}")), "a  *  b")
+    assert stdout == "a  *  b\n"
+    _, stdout = fake_desktop(
+        recipe_loader._build_handler(_run("cat <<EOF\n{text_shell}\nEOF")), "$(id)"
+    )
+    assert stdout.endswith("$(id)\n")
+
+
+def test_command_argv_keeps_the_values_out_of_the_script():
+    argv = recipe_loader._command_argv("echo {text} {text_shell} {text_url}", "a;b")
+    assert argv == [
+        "bash",
+        "-c",
+        'vinopop_1=$1 vinopop_2=$2 vinopop_3=$3; echo "${vinopop_1}" "${vinopop_2}" "${vinopop_3}"',
+        "vinopop",
+        "a;b",
+        "a;b",
+        "a%3Bb",
+    ]
+    # the same placeholder twice is one argument
+    assert recipe_loader._command_argv("echo {text}{text}", "a")[2:] == [
+        'vinopop_1=$1; echo "${vinopop_1}""${vinopop_1}"',
+        "vinopop",
+        "a",
+    ]
+
+
+def test_a_function_or_set_in_the_template_cant_shadow_the_value(fake_desktop):
+    for template in ("f() {{ notify-send {text}; }}; f", "set -- other; notify-send {text}"):
+        logged, _ = fake_desktop(recipe_loader._build_handler(_run(template)), "sel")
+        assert logged[-1] == "sel", template
+
+
+def test_command_preview_shows_the_effective_command():
+    preview = recipe_loader.command_preview
+    assert preview("notify-send {text}", "it's") == "notify-send 'it'\"'\"'s'"
+    assert preview('notify-send "{text}"', 'say "$x"') == 'notify-send "say \\"\\$x\\""'
+    assert preview("xdg-open https://x/?q={text_url}", "a b") == "xdg-open https://x/?q=a%20b"
+
+
 @pytest.mark.parametrize(
     "template",
     [
         "xdg-open {text_shell}",
+        "echo {text}",
         "echo {text_url}",
         "echo {text_b64} | base64 -d",
+        "echo {text_json} {selection} {clipboard} {ask:Label}",
         "notify-send hi",
+        "jq '{{text: .a}}'",  # escaped braces aren't a field
+        "echo {unknown}",
     ],
 )
-def test_quoted_placeholders_are_accepted_in_commands(template):
+def test_placeholders_are_accepted_in_commands(template):
     assert recipe_loader.safety_errors(_run(template)) == []
 
 
 @pytest.mark.parametrize(
     "template",
     [
-        "echo {text}",
-        "echo {text_upper}",
-        "echo {text_json}",  # not quoted either, though the old denylist missed it
-        "echo {text_url_decode}",
-        "echo {text_b64_decode}",
-        "echo {text!s}",  # a conversion still substitutes the raw selection
+        "echo {text!s}",  # a conversion or spec would change the value
         "echo {text:>10}",
+        "echo {text_shell:.3}",
+        "echo {text[0]}",
+        "echo $(( {text} + 1 ))",  # arithmetic evaluates a[$(cmd)]
+        "(( {text} > 1 )) && echo big",
+        'echo "$(({text}))"',
+        "cat <<'EOF'\n{text}\nEOF",  # nothing expands in a quoted heredoc
+        'let "x = {text} + 1"',  # quoting doesn't help in arithmetic
+        "declare -x -i x={text}",
     ],
 )
-def test_unquoted_placeholders_are_refused_in_commands(template):
+def test_templates_that_would_change_or_evaluate_the_value_are_refused(template):
     assert recipe_loader.safety_errors(_run(template))
+
+
+# Spots where bash evaluates an operand as arithmetic, and so runs a[$(cmd)]
+# even from a quoted reference. Each is a real hole if the value went there.
+_ARITHMETIC_TEMPLATES = [
+    "echo $(( {text} + 1 ))",
+    "(( {text} > 1 )) && echo big",
+    "echo $[{text}+1]",
+    "[[ {text} -eq 1 ]] && echo one",
+    '[[ "{text}" -lt 5 ]]',
+    "if [[ -n x && {text} -gt 0 ]]; then echo y; fi",
+    "let x={text}",
+    "let x+={text}",
+    "declare -i x={text}",
+    "typeset -i x={text}",
+    "f() {{ local -i x={text}; }}; f",
+    "declare -ai a=({text})",
+    "a=(1 2); echo ${{a[{text}]}}",
+    'a=(1 2); echo "${{a[{text}]}}"',
+    "a=(); a[{text}]=1",
+]
+
+
+@pytest.mark.parametrize("template", _ARITHMETIC_TEMPLATES)
+def test_arithmetic_spots_are_refused_and_never_run(template, tmp_path, request, monkeypatch):
+    import subprocess
+
+    canary = tmp_path / "PWNED"
+    payload = f"a[$(touch {canary})]"
+    # The hole is real: rendered without the check, bash runs the payload
+    with monkeypatch.context() as m:
+        m.setattr(recipe_loader, "_field_problem", lambda *a: None)
+        argv = recipe_loader._command_argv(template, payload)
+    subprocess.run(argv, capture_output=True, timeout=10)
+    assert canary.exists(), argv
+    canary.unlink()
+    # ...so the recipe is refused, and clicking it runs nothing
+    assert recipe_loader.safety_errors(_run(template))
+    monkeypatch.setattr(recipe_loader, "notify", lambda *a, **kw: None)
+    fake_desktop = request.getfixturevalue("fake_desktop")  # patches Popen from here on
+    fake_desktop(recipe_loader._build_handler(_run(template)), payload)
+    assert not canary.exists()
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "[ {text} -eq 1 ] && echo one",  # [ / test don't evaluate expressions
+        "test {text} -gt 0",
+        "echo let {text}",  # only as the command word
+        "declare x={text}; echo $x",
+        "let x=1; echo {text}",
+        "echo [{text}]",
+        'notify-send "[{text_upper}]"',
+        "echo {text}; [[ -z x ]]",
+    ],
+)
+def test_lookalikes_of_arithmetic_spots_still_run_safely(template, tmp_path, fake_desktop):
+    canary = tmp_path / "PWNED"
+    assert recipe_loader.safety_errors(_run(template)) == []
+    fake_desktop(recipe_loader._build_handler(_run(template)), f"a[$(touch {canary})]")
+    assert not canary.exists()
+
+
+def test_escaped_braces_render_as_literals_in_a_command():
+    assert recipe_loader._command_argv("jq '{{text: .a}}'", "x")[2] == "jq '{text: .a}'"
+
+
+def test_a_nul_in_a_template_is_refused():
+    # The old renderer used \x00name\x00 as an internal marker: a template
+    # containing one passed every check and then received the raw selection.
+    recipe = _run("echo \x00text\x00")
+    assert any("NUL" in e for e in recipe_loader.validate(recipe))
+    assert recipe_loader.safety_errors(recipe)
+    chain = {"name": "x", "action": {"type": "chain", "steps": [{"template": "\x00text\x00"}]}}
+    assert any("NUL" in e for e in recipe_loader.validate(chain))
+
+
+def test_a_nul_in_the_selection_reports_an_error_instead_of_raising(monkeypatch):
+    import subprocess
+
+    notes = []
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: notes.append(argv))
+    recipe_loader._build_handler(_run("echo {text}"))("a\x00b")  # Popen raises ValueError
+    assert notes and "Recipe error" in notes[0]
 
 
 def test_chain_run_command_steps_are_checked_too():
     def chain(step):
         return {"name": "x", "action": {"type": "chain", "steps": [step]}}
 
-    assert recipe_loader.safety_errors(chain({"type": "run_command", "template": "echo {text}"}))
+    assert recipe_loader.safety_errors(chain({"type": "run_command", "template": "echo {text!r}"}))
     # an empty template would execute the selection itself
     assert recipe_loader.safety_errors(chain({"type": "run_command"}))
     assert not recipe_loader.safety_errors(
-        chain({"type": "run_command", "template": "echo {text_shell}"})
+        chain({"type": "run_command", "template": "echo {text}"})
     )
     assert not recipe_loader.safety_errors(chain({"type": "notify", "template": "{text}"}))
+
+
+def test_chain_run_command_step_gets_the_value_as_an_argument(tmp_path, fake_desktop):
+    canary = tmp_path / "PWNED"
+    recipe = {
+        "name": "x",
+        "action": {
+            "type": "chain",
+            "steps": [
+                {"type": "transform", "template": "{text_strip}"},
+                {"type": "run_command", "template": 'notify-send "{text_shell}"'},
+            ],
+        },
+    }
+    assert recipe_loader.safety_errors(recipe) == []
+    logged, _ = fake_desktop(recipe_loader._build_handler(recipe), f"  $(touch {canary})  ")
+    assert not canary.exists()
+    assert logged == [f"$(touch {canary})"]
 
 
 def test_an_unsafe_recipe_builds_a_handler_that_never_runs_the_command(monkeypatch):
@@ -134,7 +405,7 @@ def test_an_unsafe_recipe_builds_a_handler_that_never_runs_the_command(monkeypat
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: ran.append(a))
     notes = []
     monkeypatch.setattr(recipe_loader, "notify", lambda *a, **kw: notes.append(a))
-    handler = recipe_loader._build_handler(_run("echo {text}"))
+    handler = recipe_loader._build_handler(_run("echo {text:.3}"))
     handler("; rm -rf ~")
     assert ran == []
     assert notes and "disabled" in notes[0][0]

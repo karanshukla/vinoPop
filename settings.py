@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
 
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
@@ -101,6 +101,11 @@ DEFAULTS: dict[str, Any] = {
     # Capture image content too (not just text). PNG copies from
     # screenshot tools or browser drag-out land here as well.
     "clipboard_history_images": True,
+    # Copies bigger than this aren't kept in history (a 20 MB log would
+    # otherwise be rewritten to disk on every later copy). Text in KB,
+    # images in MB.
+    "clipboard_history_max_text_kb": 1024,
+    "clipboard_history_max_image_mb": 20,
     # Fallback poll interval when the XFixes selection-event path
     # isn't available. Most modern X servers do support XFixes so
     # this rarely fires.
@@ -150,6 +155,14 @@ DEFAULTS: dict[str, Any] = {
     # memory (~4 GB). The compile cache keeps the next load quick. 0 keeps
     # it loaded for the life of the daemon.
     "ai_idle_unload_minutes": 5.0,
+    # Let OpenVINO's bundled telemetry send Intel its anonymous usage stats
+    # (through Google Analytics; never your text). Off by default: vinoPop
+    # writes "0" to ~/intel/openvino_telemetry before the first OpenVINO
+    # import. See vino_ai/telemetry.py.
+    "openvino_telemetry": False,
+    # Set once vinoPop has written that file. A file it didn't write (from
+    # Intel's opt_in_out script) is left alone until the toggle is flipped.
+    "openvino_telemetry_file_owned": False,
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.
@@ -283,6 +296,7 @@ class Settings:
     def reload(self) -> None:
         self._data = {}
         if self.path.is_file():
+            make_private(self.path)  # files from older versions were 0644
             try:
                 with self.path.open("r", encoding="utf-8") as f:
                     loaded = json.load(f)
@@ -318,12 +332,12 @@ class Settings:
         self._data[key] = value
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.path.parent)
         merged = {**DEFAULTS, **self._data}
         # Atomic write: write to tmp, fsync, then rename. Avoids losing
         # all settings if the process dies (OOM, power) mid-write.
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
+        with open_private(tmp) as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
             f.write("\n")
             f.flush()

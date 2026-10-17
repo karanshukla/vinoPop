@@ -40,7 +40,7 @@ _ACTIONS = [
         # at the end - instantly shows where the selection will land.
         detail_placeholder="https://www.google.com/search?q={text_url}",
         insert_label="Insert the selected text here",
-        insert_token="{text_url}",  # URL-safe encoded
+        insert_text="{text_url}",  # URL-safe encoded
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Opens this address in your browser:",
         examples=[
@@ -60,23 +60,24 @@ _ACTIONS = [
         example="Open the selected file path in VS Code.",
         detail_prompt="What command should run?",
         # notify-send is a safe, instantly observable demo - runs without
-        # side-effects and shows the {text_shell} token in context so the
-        # user can see how to use it.
-        detail_placeholder="notify-send 'You selected:' {text_shell}",
+        # side-effects and shows the {text} token in context so the user
+        # can see how to use it. No quoting needed: a command gets every
+        # placeholder as an argument, never as shell source.
+        detail_placeholder="notify-send 'You selected:' {text}",
         insert_label="Insert the selected text here",
-        insert_token="{text_shell}",  # shell-quoted
+        insert_text="{text}",
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Runs this command in the background:",
         warning="Commands can change or delete files. Test with something harmless first.",
         examples=[
-            ("Open in default app", "xdg-open {text_shell}"),
-            ("Show notification", "notify-send 'You selected' {text_shell}"),
-            ("Open in VS Code", "code {text_shell}"),
-            ("Open folder in Files", 'xdg-open "$(dirname {text_shell})"'),
-            ("Speak aloud", "spd-say {text_shell}"),
+            ("Open in default app", "xdg-open {text}"),
+            ("Show notification", "notify-send 'You selected' {text}"),
+            ("Open in VS Code", "code {text}"),
+            ("Open folder in Files", 'xdg-open "$(dirname {text})"'),
+            ("Speak aloud", "spd-say {text}"),
             (
                 "Count characters",
-                "echo -n {text_shell} | wc -c | xargs -I N notify-send 'Length' 'N characters'",
+                "echo -n {text} | wc -c | xargs -I N notify-send 'Length' 'N characters'",
             ),
         ],
     ),
@@ -90,7 +91,7 @@ _ACTIONS = [
         # Show the {text} token inline so the placement is obvious.
         detail_placeholder="Selected: {text}",
         insert_label="Insert the selected text",
-        insert_token="{text}",
+        insert_text="{text}",
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Shows this notification:",
         examples=[
@@ -113,7 +114,7 @@ _ACTIONS = [
         # esoteric.
         detail_placeholder="=={text}==",
         insert_label="Insert the selected text",
-        insert_token="{text}",
+        insert_text="{text}",
         preview_label='If you select "hello world" and click your button:',
         preview_verb="Copies this to your clipboard:",
         examples=[
@@ -834,7 +835,7 @@ class RecipeWizard:
                 )
                 + " at the cursor."
             )
-            btn.connect("clicked", self._on_insert, spec["insert_token"])
+            btn.connect("clicked", self._on_insert, spec["insert_text"])
             inserter_row.append(btn)
         self._detail_container.append(inserter_row)
 
@@ -842,6 +843,8 @@ class RecipeWizard:
         # from the snippet engine. Inserting one of these drops a tag
         # like {date} or {clipboard} into the template at the cursor;
         # it gets resolved when the button is actually clicked, not now.
+        # In a command these are as safe as {text}: {clipboard} and
+        # {selection} reach bash as arguments, never as shell source.
         extra_label = _label(
             "Or insert a dynamic value (filled in when the button runs):",
             "dim-label",
@@ -979,6 +982,11 @@ class RecipeWizard:
         self._template_buffer.set_text(template)
         self._template_view.grab_focus()
 
+    def _command_preview(self) -> str:
+        # The command as it effectively runs, with the sample selection
+        # shell-quoted, rather than the raw text pasted into the template.
+        return recipe_loader.command_preview(self._state.get("template") or "", _SAMPLE_SELECTION)
+
     def _refresh_preview_result(self) -> None:
         if not hasattr(self, "_preview_result"):
             return
@@ -999,7 +1007,7 @@ class RecipeWizard:
         if spec["key"] == "open_url":
             self._preview_result.set_text(rendered.strip())
         elif spec["key"] == "run_command":
-            self._preview_result.set_text("$ " + rendered.strip())
+            self._preview_result.set_text("$ " + self._command_preview().strip())
         elif spec["key"] == "notify":
             self._preview_result.set_text(rendered.strip())
         else:
@@ -1111,7 +1119,7 @@ class RecipeWizard:
         result_lbl = _label("", "monospace", "accent", wrap=True)
         result_lbl.set_selectable(True)
         if spec["key"] == "run_command":
-            result_lbl.set_text("$ " + rendered.strip())
+            result_lbl.set_text("$ " + self._command_preview().strip())
         else:
             result_lbl.set_text(rendered.strip() or "(empty)")
         info.append(result_lbl)
