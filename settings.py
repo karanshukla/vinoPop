@@ -267,6 +267,12 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+# What "Reset to defaults" leaves alone: which plugins are switched off and
+# their button order belong to the Plugin Manager, and the reset dialog
+# promises installed plugins are kept.
+RESET_KEEPS = ("disabled_plugins", "plugin_order")
+
+
 class Settings:
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self.path = path
@@ -325,6 +331,14 @@ class Settings:
             except OSError:
                 pass
         os.replace(tmp, self.path)
+
+    def reset_to_defaults(self) -> None:
+        """Put every preference back to its default and save. Keys in
+        RESET_KEEPS are plugin choices made in the Plugin Manager, not
+        preferences, so they survive."""
+        kept = {k: self._data[k] for k in RESET_KEEPS if k in self._data}
+        self._data = {**copy.deepcopy(DEFAULTS), **kept}
+        self.save()
 
     def ensure_written(self) -> None:
         """Write defaults to disk if the file doesn't exist yet."""

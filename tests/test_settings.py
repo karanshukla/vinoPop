@@ -47,3 +47,27 @@ def test_write_defaults_flag_keeps_get_settings_read_only(tmp_path, monkeypatch)
     monkeypatch.setattr(settings, "Settings", lambda: Settings(tmp_path / "settings.json"))
     settings.get_settings()
     assert not (tmp_path / "settings.json").exists()
+
+
+def test_reset_keeps_plugin_choices_and_resets_preferences(tmp_path):
+    path = tmp_path / "settings.json"
+    s = Settings(path)
+    s.set("theme", "light")
+    s.set("show_on_selection", False)
+    s.set("disabled_plugins", ["paste-enter"])
+    s.set("plugin_order", ["copy", "search"])
+    s.reset_to_defaults()
+    assert s.get("theme") == DEFAULTS["theme"]
+    assert s.get("show_on_selection") == DEFAULTS["show_on_selection"]
+    assert s.get("disabled_plugins") == ["paste-enter"]
+    assert s.get("plugin_order") == ["copy", "search"]
+    on_disk = json.loads(path.read_text())
+    assert on_disk["theme"] == DEFAULTS["theme"]
+    assert on_disk["disabled_plugins"] == ["paste-enter"]
+
+
+def test_reset_does_not_alias_mutable_defaults(tmp_path):
+    s = Settings(tmp_path / "settings.json")
+    s.reset_to_defaults()
+    s._data["snippet_variables"]["a"] = "b"
+    assert DEFAULTS["snippet_variables"] == {}
