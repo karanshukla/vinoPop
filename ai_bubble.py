@@ -21,6 +21,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
+from platform_backend.monitors import monitor_at, to_logical  # noqa: E402
+
 log = logging.getLogger("vinopop")
 
 _CSS = """
@@ -94,20 +96,30 @@ def _backend():
         return None
 
 
-def _monitor_geometry(x: int, y: int) -> Gdk.Rectangle | None:
-    """Geometry of the monitor holding (x, y); GTK 4 has no
-    get_monitor_at_point, so walk the display's monitor list."""
+def _logical_anchor(x: int, y: int, is_logical: bool) -> tuple[float, float, Gdk.Rectangle | None]:
+    """The pointer in logical coords plus the geometry of the monitor
+    holding it. X11 root coords are physical, so on a HiDPI screen they are
+    divided by that monitor's scale (the same rule popup.py uses); KWin's
+    coords are already logical."""
     display = Gdk.Display.get_default()
     if display is None:
-        return None
-    monitors = display.get_monitors()
-    first = None
-    for i in range(monitors.get_n_items()):
-        geom = monitors.get_item(i).get_geometry()
-        first = first or geom
-        if geom.x <= x < geom.x + geom.width and geom.y <= y < geom.y + geom.height:
-            return geom
-    return first
+        return float(x), float(y), None
+    mon = monitor_at(display.get_monitors(), x, y, is_logical)
+    lx, ly = to_logical(x, y, mon, is_logical)
+    return lx, ly, (mon.get_geometry() if mon is not None else None)
+
+
+def _bubble_target(lx: float, ly: float, w: int, h: int, geom) -> tuple[int, int]:
+    """Top-left for a w x h bubble just below logical (lx, ly), centred on
+    it, flipped above when there's no room and kept on `geom`'s monitor."""
+    tx = int(lx - w / 2)
+    ty = int(ly + 24)
+    if geom is not None:
+        tx = max(geom.x + 4, min(tx, geom.x + geom.width - w - 4))
+        if ty + h > geom.y + geom.height - 4:
+            ty = int(ly - h - 24)
+        ty = max(geom.y + 4, ty)
+    return tx, ty
 
 
 class ResultBubble:
@@ -219,14 +231,9 @@ class ResultBubble:
     def _place(self, backend) -> None:
         _, nat = self.win.get_preferred_size()
         w, h = max(nat.width, 1), max(nat.height, 1)
-        geom = _monitor_geometry(self._x, self._y)
-        tx = int(self._x - w / 2)
-        ty = int(self._y + 24)
-        if geom is not None:
-            tx = max(geom.x + 4, min(tx, geom.x + geom.width - w - 4))
-            if ty + h > geom.y + geom.height - 4:
-                ty = int(self._y - h - 24)
-            ty = max(geom.y + 4, ty)
+        is_logical = bool(getattr(backend, "pointer_is_logical", True))
+        lx, ly, geom = _logical_anchor(self._x, self._y, is_logical)
+        tx, ty = _bubble_target(lx, ly, w, h, geom)
         if backend is not None:
             backend.move_popup_window(self.win, tx, ty)
 

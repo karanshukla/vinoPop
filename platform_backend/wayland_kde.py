@@ -4,7 +4,8 @@ Proven on Fedora 44 KDE Plasma (KWin 6.6.5) during the Fase 0 spike:
   - clipboard / primary    -> wl-clipboard (wl-copy / wl-paste)
   - selection change watch  -> `wl-paste --primary --watch`
   - global pointer position -> KWin `workspace.cursorPos` over DBus
-                               (see _kwin_cursor.py; subprocess per query)
+                               (see _kwin_cursor.py; subprocess per query,
+                               concurrent callers share one)
   - keystroke injection     -> wtype
   - popup positioning        -> gtk4-layer-shell (anchor top-left + margins);
                                XWayland override-redirect when it's missing
@@ -30,6 +31,7 @@ from collections.abc import Callable
 from gi.repository import GLib
 
 from .base import PlatformBackend
+from .monitors import layer_margins, monitor_at
 
 _LAYER = None
 
@@ -454,6 +456,9 @@ class WaylandKdeBackend(PlatformBackend):
     pointer_is_logical = True
 
     def __init__(self) -> None:
+        self._pointer_lock = threading.Lock()
+        # (monotonic time the query finished, coords, succeeded)
+        self._pointer_last: tuple[float, tuple[int, int], bool] | None = None
         # KGlobalAccel signal delivery needs dbus-python bound to the GLib
         # main loop. Set it as the default before any SessionBus is created
         # so the hotkey's add_signal_receiver works.
@@ -501,7 +506,27 @@ class WaylandKdeBackend(PlatformBackend):
             print(f"[wayland] wl-copy failed: {exc}")
 
     # ---- pointer ---------------------------------------------------------
+    # Callers that arrive while a query is in flight share its result, and a
+    # successful result is reused for this long. The selection watcher, the
+    # double-click thread and the main thread (hotkey) often ask at the same
+    # moment; one KWin round-trip serves them all.
+    _POINTER_CACHE_S = 0.1
+
     def pointer_position(self) -> tuple[int, int]:
+        arrived = time.monotonic()
+        with self._pointer_lock:
+            last = self._pointer_last
+            if last is not None:
+                done_at, xy, ok = last
+                # done_at >= arrived: that query finished while we waited on
+                # the lock, so it's as fresh as one we'd start now.
+                if done_at >= arrived or (ok and arrived - done_at < self._POINTER_CACHE_S):
+                    return xy
+            xy, ok = self._query_pointer()
+            self._pointer_last = (time.monotonic(), xy, ok)
+            return xy
+
+    def _query_pointer(self) -> tuple[tuple[int, int], bool]:
         try:
             out = subprocess.run(
                 [sys.executable, "-m", "platform_backend._kwin_cursor"],
@@ -512,10 +537,10 @@ class WaylandKdeBackend(PlatformBackend):
             )
             parts = out.stdout.strip().split()
             if len(parts) == 2:
-                return int(parts[0]), int(parts[1])
+                return (int(parts[0]), int(parts[1])), True
             # Empty/short stdout means the KWin script round-trip produced
-            # nothing (timeout, DBus-name clash, KWin busy). This is the
-            # silent path that lands the popup at the top-left corner.
+            # nothing (timeout, KWin busy). This is the silent path that
+            # lands the popup at the top-left corner.
             print(
                 f"[wayland] cursor query gave no coords "
                 f"(rc={out.returncode}, stdout={out.stdout!r}, "
@@ -523,7 +548,7 @@ class WaylandKdeBackend(PlatformBackend):
             )
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             print(f"[wayland] cursor query failed: {exc}")
-        return 0, 0
+        return (0, 0), False
 
     def can_paste(self) -> bool:
         # Portal, ydotool or wtype, whichever is set up (keyinject.py).
@@ -700,5 +725,19 @@ class WaylandKdeBackend(PlatformBackend):
         L = _layer_shell()
         L.set_anchor(win, L.Edge.LEFT, True)
         L.set_anchor(win, L.Edge.TOP, True)
+        # (x, y) is global logical; layer-shell margins are relative to the
+        # surface's own output. Pin the surface to the output holding the
+        # point and subtract its origin, or a popup on a monitor at x=1920
+        # lands 1920 px too far right. A point on no output (the off-screen
+        # parking spot) leaves the output alone: it just needs to be hidden.
+        try:
+            mon = monitor_at(win.get_display().get_monitors(), x, y, fallback=False)
+        except Exception:
+            mon = None
+        if mon is not None:
+            if getattr(win, "_vinopop_layer_monitor", None) is not mon:
+                L.set_monitor(win, mon)
+                win._vinopop_layer_monitor = mon
+            x, y = layer_margins(x, y, mon.get_geometry())
         L.set_margin(win, L.Edge.LEFT, int(x))
         L.set_margin(win, L.Edge.TOP, int(y))

@@ -3,8 +3,9 @@
 Spectacle 6's region capture always pops its annotate overlay and needs an
 explicit Accept. This module replaces that with a PopClip-style flow:
 
-  1. grab the whole screen instantly and silently (spectacle -f -b),
-  2. show it as a dimmed full-screen layer-shell overlay,
+  1. grab the screen instantly and silently (spectacle -f -b; with several
+     monitors only the one under the pointer, spectacle -m -b),
+  2. show it as a dimmed full-screen layer-shell overlay on that output,
   3. the user drags one rectangle,
   4. on mouse-up we crop the screenshot to that rectangle and hand the PNG
      back - no buttons, no second app window.
@@ -27,6 +28,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
+from platform_backend.monitors import monitor_at  # noqa: E402
+
 
 def _grabber() -> str | None:
     """Name of the first available full-screen grabber, or None."""
@@ -36,9 +39,54 @@ def _grabber() -> str | None:
     return None
 
 
-def _capture_fullscreen() -> str | None:
-    """Grab the whole screen to a temp PNG with no UI. spectacle -f -b is the
-    KWin-native path; grim covers wlroots; maim covers X11.
+def _target_monitor():
+    """The Gdk.Monitor under the pointer when there's more than one, else
+    None (one screen: grab and overlay the whole desktop as before). The
+    overlay is a single surface on one output, so with several monitors a
+    whole-desktop grab got squashed onto it."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return None
+    monitors = display.get_monitors()
+    if monitors.get_n_items() <= 1:
+        return None
+    try:
+        from platform_backend import get_backend
+
+        backend = get_backend()
+        x, y = backend.pointer_position()
+        return monitor_at(monitors, x, y, backend.pointer_is_logical)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ocr] no pointer monitor, grabbing the whole desktop: {exc}")
+        return None
+
+
+def _capture_argv(tool: str, path: str, monitor=None) -> list[str]:
+    """Grabber command line: the whole desktop, or just `monitor`.
+    spectacle -m grabs the monitor under the pointer (the one we picked);
+    grim takes an output name or a logical region; maim takes a physical
+    X11 region."""
+    if monitor is None:
+        return {
+            "spectacle": ["spectacle", "-f", "-b", "-n", "-o", path],
+            "grim": ["grim", path],
+            "maim": ["maim", path],
+        }[tool]
+    g = monitor.get_geometry()
+    if tool == "spectacle":
+        return ["spectacle", "-m", "-b", "-n", "-o", path]
+    if tool == "grim":
+        connector = monitor.get_connector() if hasattr(monitor, "get_connector") else None
+        if connector:
+            return ["grim", "-o", connector, path]
+        return ["grim", "-g", f"{g.x},{g.y} {g.width}x{g.height}", path]
+    s = max(1, int(monitor.get_scale_factor()))
+    return ["maim", "-g", f"{g.width * s}x{g.height * s}+{g.x * s}+{g.y * s}", path]
+
+
+def _capture_fullscreen(monitor=None) -> str | None:
+    """Grab the screen (or just `monitor`) to a temp PNG with no UI.
+    spectacle is the KWin-native path; grim covers wlroots; maim covers X11.
 
     The PNG is written to a temporary file in the user's runtime environment."""
     tool = _grabber()
@@ -46,12 +94,7 @@ def _capture_fullscreen() -> str | None:
         return None
     fd, path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-full-")
     os.close(fd)
-    prefix = []
-    argv = {
-        "spectacle": [*prefix, "spectacle", "-f", "-b", "-n", "-o", path],
-        "grim": [*prefix, "grim", path],
-        "maim": [*prefix, "maim", path],
-    }[tool]
+    argv = _capture_argv(tool, path, monitor)
     try:
         subprocess.run(argv, capture_output=True, timeout=15)
         if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -80,8 +123,9 @@ def _layer_shell():
 
 
 class _Selector(Gtk.Window):
-    def __init__(self, shot_path: str, callback) -> None:
+    def __init__(self, shot_path: str, callback, monitor=None) -> None:
         super().__init__()
+        self._monitor = monitor
         self._cb = callback
         self._fired = False
         self._pb = GdkPixbuf.Pixbuf.new_from_file(shot_path)
@@ -94,7 +138,10 @@ class _Selector(Gtk.Window):
 
         if not self._init_layer_shell():
             # X11 / non-layer-shell fallback: a fullscreen window.
-            self.fullscreen()
+            if self._monitor is not None:
+                self.fullscreen_on_monitor(self._monitor)
+            else:
+                self.fullscreen()
 
         area = Gtk.DrawingArea()
         area.set_hexpand(True)
@@ -121,6 +168,8 @@ class _Selector(Gtk.Window):
             return False
         try:
             L.init_for_window(self)
+            if self._monitor is not None:
+                L.set_monitor(self, self._monitor)
             L.set_layer(self, L.Layer.OVERLAY)
             L.set_keyboard_mode(self, L.KeyboardMode.EXCLUSIVE)
             for edge in (L.Edge.LEFT, L.Edge.RIGHT, L.Edge.TOP, L.Edge.BOTTOM):
@@ -222,10 +271,11 @@ def select_and_capture(callback) -> bool:
     """Show the overlay and call callback(crop_png_or_None). Main thread only.
     Returns True once the overlay is up; False (and never calls back) if we
     couldn't grab the screen, so the caller can fall back to something else."""
-    shot = _capture_fullscreen()
+    monitor = _target_monitor()
+    shot = _capture_fullscreen(monitor)
     if not shot:
         return False
-    sel = _Selector(shot, callback)
+    sel = _Selector(shot, callback, monitor)
     sel.present()
     return True
 
