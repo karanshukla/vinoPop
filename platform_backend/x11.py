@@ -207,7 +207,7 @@ class X11Backend(PlatformBackend):
 
         return SelectionWatcher(on_selection, debounce_ms=debounce_ms)
 
-    def make_hotkey(self, hotkey_str, on_trigger, use_polling=False):
+    def make_hotkey(self, hotkey_str, on_trigger, use_polling=False, role=None):
         from hotkey import Hotkey
 
         return Hotkey(hotkey_str, on_trigger, use_polling=use_polling)

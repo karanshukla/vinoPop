@@ -45,59 +45,12 @@ def _kwin_subprocess_env() -> dict:
     return env
 
 
-# Linux input-event codes (linux/input-event-codes.h) keyed by the
-# xdotool-style key names the rest of the app emits. Used to build
-# ydotool `key` CODE:STATE tokens. Letters/digits are lower-cased on
-# lookup; the named keys cover every chord the app actually sends
-# (Return, ctrl+Return, BackSpace, ctrl+a/x/v) plus common extras.
-_YDOTOOL_KEYCODES = {
-    **{d: 2 + i for i, d in enumerate("1234567890")},  # KEY_1=2 .. KEY_0=11
-    "a": 30,
-    "b": 48,
-    "c": 46,
-    "d": 32,
-    "e": 18,
-    "f": 33,
-    "g": 34,
-    "h": 35,
-    "i": 23,
-    "j": 36,
-    "k": 37,
-    "l": 38,
-    "m": 50,
-    "n": 49,
-    "o": 24,
-    "p": 25,
-    "q": 16,
-    "r": 19,
-    "s": 31,
-    "t": 20,
-    "u": 22,
-    "v": 47,
-    "w": 17,
-    "x": 45,
-    "y": 21,
-    "z": 44,
-    "return": 28,
-    "enter": 28,
-    "kp_enter": 96,
-    "backspace": 14,
-    "tab": 15,
-    "escape": 1,
-    "esc": 1,
-    "space": 57,
-    "delete": 111,
-    "minus": 12,
-    "equal": 13,
-    "home": 102,
-    "end": 107,
-    "prior": 104,
-    "next": 109,
-    "left": 105,
-    "right": 106,
-    "up": 103,
-    "down": 108,
-}
+# Kept apart from the imports above so this module's input pieces can change
+# without touching the GTK/layer-shell ones.
+from .evdev_input import InputEvent, get_input_hub
+from .kde_hotkey import WaylandKdeHotkey, _qt_keycode  # noqa: F401 - re-exported
+from .keyinject import KeyInjector
+from .xkb import detect_kbd_rmlvo as _detect_kbd_rmlvo
 
 
 def _layer_shell():
@@ -268,258 +221,8 @@ class WaylandSelectionWatcher:
                 print(f"[wayland] selection callback error: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Global hotkey via KGlobalAccel (KDE's global-shortcut daemon, integrated
-# into KWin on Wayland). Best-effort + non-fatal.
-# ---------------------------------------------------------------------------
-_QT_MODS = {
-    "shift": 0x02000000,
-    "ctrl": 0x04000000,
-    "control": 0x04000000,
-    "alt": 0x08000000,
-    "super": 0x10000000,
-    "win": 0x10000000,
-    "meta": 0x10000000,
-}
-_QT_NAMED_KEYS = {
-    "escape": 0x01000000,
-    "tab": 0x01000001,
-    "return": 0x01000004,
-    "enter": 0x01000005,
-    "space": 0x20,
-    "backspace": 0x01000003,
-    "delete": 0x01000007,
-    "home": 0x01000010,
-    "end": 0x01000011,
-    "left": 0x01000012,
-    "up": 0x01000013,
-    "right": 0x01000014,
-    "down": 0x01000015,
-    "pageup": 0x01000016,
-    "pagedown": 0x01000017,
-    "insert": 0x01000006,
-    # The Settings recorder stores GDK key names ("page_up", "print", ...)
-    "page_up": 0x01000016,
-    "page_down": 0x01000017,
-    "pause": 0x01000008,
-    "print": 0x01000009,
-    "scroll_lock": 0x01000026,
-    # Shift+Tab is reported as ISO_Left_Tab; shift is already a modifier
-    "iso_left_tab": 0x01000001,
-}
-# GDK names of printable punctuation -> the character, which is also the
-# Qt::Key value (Qt::Key_Comma == 0x2c == ord(",")).
-_QT_PUNCTUATION = {
-    "comma": ",",
-    "period": ".",
-    "minus": "-",
-    "equal": "=",
-    "plus": "+",
-    "slash": "/",
-    "backslash": "\\",
-    "semicolon": ";",
-    "apostrophe": "'",
-    "grave": "`",
-    "bracketleft": "[",
-    "bracketright": "]",
-    "asterisk": "*",
-}
-
-
-def _qt_keycode(hotkey_str: str) -> int | None:
-    """Encode 'super+shift+y' as a Qt QKeySequence int (modifiers OR'd with
-    the Qt::Key value), which is what KGlobalAccel.setShortcut expects."""
-    parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
-    if not parts:
-        return None
-    mods = 0
-    for tok in parts[:-1]:
-        if tok not in _QT_MODS:
-            return None
-        mods |= _QT_MODS[tok]
-    key = parts[-1]
-    if key in _QT_NAMED_KEYS:
-        keycode = _QT_NAMED_KEYS[key]
-    elif key in _QT_PUNCTUATION:
-        keycode = ord(_QT_PUNCTUATION[key])
-    elif len(key) == 1:
-        keycode = ord(key.upper())
-    elif key.startswith("f") and key[1:].isdigit():
-        keycode = 0x01000030 + (int(key[1:]) - 1)  # Qt::Key_F1 = 0x01000030
-    else:
-        return None
-    return mods | keycode
-
-
-class WaylandKdeHotkey:
-    """Registers a global shortcut with KGlobalAccel over DBus.
-
-    NOTE: the Qt-keycode encoding and setShortcut flags are a researched
-    best-guess that needs a real key press to confirm. All failures are
-    swallowed and logged; the app keeps running either way.
-    """
-
-    _counter = 0
-
-    def __init__(self, hotkey_str: str, on_trigger: Callable[[], None]) -> None:
-        self._hotkey_str = hotkey_str
-        self._on_trigger = on_trigger
-        WaylandKdeHotkey._counter += 1
-        self._action = f"vinopop-action-{WaylandKdeHotkey._counter}"
-        self._component = "vinopop"
-        self._registered = False
-
-    def start(self) -> None:
-        try:
-            self._register()
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[wayland] KGlobalAccel registration failed for "
-                f"{self._hotkey_str!r}: {exc} (hotkey inactive; auto-popup "
-                f"on selection still works)"
-            )
-
-    def _register(self) -> None:
-        import dbus
-
-        keycode = _qt_keycode(self._hotkey_str)
-        if keycode is None:
-            print(f"[wayland] cannot encode hotkey {self._hotkey_str!r}")
-            return
-        bus = dbus.SessionBus()
-        kga = dbus.Interface(
-            bus.get_object("org.kde.kglobalaccel", "/kglobalaccel"),
-            "org.kde.KGlobalAccel",
-        )
-        action_id = dbus.Array(
-            [self._component, self._action, "vinoPop", self._hotkey_str],
-            signature="s",
-        )
-        kga.doRegister(action_id)
-        # Register with setShortcut(actionId: as, keys: ai, flags: u). The keys
-        # argument is a PLAIN array of Qt key ints (each modifiers|key); the
-        # call returns the keycodes actually assigned. Verified against the live
-        # KF6 interface: it returns the requested keycode, i.e. the grab IS
-        # activated - so this single call is sufficient on Plasma 6.
-        #
-        # Do NOT use setShortcutKeys here. Its keys argument is QList<QKeySequence>
-        # (wire type `a(ai)`), which KGlobalAccel/KWin demarshals with a custom
-        # QKeySequence operator that ABORTS the whole process on the slightest
-        # framing mismatch. Hand-marshalling that nested type from dbus-python
-        # made kwin_wayland SIGABRT inside libdbus ("type invalid 0 not a basic
-        # type") on every vinoPop startup, taking the entire Plasma session down
-        # with it. Plain `ai` is type-trivial and cannot trigger that abort.
-        # flags = SetPresent(2) | NoAutoloading(4) = 6. SetPresent is ESSENTIAL
-        # on Plasma 6 Wayland: without it the key is recorded but the component
-        # stays INACTIVE (isActive()==False), so KWin never installs the physical
-        # key grab and presses do nothing (only DBus invokeShortcut fires). With
-        # SetPresent the component goes active and KWin grabs the key. Verified
-        # live: flag 4 -> isActive False, key not grabbed; flag 6 -> isActive
-        # True, key grabbed. NoAutoloading keeps the keys we pass (not stored config).
-        flags = dbus.UInt32(6)
-        assigned = kga.setShortcut(
-            action_id, dbus.Array([dbus.Int32(keycode)], signature="i"), flags
-        )
-        if not list(assigned):
-            print(
-                f"[wayland] KGlobalAccel did not assign {self._hotkey_str!r} "
-                f"- it is likely already bound to another action (e.g. a KDE "
-                f"system shortcut); the hotkey will be inactive"
-            )
-        kga.getComponent(self._component)
-        # Subscribe broadly (interface + signal only). Pinning bus_name/path
-        # can silently miss the signal if KWin emits it from a different sender
-        # name or object path than getComponent reports; the handler filters by
-        # our action id anyway.
-        bus.add_signal_receiver(
-            self._on_pressed,
-            signal_name="globalShortcutPressed",
-            dbus_interface="org.kde.kglobalaccel.Component",
-        )
-        self._registered = True
-        print(
-            f"[wayland] registered global shortcut {self._hotkey_str!r} "
-            f"via KGlobalAccel (action={self._action}) - press to verify"
-        )
-
-    def _on_pressed(self, *args) -> None:
-        # The Component signal is globalShortcutPressed(componentUnique,
-        # shortcutUnique, timestamp) - so our action id is args[1], NOT args[0]
-        # (that's the component). Match it anywhere in the args to be robust,
-        # and log every delivery so we can confirm KWin is routing the press.
-        names = {str(a) for a in args}
-        print(f"[wayland] globalShortcutPressed {sorted(names)}", flush=True)
-        if self._action not in names:
-            return
-        GLib.idle_add(self._safe_trigger)
-
-    def _safe_trigger(self) -> bool:
-        try:
-            self._on_trigger()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[wayland] hotkey trigger failed: {exc}")
-        return False
-
-    def stop(self, wait: bool = True, timeout: float = 1.5) -> None:
-        if not self._registered:
-            return
-        try:
-            import dbus
-
-            bus = dbus.SessionBus()
-            kga = dbus.Interface(
-                bus.get_object("org.kde.kglobalaccel", "/kglobalaccel"),
-                "org.kde.KGlobalAccel",
-            )
-            action_id = dbus.Array(
-                [self._component, self._action, "vinoPop", self._hotkey_str],
-                signature="s",
-            )
-            kga.unRegister(action_id)
-        except Exception:
-            pass
-        self._registered = False
-
-
-def _detect_kbd_rmlvo() -> tuple:
-    """(model, layout, variant, options) for the active keyboard so raw
-    /dev/input keycodes can be interpreted through the user's REAL xkb
-    config. Crucially this includes the xkb *options* (e.g. a Ctrl/Alt swap
-    via ctrl:swap_lalt_lctl) - localectl omits those, so KDE keeps them in
-    kxkbrc. evdev events are pre-xkb, so without the keymap a remap is
-    invisible to us."""
-    model, layout, variant, options = "pc105", "us", "", ""
-    try:
-        out = subprocess.run(
-            ["localectl", "status"], capture_output=True, text=True, timeout=2.0
-        ).stdout
-        for line in out.splitlines():
-            s = line.strip()
-            if s.startswith("X11 Layout:"):
-                layout = s.split(":", 1)[1].strip() or layout
-            elif s.startswith("X11 Variant:"):
-                variant = s.split(":", 1)[1].strip()
-            elif s.startswith("X11 Model:"):
-                model = s.split(":", 1)[1].strip() or model
-            elif s.startswith("X11 Options:"):
-                options = s.split(":", 1)[1].strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    # KDE keeps the live keyboard options (Ctrl/Alt swap, caps remaps, …) in
-    # kxkbrc and is authoritative on Wayland - prefer it over localectl.
-    try:
-        path = os.path.expanduser("~/.config/kxkbrc")
-        in_layout = False
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("["):
-                    in_layout = line == "[Layout]"
-                elif in_layout and line.startswith("Options="):
-                    options = line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return (model, layout.split(",")[0], variant.split(",")[0], options)
+# Global hotkey: KGlobalAccel, see kde_hotkey.py.
+# Keyboard layout detection: xkb.detect_kbd_rmlvo.
 
 
 class _XkbModifierState:
@@ -621,6 +324,10 @@ class WaylandDoubleClickWatcher:
     use, so it works for every toolkit. Needs the user in the 'input'
     group; silently inert otherwise.
 
+    Devices come from the shared evdev hub (evdev_input.py): every keyboard
+    and pointer by capability, keyd's virtual keyboard and hotplugged ones
+    included. Events arrive on the hub's thread.
+
     Mirrors mouse_watcher.DoubleClickWatcher's semantics (300 ms window,
     8 px tolerance, gated on the configured modifier). evdev button events
     carry no coordinates, so the cursor position comes from the KWin
@@ -639,34 +346,31 @@ class WaylandDoubleClickWatcher:
     _DOUBLE_CLICK_MS = 300
     _POSITION_TOLERANCE_PX = 8
 
-    def __init__(self, backend, on_double_click) -> None:
+    def __init__(self, backend, on_double_click, hub=None) -> None:
         self._backend = backend
         self._cb = on_double_click
-        self._stop = threading.Event()
-        self._thread = None
-        self._held = set()  # raw modifier keycodes down (xkb fallback)
-        self._xkb = None  # layout-aware modifier state (built in _run)
-        self._last_ms = 0
+        self._hub = hub
+        self._handle: int | None = None
+        self._held: set[int] = set()  # raw modifier keycodes down (xkb fallback)
+        self._xkb = None  # layout-aware modifier state (built on first event)
+        self._last_t = 0.0  # kernel timestamp of the last qualifying press
         self._last_xy = (0, 0)
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        if self._handle is not None:
             return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-dblclick-wl")
-        self._thread.start()
+        if self._hub is None:
+            self._hub = get_input_hub()
+        self._handle = self._hub.subscribe(self._on_event)
+        print("[dblclick] watching /dev/input (Wayland)")
 
     def stop(self) -> None:
-        self._stop.set()
-        # Join briefly so the /dev/input fds are closed (in _run's finally)
-        # before the caller drops this watcher and possibly starts a fresh
-        # one on the next toggle. The read loop wakes at most every ~0.3 s,
-        # so this returns quickly; bounded timeout keeps a wedged thread
-        # from blocking the settings toggle indefinitely.
-        t = self._thread
-        if t is not None and t.is_alive():
-            t.join(timeout=0.6)
-        self._thread = None
+        # Unsubscribing the last consumer joins the hub's reader, so the
+        # /dev/input fds are closed before a fresh watcher is started on the
+        # next settings toggle.
+        handle, self._handle = self._handle, None
+        if handle is not None and self._hub is not None:
+            self._hub.unsubscribe(handle)
 
     def _required_mod_name(self) -> str:
         """The configured modifier name, read fresh each click so changing
@@ -683,81 +387,30 @@ class WaylandDoubleClickWatcher:
         """Raw-keycode fallback set, used only when xkb is unavailable."""
         return self._MOD_CODES.get(self._required_mod_name(), self._MOD_CODES["ctrl"])
 
-    def _open_devices(self) -> list:
-        import glob
-
-        # by-path names are the physical devices and exclude ydotool's
-        # virtual uinput node (no bus path) - so injected keys never
-        # pollute the modifier state.
-        paths = set()
-        for pat in ("*-event-kbd", "*-event-mouse"):
-            for p in glob.glob(f"/dev/input/by-path/{pat}"):
-                try:
-                    paths.add(os.path.realpath(p))
-                except OSError:
-                    pass
-        if not paths:
-            paths = set(glob.glob("/dev/input/event*"))
-        fds = []
-        for path in sorted(paths):
-            try:
-                fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
-            except OSError:
-                pass
-        return fds
-
-    def _run(self) -> None:
-        import struct
-
-        fds = self._open_devices()
-        if not fds:
-            print(
-                "[dblclick] no readable input devices - add yourself to the "
-                "'input' group? Wayland double-click off"
-            )
+    def _on_event(self, ev: InputEvent) -> None:
+        if self._xkb is None:
+            # Layout-aware modifier state so a Ctrl/Alt swap is respected. If
+            # libxkbcommon is missing we fall back to raw keycodes.
+            self._xkb = _XkbModifierState()
+        if ev.code == self._BTN_LEFT:
+            if ev.value == 1:
+                self._on_left_press(ev.time)
             return
-        # Layout-aware modifier state so a Ctrl/Alt swap is respected. If
-        # libxkbcommon is missing we fall back to raw keycodes in _on_left_press.
-        self._xkb = _XkbModifierState()
-        print(f"[dblclick] evdev watcher on {len(fds)} device(s) (Wayland)")
-        EV_KEY = 0x01
-        fmt = "llHHi"
-        size = struct.calcsize(fmt)
-        try:
-            while not self._stop.is_set():
-                r, _, _ = _select.select(fds, [], [], 0.3)
-                for fd in r:
-                    try:
-                        data = os.read(fd, size * 64)
-                    except (BlockingIOError, OSError):
-                        continue
-                    for off in range(0, len(data) - size + 1, size):
-                        _s, _us, et, code, val = struct.unpack_from(fmt, data, off)
-                        if et != EV_KEY:
-                            continue
-                        if code == self._BTN_LEFT:
-                            if val == 1:
-                                self._on_left_press()
-                            continue
-                        # Keyboard key: feed xkb (press=1/release=0; ignore
-                        # autorepeat=2) and keep the raw-code fallback set.
-                        if val in (0, 1):
-                            self._xkb.update(code, val == 1)
-                        if code in self._ALL_MODS:
-                            if val == 1:
-                                self._held.add(code)
-                            elif val == 0:
-                                self._held.discard(code)
-        finally:
-            for fd in fds:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+        # Keyboard key: feed xkb (press=1/release=0; ignore autorepeat=2)
+        # and keep the raw-code fallback set.
+        if ev.value in (0, 1):
+            self._xkb.update(ev.code, ev.value == 1)
+        if ev.code in self._ALL_MODS:
+            if ev.value == 1:
+                self._held.add(ev.code)
+            elif ev.value == 0:
+                self._held.discard(ev.code)
 
-    def _on_left_press(self) -> None:
+    def _on_left_press(self, t: float | None = None) -> None:
         # Only act on our gesture: the configured modifier must be held.
         # This also keeps the KWin pointer query off the plain-click path.
+        # `t` is the kernel timestamp, so the ~100 ms pointer query below
+        # doesn't eat into the double-click window.
         name = self._required_mod_name()
         active = self._xkb.is_active(name) if self._xkb else None
         if active is None:
@@ -767,22 +420,22 @@ class WaylandDoubleClickWatcher:
         if not active:
             return
         x, y = self._backend.pointer_position()
-        now_ms = int(time.monotonic() * 1000)
-        elapsed = now_ms - self._last_ms
+        now = time.monotonic() if t is None else t
+        elapsed_ms = (now - self._last_t) * 1000
         dx = abs(x - self._last_xy[0])
         dy = abs(y - self._last_xy[1])
         if (
-            elapsed < self._DOUBLE_CLICK_MS
+            elapsed_ms < self._DOUBLE_CLICK_MS
             and dx < self._POSITION_TOLERANCE_PX
             and dy < self._POSITION_TOLERANCE_PX
         ):
-            self._last_ms = 0
+            self._last_t = 0.0
             self._last_xy = (0, 0)
             # Tiny settle so the app sees the click first, then we show
             # the menu (same as the X11 watcher).
             GLib.timeout_add(20, self._fire, x, y)
             return
-        self._last_ms = now_ms
+        self._last_t = now
         self._last_xy = (x, y)
 
     def _fire(self, x: int, y: int) -> bool:
@@ -873,135 +526,27 @@ class WaylandKdeBackend(PlatformBackend):
         return 0, 0
 
     def can_paste(self) -> bool:
-        # ydotool (KWin) / wtype (wlroots) are the only Wayland injectors.
-        return bool(shutil.which("ydotool") or shutil.which("wtype"))
+        # Portal, ydotool or wtype, whichever is set up (keyinject.py).
+        return self.injector().can_inject()
 
     # ---- keystroke injection --------------------------------------------
     #
-    # wtype is DEAD on KWin: it drives zwp_virtual_keyboard_v1, which KWin
-    # does not implement, so it silently no-ops on Plasma. The validated
-    # path on KWin is ydotool, which writes to the kernel uinput device and
-    # bypasses Wayland's synthetic-input ban entirely (needs the ydotoold
-    # user daemon + /dev/uinput + user in `input` group). The future
-    # sandbox-clean route is libei via the RemoteDesktop portal (`eitype`),
-    # left as a fallback hook for when that CLI is present.
-    #
-    # Order: ydotool (works on KWin) -> wtype (works on wlroots/Sway, dead on
-    # KWin but harmless to try) so this same backend still injects on a
-    # non-KDE Wayland compositor.
+    # See keyinject.py: xdg-desktop-portal RemoteDesktop first (keysyms, so
+    # layout-correct, no daemon), then ydotool (keycodes mapped through the
+    # user's xkb layout), then wtype off KDE only (KWin has no
+    # zwp_virtual_keyboard_v1). Delivery is queued on the injector's thread.
 
-    def _ydotool_env(self) -> dict:
-        """Env for ydotool with YDOTOOL_SOCKET pointed at the running
-        daemon. ydotoold here listens on $XDG_RUNTIME_DIR/.ydotool_socket;
-        set it explicitly so we don't depend on ydotool's compiled default."""
-        env = os.environ.copy()
-        if not env.get("YDOTOOL_SOCKET"):
-            runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-            sock = os.path.join(runtime, ".ydotool_socket")
-            if os.path.exists(sock):
-                env["YDOTOOL_SOCKET"] = sock
-        return env
-
-    def _ydotool_key_events(self, combo: str) -> list[str] | None:
-        """Translate an xdotool-style chord ('ctrl+v', 'Return') into the
-        CODE:STATE token list ydotool `key` expects. Modifiers are pressed
-        in order then released in reverse, wrapping the final key."""
-        parts = [p.strip() for p in combo.split("+") if p.strip()]
-        if not parts:
-            return None
-        mod_codes = {
-            "ctrl": 29,
-            "control": 29,
-            "shift": 42,
-            "alt": 56,
-            "super": 125,
-            "win": 125,
-            "meta": 125,
-        }
-        mods = []
-        for m in parts[:-1]:
-            code = mod_codes.get(m.lower())
-            if code is None:
-                print(f"[wayland] ydotool: unknown modifier {m!r} in {combo!r}")
-                return None
-            mods.append(code)
-        key = parts[-1]
-        key_code = _YDOTOOL_KEYCODES.get(key) or _YDOTOOL_KEYCODES.get(key.lower())
-        if key_code is None:
-            print(f"[wayland] ydotool: unknown key {key!r} in {combo!r}")
-            return None
-        events = [f"{c}:1" for c in mods]
-        events += [f"{key_code}:1", f"{key_code}:0"]
-        events += [f"{c}:0" for c in reversed(mods)]
-        return events
-
-    def _wtype_args(self, combo: str) -> list[str] | None:
-        parts = [p.strip() for p in combo.split("+") if p.strip()]
-        if not parts:
-            return None
-        mod_map = {
-            "ctrl": "ctrl",
-            "control": "ctrl",
-            "alt": "alt",
-            "shift": "shift",
-            "super": "logo",
-            "win": "logo",
-            "meta": "logo",
-        }
-        mods = [mod_map[m.lower()] for m in parts[:-1] if m.lower() in mod_map]
-        key = parts[-1]
-        args = []
-        for m in mods:
-            args += ["-M", m]
-        args += ["-k", key]
-        for m in reversed(mods):
-            args += ["-m", m]
-        return args
-
-    def _has_ydotool(self) -> bool:
-        return bool(shutil.which("ydotool"))
-
-    def _ydotool_run(self, sub_argv: list) -> bool:
-        """Dispatch `ydotool <sub_argv>` to the daemon."""
-        try:
-            subprocess.run(["ydotool", *sub_argv], env=self._ydotool_env(), check=False)
-            return True
-        except OSError as exc:
-            print(f"[wayland] ydotool failed: {exc}")
-            return False
+    def injector(self) -> KeyInjector:
+        inj = getattr(self, "_injector", None)
+        if inj is None:
+            inj = self._injector = KeyInjector()
+        return inj
 
     def send_key(self, combo: str) -> None:
-        if self._has_ydotool():
-            events = self._ydotool_key_events(combo)
-            if events is not None and self._ydotool_run(["key", *events]):
-                return
-        # wtype is wlroots-only (dead on KWin).
-        if shutil.which("wtype"):
-            args = self._wtype_args(combo)
-            if args is not None:
-                subprocess.run(["wtype"] + args, check=False)
-                return
-        print(
-            f"[wayland] no working key-injection tool for {combo!r} "
-            "(install ydotool + ydotoold on KWin)"
-        )
-        from .base import _warn_missing_injector
-
-        _warn_missing_injector(
-            "wayland_kde_native",
-            "Cut/Paste/Backspace needs ydotool + ydotoold. Install and "
-            "start ydotoold to enable keystroke actions.",
-        )
+        self.injector().send_key(combo)
 
     def type_text(self, text: str) -> None:
-        # `--` terminates ydotool's own option parsing so text that starts
-        # with '-' is typed literally rather than parsed.
-        if self._has_ydotool() and self._ydotool_run(["type", "--", text]):
-            return
-        if shutil.which("wtype"):
-            subprocess.run(["wtype", text], check=False)
-            return
-        print("[wayland] no working text-injection tool (install ydotool)")
+        self.injector().type_text(text)
 
     # ---- active window ---------------------------------------------------
     def active_window_haystacks(self) -> list[str]:
@@ -1104,8 +649,8 @@ class WaylandKdeBackend(PlatformBackend):
     def make_selection_watcher(self, on_selection, debounce_ms):
         return WaylandSelectionWatcher(self, on_selection, debounce_ms=debounce_ms)
 
-    def make_hotkey(self, hotkey_str, on_trigger, use_polling=False):
-        return WaylandKdeHotkey(hotkey_str, on_trigger)
+    def make_hotkey(self, hotkey_str, on_trigger, use_polling=False, role=None):
+        return WaylandKdeHotkey(hotkey_str, on_trigger, role=role)
 
     def make_double_click_watcher(self, on_double_click):
         # XRecord (the old path) only sees XWayland windows on KWin, so the
