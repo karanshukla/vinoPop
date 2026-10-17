@@ -171,7 +171,31 @@ class Hotkey:
         except Exception as exc:  # noqa: BLE001
             print(f"[hotkey] cannot open display: {exc}")
             return
+        # Every exit path (bad hotkey string, unknown key, grab conflict,
+        # stop) releases the grabs and closes the connection: a leaked one
+        # per failed rebind adds up, and the X server caps its clients.
+        try:
+            self._listen(self._dpy)
+        finally:
+            self._release()
 
+    def _release(self) -> None:
+        dpy, self._dpy = self._dpy, None
+        if dpy is None:
+            return
+        if self._root is not None:
+            for keycode, mask in self._grabbed_combos:
+                try:
+                    self._root.ungrab_key(keycode, mask)
+                except Exception:
+                    pass
+        self._grabbed_combos.clear()
+        try:
+            dpy.close()
+        except Exception:
+            pass
+
+    def _listen(self, dpy: display.Display) -> None:
         try:
             mods, keysym_name = _parse(self._hotkey_str)
         except ValueError as exc:
@@ -183,14 +207,14 @@ class Hotkey:
             print(f"[hotkey] unknown key name: {keysym_name!r}")
             return
 
-        keycode = self._dpy.keysym_to_keycode(keysym)
+        keycode = dpy.keysym_to_keycode(keysym)
         if keycode == 0:
             print(f"[hotkey] no keycode for {keysym_name!r}")
             return
 
         self._mods = mods
         self._keycode = keycode
-        self._root = self._dpy.screen().root
+        self._root = dpy.screen().root
 
         # Polling mode bypasses XGrabKey entirely - just samples the
         # keymap every 50 ms and edge-detects 0→1 transitions. Used as
@@ -201,17 +225,13 @@ class Hotkey:
                 f"[hotkey] '{self._hotkey_str}' polling mode (keycode={keycode}, mods=0x{mods:x})"
             )
             self._poll_loop()
-            try:
-                self._dpy.close()
-            except Exception:
-                pass
             return
 
         # Grab the key with every lock-modifier variant, checking each for
         # an async BadAccess (= another client already owns this combo).
         # CatchError is per-request: instantiate fresh each iteration.
         grab_failed = 0
-        for extra in _lock_variants(self._dpy):
+        for extra in _lock_variants(dpy):
             mask = mods | extra
             catcher = error.CatchError(error.BadAccess)
             try:
@@ -223,7 +243,7 @@ class Hotkey:
                     X.GrabModeAsync,
                     onerror=catcher,
                 )
-                self._dpy.sync()
+                dpy.sync()
                 if catcher.get_error():
                     grab_failed += 1
                 else:
@@ -270,15 +290,15 @@ class Hotkey:
         # the popup + clipboard hotkeys and the daemon was getting 10
         # context switches/sec for no reason.)
         while not self._stop.is_set():
-            if self._dpy.pending_events() == 0:
+            if dpy.pending_events() == 0:
                 import select
 
                 try:
-                    select.select([self._dpy.fileno()], [], [], 1.0)
+                    select.select([dpy.fileno()], [], [], 1.0)
                 except OSError:
                     break
                 continue
-            event = self._dpy.next_event()
+            event = dpy.next_event()
             # MappingNotify (type 34): the X server is telling us the
             # keyboard mapping changed. Our grab is on a specific keycode,
             # but the user's keysym (e.g. 'greater') may have moved to a
@@ -292,7 +312,7 @@ class Hotkey:
                     event.refresh_keyboard_mapping()
                 except Exception:
                     pass
-                new_keycode = self._dpy.keysym_to_keycode(keysym)
+                new_keycode = dpy.keysym_to_keycode(keysym)
                 if new_keycode and new_keycode != keycode:
                     print(
                         f"[hotkey] '{self._hotkey_str}' keycode shifted "
@@ -306,7 +326,7 @@ class Hotkey:
                         except Exception:
                             pass
                     self._grabbed_combos.clear()
-                    for extra in _lock_variants(self._dpy):
+                    for extra in _lock_variants(dpy):
                         mask = mods | extra
                         catcher = error.CatchError(error.BadAccess)
                         try:
@@ -318,7 +338,7 @@ class Hotkey:
                                 X.GrabModeAsync,
                                 onerror=catcher,
                             )
-                            self._dpy.sync()
+                            dpy.sync()
                             if not catcher.get_error():
                                 self._grabbed_combos.append((new_keycode, mask))
                         except Exception:
@@ -342,17 +362,6 @@ class Hotkey:
                         f"expected mods=0x{mods:x} got effective=0x{effective:x} "
                         f"(full state=0x{event.state:x})"
                     )
-
-        # Cleanup
-        for keycode, mask in self._grabbed_combos:
-            try:
-                self._root.ungrab_key(keycode, mask)
-            except Exception:
-                pass
-        try:
-            self._dpy.close()
-        except Exception:
-            pass
 
     def _poll_loop(self) -> None:
         """Sample the keyboard 20×/sec and fire on rising-edge of the

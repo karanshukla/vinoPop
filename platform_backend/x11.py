@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 
 from .base import PlatformBackend
 
@@ -19,6 +20,9 @@ from .base import PlatformBackend
 # call costs ~5-15 ms of XOpenDisplay roundtrip, which the hotkey path hits on
 # every press). Module-scope; never closed - lives for the process lifetime.
 _pointer_dpy = None
+# The hotkey path queries the pointer from a worker thread, other callers from
+# the GTK thread; python-xlib connections aren't thread-safe by default.
+_pointer_lock = threading.Lock()
 
 
 class X11Backend(PlatformBackend):
@@ -67,10 +71,13 @@ class X11Backend(PlatformBackend):
     def read_selection(self, source: str) -> str:
         sel = "primary" if source.lower() == "primary" else "clipboard"
         try:
+            # Same 2 s as the watcher: 0.5 s read large selections
+            # (LibreOffice) as empty and showed the no-selection menu. The
+            # hotkey path calls this off the GTK thread, so waiting is safe.
             out = subprocess.run(
                 ["xclip", "-selection", sel, "-o"],
                 capture_output=True,
-                timeout=0.5,
+                timeout=2.0,
             )
             return out.stdout.decode("utf-8", errors="replace")
         except (OSError, subprocess.SubprocessError):
@@ -94,6 +101,10 @@ class X11Backend(PlatformBackend):
 
     # ---- pointer ---------------------------------------------------------
     def pointer_position(self) -> tuple[int, int]:
+        with _pointer_lock:
+            return self._pointer_position_locked()
+
+    def _pointer_position_locked(self) -> tuple[int, int]:
         global _pointer_dpy
         from Xlib import display
 
