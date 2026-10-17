@@ -59,6 +59,7 @@ LLM_MODELS = {
             "arankays/gemma-4-E2B-it-int4-cw-ov",
             "Gemma 4 E2B (fast, low RAM)",
             "4 GB",
+            revision="8eb2f833845d0b56bc701b0ac8fff54c8e8a31d6",
         ),
         LlmModel(
             "gemma-4-e4b",
