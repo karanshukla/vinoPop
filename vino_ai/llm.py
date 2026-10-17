@@ -146,11 +146,8 @@ def _adopt_late(model_key: str, order: list[str]) -> None:
         return order.index(dev) if dev in order else len(order)
 
     best = min(late, key=lambda v: rank(v[1][1]))
-    current = (
-        rank(_pipe_key[1])
-        if _pipe is not None and _pipe_key and _pipe_key[0] == model_key
-        else len(order) + 1
-    )
+    key = _pipe_key
+    current = rank(key[1]) if _pipe is not None and key and key[0] == model_key else len(order) + 1
     if rank(best[1][1]) < current:
         log.info("[vino_ai] LLM moved to %s", best[1][1])
         _pipe, _pipe_key = best
@@ -333,13 +330,17 @@ def _generate(pipe, task: str, text: str, lang: str, on_token: Callable[[str], N
 
     running = getattr(getattr(ov_genai, "StreamingStatus", None), "RUNNING", False)
 
-    def _stream(chunk: str):
-        on_token(chunk)
-        return running
-
     # VLMPipeline (Gemma 4) takes these by name only, and rejects
     # streamer=None.
-    extra = {"streamer": _stream} if on_token else {}
+    extra = {}
+    if on_token is not None:
+        sink = on_token
+
+        def _stream(chunk: str):
+            sink(chunk)
+            return running
+
+        extra["streamer"] = _stream
     return pipe.generate(prompt, generation_config=cfg, **extra)
 
 
