@@ -18,7 +18,7 @@ from collections.abc import Callable
 
 from xdg_paths import CACHE_DIR
 
-from . import devices, failures, models
+from . import devices, failures, models, telemetry
 
 log = logging.getLogger("vinopop")
 
@@ -166,6 +166,7 @@ def _load(on_status: Callable[[str], None]):
         on_status(f"Downloading {model.label} ({model.size}, one time only)…")
     path = models.ensure_llm(model, on_status)
 
+    telemetry.prepare()
     import openvino_genai as ov_genai
 
     cache = CACHE_DIR / "ov-cache"
@@ -309,6 +310,7 @@ def _fit_prompt(tok, task: str, text: str, lang: str) -> tuple[str, str]:
 
 
 def _generate(pipe, task: str, text: str, lang: str, on_token: Callable[[str], None] | None):
+    telemetry.prepare()
     import openvino_genai as ov_genai
 
     tok = pipe.get_tokenizer()

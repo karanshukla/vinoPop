@@ -389,6 +389,7 @@ _SETTING_ICONS = {
     "Don't show in these apps or pages": "security-medium-symbolic",
     "Search engine": "edit-find-symbolic",
     "Custom search URL ({q} = the selection)": "insert-link-symbolic",
+    "Share anonymous OpenVINO usage stats with Intel": "network-transmit-symbolic",
     "Trigger hotkey on first press": "media-playback-start-symbolic",
     "Reset settings to defaults": "view-refresh-symbolic",
     "Keep terminal open after running": "utilities-terminal-symbolic",
@@ -549,7 +550,7 @@ class SettingsDialog:
                 "advanced",
                 "Advanced",
                 "emblem-system-symbolic",
-                [self._build_advanced_group],
+                [self._build_privacy_group, self._build_advanced_group],
             ),
             (
                 "debug",
@@ -1510,6 +1511,29 @@ class SettingsDialog:
         custom_row.connect("changed", _on_custom_changed)
         return group
 
+    def _build_privacy_group(self) -> Adw.PreferencesGroup:
+        from vino_ai import telemetry
+
+        group = Adw.PreferencesGroup()
+        group.set_title("Privacy")
+        # Shows the consent file, not just the setting: a file written by
+        # Intel's opt_in_out wins until the user flips this.
+        row = self._switch_row(
+            "Share anonymous OpenVINO usage stats with Intel",
+            "OpenVINO's own telemetry, sent to Intel through Google Analytics "
+            "when the AI actions load. Usage counts only, never your selected "
+            "text. Saved in ~/intel/openvino_telemetry.",
+            telemetry.enabled(),
+        )
+
+        def _on_toggled(sw: Adw.SwitchRow, _pspec) -> None:
+            if telemetry.set_enabled(bool(sw.get_active())) and self._on_changed:
+                self._on_changed()
+
+        row.connect("notify::active", _on_toggled)
+        group.add(row)
+        return group
+
     def _build_advanced_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Advanced")
@@ -1579,6 +1603,11 @@ class SettingsDialog:
         if response != "reset":
             return
         from settings import DEFAULTS
+        from vino_ai import telemetry
+
+        # A consent file vinoPop wrote goes back to the default (off) too;
+        # one from Intel's opt_in_out stays the user's call.
+        owned = bool(self._settings.get(telemetry.OWNED_SETTING, False))
 
         # Replace the singleton's data with the canonical defaults and
         # persist. Use a fresh copy so the dict isn't aliased with the
@@ -1591,6 +1620,8 @@ class SettingsDialog:
             err.add_response("close", "Close")
             err.present(self._window)
             return
+        if owned:
+            telemetry.set_enabled(bool(DEFAULTS[telemetry.SETTING]))
         # Trigger the daemon-side reload so hotkeys / watchers / etc.
         # pick up the new state without restart, then rebuild this
         # window so its widgets reflect what's on disk.

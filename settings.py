@@ -143,6 +143,14 @@ DEFAULTS: dict[str, Any] = {
     # memory (~4 GB). The compile cache keeps the next load quick. 0 keeps
     # it loaded for the life of the daemon.
     "ai_idle_unload_minutes": 5.0,
+    # Let OpenVINO's bundled telemetry send Intel its anonymous usage stats
+    # (through Google Analytics; never your text). Off by default: vinoPop
+    # writes "0" to ~/intel/openvino_telemetry before the first OpenVINO
+    # import. See vino_ai/telemetry.py.
+    "openvino_telemetry": False,
+    # Set once vinoPop has written that file. A file it didn't write (from
+    # Intel's opt_in_out script) is left alone until the toggle is flipped.
+    "openvino_telemetry_file_owned": False,
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.

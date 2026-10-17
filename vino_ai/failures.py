@@ -18,6 +18,8 @@ from pathlib import Path
 
 from xdg_paths import STATE_DIR
 
+from . import telemetry
+
 log = logging.getLogger("vinopop")
 
 PATH = STATE_DIR / "device-failures.json"
@@ -53,6 +55,7 @@ def driver_version(lib_dirs: tuple[str, ...] = _LIB_DIRS) -> str | None:
 
 def fingerprint(model_key: str, revision: str) -> dict[str, str | None]:
     try:
+        telemetry.prepare()
         import openvino
 
         runtime = str(openvino.__version__)

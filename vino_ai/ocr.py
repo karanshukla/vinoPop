@@ -13,7 +13,7 @@ import threading
 
 from xdg_paths import CACHE_DIR
 
-from . import devices
+from . import devices, telemetry
 
 log = logging.getLogger("vinopop")
 
@@ -25,6 +25,7 @@ _broken: set[str] = set()
 
 
 def _patch_device(dev: str) -> None:
+    telemetry.prepare()
     from openvino import Core
     from rapidocr.inference_engine.openvino import main as ov_main
 
@@ -43,6 +44,7 @@ def _load():
     global _engine, _device
     if _engine is not None:
         return _engine
+    telemetry.prepare()
     from rapidocr import EngineType, RapidOCR
 
     (CACHE_DIR / "ov-cache").mkdir(parents=True, exist_ok=True)
