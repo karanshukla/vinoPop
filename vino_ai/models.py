@@ -1,10 +1,10 @@
 """Model registry and one-time download.
 
 LLMs come pre-converted from the OpenVINO org on Hugging Face, so there is
-no conversion step on the user's machine. The default is Phi-3.5-mini in
-symmetric channel-wise INT4 ("-cw-"), the weight layout OpenVINO
-recommends for the NPU. The lighter Qwen option suits a box with little
-RAM or no NPU.
+no conversion step on the user's machine. The default is Gemma 4 E2B
+(INT4), the small, fast, low-RAM one; Gemma 4 E4B trades speed and memory
+for accuracy. Both are multimodal exports, so the language model is split
+out as openvino_language_model.xml.
 
 Models land in $XDG_DATA_HOME/vinopop/models/<name>/ and are reused from
 there; nothing is fetched again once a model's folder is complete.
@@ -31,30 +31,29 @@ class LlmModel:
     label: str
     size: str  # rough download size, shown before the first download
     # Pinned commit, so a changed or compromised upstream repo can't swap
-    # the files under us. Bump deliberately (Hugging Face "sha", 2026-10-16).
-    revision: str
+    # the files under us. Bump deliberately (Hugging Face "sha"). "main"
+    # means not pinned yet.
+    revision: str = "main"
 
 
 LLM_MODELS = {
     m.key: m
     for m in (
         LlmModel(
-            "phi-3.5-mini",
-            "OpenVINO/Phi-3.5-mini-instruct-int4-cw-ov",
-            "Phi-3.5 mini (best quality, NPU-friendly)",
-            "2.2 GB",
-            "dc27b4e451118b1e82c159a839476df02797837a",
+            "gemma-4-e2b",
+            "OpenVINO/gemma-4-E2B-it-int4-ov",
+            "Gemma 4 E2B (fast, low RAM)",
+            "3 GB",
         ),
         LlmModel(
-            "qwen2.5-1.5b",
-            "OpenVINO/Qwen2.5-1.5B-Instruct-int4-ov",
-            "Qwen2.5 1.5B (lighter, faster)",
-            "1 GB",
-            "4d14c299e35d8b74e3471f9e92bd1377fae50736",
+            "gemma-4-e4b",
+            "OpenVINO/gemma-4-E4B-it-int4-ov",
+            "Gemma 4 E4B (more accurate, more RAM)",
+            "5 GB",
         ),
     )
 }
-DEFAULT_LLM = "phi-3.5-mini"
+DEFAULT_LLM = "gemma-4-e2b"
 
 _download_lock = threading.Lock()
 
@@ -76,7 +75,10 @@ def model_dir(model: LlmModel) -> Path:
 def _complete(path: Path) -> bool:
     # snapshot_download writes the IR pair last-ish; the tokenizer IR is
     # what GenAI needs alongside the model, so check for both.
-    return (path / "openvino_model.xml").is_file() and (path / "openvino_tokenizer.xml").is_file()
+    has_model = (path / "openvino_model.xml").is_file() or (
+        path / "openvino_language_model.xml"
+    ).is_file()
+    return has_model and (path / "openvino_tokenizer.xml").is_file()
 
 
 def is_downloaded(model: LlmModel) -> bool:

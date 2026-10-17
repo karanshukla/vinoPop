@@ -141,8 +141,8 @@ DEFAULTS: dict[str, Any] = {
     # OCR on the iGPU, CPU as the fallback), or force "NPU", "GPU" or "CPU".
     "ai_device": "auto",
     # Local LLM for summarize / rewrite / explain / translate. Keys are in
-    # vino_ai/models.py: "phi-3.5-mini" (default) or "qwen2.5-1.5b".
-    "ai_llm_model": "phi-3.5-mini",
+    # vino_ai/models.py: "gemma-4-e2b" (default) or "gemma-4-e4b".
+    "ai_llm_model": "gemma-4-e2b",
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.
