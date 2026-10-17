@@ -11,10 +11,14 @@ action declaration. Four action types cover ~90% of real plugin ideas:
 Available substitution variables in templates:
   {text}        - raw selection
   {text_url}    - percent-encoded (safe for URLs)
-  {text_shell}  - shlex.quoted (safe for shell)
+  {text_shell}  - shlex.quoted; in a run_command, the same as {text}
   {text_upper}  - uppercased
   {text_lower}  - lowercased
   {text_strip}  - whitespace-trimmed
+
+In a run_command every placeholder, snippet tokens like {selection} too, is
+passed to bash as an argument rather than pasted into the command line, so
+quoting is automatic: `notify-send {text}` is safe for any selection.
 """
 
 from __future__ import annotations
@@ -143,13 +147,16 @@ def _try_json_minify(text: str) -> str:
         return text
 
 
-def _render(template: str, text: str) -> str:
-    """Substitute template variables. Unknown placeholders are left as-is."""
+def _text_values(text: str) -> dict[str, str]:
+    """Every {text_*} variable for one selection."""
     import base64 as _b64
 
-    safe = {
+    return {
         "text": text,
         "text_url": urllib.parse.quote(text, safe=""),
+        # Only for non-shell templates (a notification, the clipboard). A
+        # command gets the selection as an argument instead, quoted
+        # automatically: see _command_parts.
         "text_shell": shlex.quote(text),
         "text_upper": text.upper(),
         "text_lower": text.lower(),
@@ -165,47 +172,92 @@ def _render(template: str, text: str) -> str:
         # falls back to the input if not, mirroring the json helpers.
         "text_b64_decode": _safe_b64_decode(text),
     }
-    # The selection is untrusted. Render the template with opaque markers in
-    # place of the values, expand snippet-style placeholders (date, clipboard,
-    # {shell:...}) over the TEMPLATE only, then drop the values in. Expanding
-    # after substitution would run `{shell:...}` found in the selected text and
-    # mangle selections that merely contain `{date}`.
-    marked = {key: f"\x00{key}\x00" for key in safe}
+
+
+_FORMATTER = string.Formatter()
+
+# Fields the snippet engine expands ({date:+7d}, {clipboard}, {ask:Label},
+# {shell:CMD}, ...). Formatter.parse() reads {date:+7d} as the field "date"
+# with the format spec "+7d", so the field name alone identifies them.
+_SNIPPET_FIELDS = frozenset(
+    {
+        "date",
+        "time",
+        "datetime",
+        "weekday",
+        "clipboard",
+        "selection",
+        "cursor",
+        "name",
+        "ask",
+        "shell",
+        "var",
+    }
+)
+_FIELD_BASE_RE = re.compile(r"[^.\[]*")
+
+
+class _Field:
+    """One {placeholder} in a template, as string.Formatter parses it."""
+
+    __slots__ = ("base", "conv", "kind", "name", "spec", "token")
+
+    def __init__(self, name: str, spec: str, conv: str | None) -> None:
+        self.name = name
+        self.spec = spec
+        self.conv = conv
+        # As written in the template, e.g. {date:+7d}
+        self.token = "{" + name + (f"!{conv}" if conv else "") + (f":{spec}" if spec else "") + "}"
+        # "text" for {text_upper} or {text[0]}, the bare name otherwise
+        self.base = _FIELD_BASE_RE.match(name).group(0)  # type: ignore[union-attr]
+        if self.base in _text_variables():
+            self.kind = "text"
+        elif name in _SNIPPET_FIELDS:
+            self.kind = "snippet"
+        else:
+            self.kind = "unknown"  # left in the output as written
+
+
+def _template_parts(template: str) -> list[tuple[str, _Field | None]]:
+    """[(literal text, the field after it or None), ...]. Escaped braces come
+    back as literal text, so {{text}} is never a field. Raises ValueError on
+    an unbalanced brace."""
+    return [
+        (literal, None if name is None else _Field(name, spec or "", conv))
+        for literal, name, spec, conv in _FORMATTER.parse(template)
+    ]
+
+
+def _render(template: str, text: str) -> str:
+    """Substitute template variables. Unknown placeholders are left as-is.
+
+    For URLs, notifications and the clipboard. A shell command goes through
+    _command_parts instead, which keeps the values out of the command line."""
+    values = _text_values(text)
+    expanded: dict[str, str] = {}
+    out = []
     try:
-        first = template.format_map(_DefaultMissing(marked))
+        for literal, field in _template_parts(template):
+            out.append(literal)
+            if field is None:
+                continue
+            if field.kind == "text":
+                value = _FORMATTER.get_field(field.name, (), values)[0]
+                value = _FORMATTER.convert_field(value, field.conv)
+                out.append(_FORMATTER.format_field(value, field.spec))
+            elif field.kind == "snippet":
+                # One token at a time, so the selected text never goes through
+                # the snippet engine: a selection holding {shell:...} must not
+                # run, and one that merely contains {date} stays as it is.
+                if field.token not in expanded:
+                    expanded[field.token] = _apply_snippet_placeholders(field.token)
+                out.append(expanded[field.token])
+            else:
+                out.append(field.token)
     except Exception as exc:  # noqa: BLE001
         print(f"[recipe] template render failed: {exc}")
         return template
-    expanded = _apply_snippet_placeholders(first)
-    # One pass, so a value that looks like a marker is never expanded again.
-    return _MARKER_RE.sub(lambda m: safe.get(m.group(1), m.group(0)), expanded)
-
-
-_MARKER_RE = re.compile(r"\x00(\w+)\x00")
-
-
-class _DefaultMissing(dict):
-    """str.format_map dict that returns '{name}' for missing keys instead of
-    raising KeyError - keeps the template usable even with typos."""
-
-    def __missing__(self, key):
-        return "{" + key + "}"
-
-
-# Placeholders whose value is safe to drop UNQUOTED into a shell command line:
-# shlex-quoted, percent-encoded, or base64 (alphanumerics and + / =). Everything
-# else ({text}, {text_json}, {text_url_decode}, ...) can carry shell metacharacters
-# and would turn a click on attacker-controlled text into command execution.
-_SHELL_SAFE_PLACEHOLDERS = frozenset({"text_shell", "text_url", "text_b64"})
-# A replacement field's name, also when followed by a conversion or format spec
-# ({text!s}, {text:>5}) that str.format applies just the same.
-_FIELD_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?:[!:.\[][^{}]*)?\}")
-
-
-def unsafe_shell_placeholders(template: str) -> list[str]:
-    """Placeholders in `template` that must not reach a shell unquoted."""
-    names = set(_FIELD_RE.findall(template or "")) & set(_text_variables())
-    return sorted(names - _SHELL_SAFE_PLACEHOLDERS)
+    return "".join(out)
 
 
 def _text_variables() -> list[str]:
@@ -225,6 +277,245 @@ def _text_variables() -> list[str]:
     ]
 
 
+# ---- commands ----------------------------------------------------------------
+#
+# A run_command template is never rendered into shell source with the user's
+# text in it. The values go in as arguments, a prelude copies them into
+# variables (so a function or `set --` in the template can't shadow them), and
+# each placeholder becomes a reference to one:
+#
+#   notify-send {text}  ->  bash -c 'vinopop_1=$1; notify-send "${vinopop_1}"'
+#                                   vinopop "<selection>"
+#
+# bash expands the reference once and never parses the result as code, so no quoting
+# in the template, missing or wrong, lets selected text, the clipboard or an
+# {ask:} answer run as a command. {text_shell} maps to the same reference, for
+# recipes written when quoting was the author's job.
+
+# Where a value reference can't go. Bash evaluates arithmetic operands as
+# expressions, and an expression like a[$(cmd)] runs cmd: that happens in
+# $(( )), (( )), [[ -eq ]], let, declare -i and array subscripts, quoted or
+# not. A quoted heredoc expands nothing.
+_COMMAND_CONTEXT_PROBLEMS = {
+    "arith": "can't be used inside $(( )), (( )) or $[ ]: arithmetic runs code found in the value",
+    "dbl": "can't be used inside [[ ]]: -eq and friends run code found in the value; use [ ]",
+    "let": "can't be an argument to let or declare/typeset/local -i: they evaluate it as arithmetic",
+    "param": "can't be used inside ${...}: an array subscript runs code found in the value",
+    "subscript": "can't be used as an array subscript (name[...]): it runs code found in the value",
+    "heredoc_quoted": "can't go inside a quoted heredoc (<<'EOF'): nothing expands there",
+}
+# Stack states that make a field refused however it's quoted
+_ARITH_STATES = ("arith", "arith_b", "dbl", "let", "param", "subscript")
+# A command word can start here: after a separator or a keyword
+_COMMAND_START_RE = re.compile(
+    r"(?:^|[;&|(\n{!]|\b(?:then|do|else|elif|if|while|until|time))[ \t]*$"
+)
+_ARITH_COMMAND_RE = re.compile(r"(let|declare|typeset|local)(?=[ \t])((?:[ \t]+-\w+)*)")
+
+
+def _shell_contexts(skeleton: str) -> list[str]:
+    """The quoting context at each \\x00 in `skeleton` (a command template with
+    its fields replaced by \\x00): "plain" (an ordinary word, also inside $(...)
+    or backticks), "dq" (inside "..." or an unquoted heredoc), "sq" (inside
+    '...'), "heredoc_quoted", or a _COMMAND_CONTEXT_PROBLEMS key for a spot
+    where bash would evaluate the value as arithmetic.
+
+    The quoting part only picks how a reference is written so the value stays
+    one word in that spot. It is not what stops injection: however the
+    reference is written, the value is expanded and never parsed. A wrong
+    guess there costs word splitting, not a command. The arithmetic spots err
+    towards refusing.
+    """
+    contexts: list[str] = []
+    stack = ["plain"]  # plain, cmd, bt, dq, sq + the _ARITH_STATES
+    heredocs: list[tuple[str, bool, bool]] = []  # (delimiter, quoted, strip tabs)
+    i, n = 0, len(skeleton)
+    while i < n:
+        top, c = stack[-1], skeleton[i]
+        m: re.Match[str] | None = None
+        if c == "\x00":
+            danger = next((s for s in reversed(stack) if s in _ARITH_STATES), None)
+            if danger:
+                contexts.append("arith" if danger == "arith_b" else danger)
+            else:
+                contexts.append("plain" if top in ("cmd", "bt") else top)
+        elif top == "sq":
+            if c == "'":
+                stack.pop()
+        elif c == "\\":
+            i += 1  # skip the escaped character
+        elif skeleton.startswith("$((", i):
+            stack += ["arith", "arith"]  # one per paren, so each ")" pops one
+            i += 2
+        elif skeleton.startswith("$(", i):
+            stack.append("cmd")
+            i += 1
+        elif skeleton.startswith("$[", i):
+            stack.append("arith_b")
+            i += 1
+        elif skeleton.startswith("${", i):
+            stack.append("param")
+            i += 1
+        elif c == "`":
+            if top == "bt":
+                stack.pop()
+            else:
+                stack.append("bt")
+        elif (c == "}" and top == "param") or (c == "]" and top in ("arith_b", "subscript")):
+            stack.pop()
+        elif top == "dq":
+            if c == '"':
+                stack.pop()
+        elif c == "'":
+            stack.append("sq")
+        elif c == '"':
+            stack.append("dq")
+        elif top == "let" and c in ";&|\n)":
+            stack.pop()
+            continue  # the terminator still ends whatever else it ends
+        elif c == "(":
+            if top != "arith" and skeleton.startswith("((", i):
+                stack += ["arith", "arith"]
+                i += 1
+            else:
+                stack.append("arith" if top == "arith" else "cmd")
+        elif c == ")":
+            if len(stack) > 1 and top in ("cmd", "arith"):
+                stack.pop()
+        elif skeleton.startswith("[[", i) and _COMMAND_START_RE.search(skeleton[:i]):
+            stack.append("dbl")
+            i += 1
+        elif skeleton.startswith("]]", i) and top == "dbl":
+            stack.pop()
+            i += 1
+        elif c == "[" and i and (skeleton[i - 1].isalnum() or skeleton[i - 1] in "_\x00"):
+            # name[...]: an assignment or unset subscript on an indexed array
+            stack.append("subscript")
+        elif (m := _ARITH_COMMAND_RE.match(skeleton, i)) and _COMMAND_START_RE.search(skeleton[:i]):
+            if m.group(1) == "let" or "i" in m.group(2).replace("-", ""):
+                stack.append("let")
+            i = m.end()
+            continue
+        elif skeleton.startswith("<<", i) and not skeleton.startswith("<<<", i):
+            m = re.match(r"<<(-?)[ \t]*([^\s;&|<>()]+)", skeleton[i:])
+            if m:
+                word = m.group(2)
+                delim = re.sub(r"[\"'\\]", "", word)
+                heredocs.append((delim, delim != word, m.group(1) == "-"))
+                i += m.end() - 1
+        elif c == "\n" and heredocs:
+            # The bodies start on the next line, one after the other
+            i += 1
+            for delim, quoted, strip_tabs in heredocs:
+                while i < n:
+                    end = skeleton.find("\n", i)
+                    end = n if end == -1 else end
+                    line = skeleton[i:end]
+                    i = end + 1
+                    if (line.lstrip("\t") if strip_tabs else line) == delim:
+                        break
+                    contexts += ["heredoc_quoted" if quoted else "dq"] * line.count("\x00")
+            heredocs = []
+            continue
+        i += 1
+    return contexts
+
+
+def _command_fields(template: str) -> tuple[list[str], list[tuple[_Field, str]]]:
+    """Split a command template into literal shell text and the fields between
+    it, each with its quoting context: literals[k] comes before fields[k].
+    Unknown {names} stay in the literal text as written. Raises ValueError on
+    an unbalanced brace or a NUL (used here as the field marker)."""
+    if "\x00" in template:
+        raise ValueError("the template contains a NUL character")
+    literals = [""]
+    fields: list[_Field] = []
+    for literal, field in _template_parts(template):
+        literals[-1] += literal
+        if field is None:
+            continue
+        if field.kind == "unknown":
+            literals[-1] += field.token
+        else:
+            fields.append(field)
+            literals.append("")
+    contexts = _shell_contexts("\x00".join(literals))
+    return literals, list(zip(fields, contexts, strict=True))
+
+
+def _field_problem(field: _Field, context: str) -> str | None:
+    if field.kind == "text" and (field.conv or field.spec or field.name != field.base):
+        # {text!r}, {text_shell:.3}, {text[0]}: a command gets the value as is
+        return (
+            f"{field.token} can't take a conversion or format spec in a command; "
+            f"use {{{field.base}}}"
+        )
+    if context in _COMMAND_CONTEXT_PROBLEMS:
+        return f"{field.token} {_COMMAND_CONTEXT_PROBLEMS[context]}"
+    return None
+
+
+def command_template_problems(template: str) -> list[str]:
+    """Why `template` can't be run as a command, or []. Placeholders need no
+    quoting, so this is about syntax that would change the value or put it
+    where bash evaluates it."""
+    try:
+        _, fields = _command_fields(template or "")
+    except ValueError as exc:
+        return [str(exc)]
+    return [p for f, ctx in fields if (p := _field_problem(f, ctx))]
+
+
+def _command_parts(template: str, text: str, preview: bool = False) -> tuple[str, list[str]]:
+    """The `bash -c` script for a command template and the arguments its
+    prelude copies into the variables it references. With preview=True the values are written
+    into the script, shell-quoted, for showing to the user (never for
+    running). Raises ValueError for a template command_template_problems()
+    refuses."""
+    literals, fields = _command_fields(template)
+    values = {**_text_values(text), "text_shell": text}
+    args: list[str] = []
+    index: dict[str, int] = {}
+    out = [literals[0]]
+    for (field, context), literal in zip(fields, literals[1:], strict=True):
+        problem = _field_problem(field, context)
+        if problem:
+            raise ValueError(problem)
+        if field.token not in index:
+            if field.kind == "text":
+                args.append(values[field.name])
+            else:
+                args.append(_apply_snippet_placeholders(field.token))
+            index[field.token] = len(args)
+        value = args[index[field.token] - 1]
+        if preview and context == "dq":
+            out.append(re.sub(r'([\\"$`])', r"\\\1", value))
+        elif preview and context == "sq":
+            out.append(value.replace("'", "'\\''"))
+        elif preview:
+            out.append(shlex.quote(value))
+        else:
+            ref = f"${{vinopop_{index[field.token]}}}"
+            out.append({"dq": ref, "sq": f"'\"{ref}\"'"}.get(context, f'"{ref}"'))
+        out.append(literal)
+    if args and not preview:
+        out.insert(0, " ".join(f"vinopop_{k}=${k}" for k in range(1, len(args) + 1)) + "; ")
+    return "".join(out), args
+
+
+def command_preview(template: str, text: str) -> str:
+    """What a command template runs for `text`, as one readable command line."""
+    try:
+        return _command_parts(template, text, preview=True)[0]
+    except ValueError:
+        return template
+
+
+def _command_argv(template: str, text: str) -> list[str]:
+    script, args = _command_parts(template, text)
+    return ["bash", "-c", script, "vinopop", *args]
+
+
 def safety_errors(recipe: dict) -> list[str]:
     """Reasons a recipe must not be allowed to run shell commands. Kept apart
     from validate(): an unsafe recipe still loads, as a button that explains
@@ -232,12 +523,10 @@ def safety_errors(recipe: dict) -> list[str]:
     action = recipe.get("action") if isinstance(recipe, dict) else None
     if not isinstance(action, dict):
         return []
-    quoting = "use {text_shell} (shell-quoted) or {text_url} (URL-encoded)"
     errors = []
     if action.get("type") == "run_command":
-        bad = unsafe_shell_placeholders(action.get("template", ""))
-        if bad:
-            errors.append(f"the command uses {bad} unquoted; {quoting}")
+        for problem in command_template_problems(action.get("template", "")):
+            errors.append(f"the command: {problem}")
     elif action.get("type") == "chain":
         for i, step in enumerate(action.get("steps") or []):
             if not isinstance(step, dict) or step.get("type") != "run_command":
@@ -246,9 +535,8 @@ def safety_errors(recipe: dict) -> list[str]:
                 # An empty template would run the (transformed) selection itself
                 errors.append(f"chain.steps[{i}] (run_command) needs a command template")
                 continue
-            bad = unsafe_shell_placeholders(step["template"])
-            if bad:
-                errors.append(f"chain.steps[{i}] uses {bad} unquoted; {quoting}")
+            for problem in command_template_problems(step["template"]):
+                errors.append(f"chain.steps[{i}]: {problem}")
     return errors
 
 
@@ -292,10 +580,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
     if atype == "run_command":
 
         def handler(text: str) -> None:
-            cmd = _render(template, text)
             try:
-                subprocess.Popen(["bash", "-c", cmd], start_new_session=True)
-            except OSError as exc:
+                subprocess.Popen(_command_argv(template, text), start_new_session=True)
+            # ValueError: a NUL in the selection (Popen refuses it as an argument)
+            except (OSError, ValueError) as exc:
                 subprocess.run(
                     [
                         "notify-send",
@@ -403,6 +691,15 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     )
                     continue
                 # Terminal steps: consume `current`, then stop.
+                if stype == "run_command":
+                    # The value goes in as an argument, never as shell source.
+                    # safety_errors() already refused a step without a template.
+                    try:
+                        argv = _command_argv(stemplate, current)
+                        subprocess.Popen(argv, start_new_session=True)
+                    except (OSError, ValueError) as exc:
+                        log.warning("[chain] run_command failed: %s", exc)
+                    return
                 rendered = _render(stemplate, current) if stemplate else current
                 if stype == "copy":
                     from platform_backend import get_backend
@@ -447,12 +744,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     from platform_backend import get_backend
 
                     get_backend().open_url(url)
-                elif stype == "run_command":
-                    cmd = rendered or current
-                    try:
-                        subprocess.Popen(["bash", "-c", cmd], start_new_session=True)
-                    except OSError as exc:
-                        log.warning("[chain] run_command failed: %s", exc)
                 else:
                     log.warning("[chain] unknown step type %r in %s", stype, recipe.get("name"))
                 # Any terminal step ends the chain.
@@ -482,6 +773,9 @@ def _content_types(recipe: dict) -> tuple:
 
 def _template_problem(template: str) -> str | None:
     """Why `template` can't be rendered (an unbalanced brace), or None."""
+    if "\x00" in template:
+        # Invisible in an editor, so a shared recipe could hide text in it
+        return "contains a NUL character"
     try:
         list(string.Formatter().parse(template))
     except ValueError as exc:
