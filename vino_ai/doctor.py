@@ -110,6 +110,27 @@ def _models() -> list[Result]:
     ]
 
 
+def _failures() -> list[Result]:
+    from . import failures, models
+
+    model = models.llm_model()
+    fp = failures.fingerprint(model.key, model.revision)
+    results = []
+    for dev, rec in sorted(failures.all_records().items()):
+        if failures.blocking(dev, fp) is None:
+            continue
+        results.append(
+            Result(
+                WARN,
+                f"{dev.lower()} skipped",
+                f"failed on {rec.get('failed_at')}: {rec.get('error')}. Retried after a driver, "
+                f"OpenVINO or model update; set ai_device to {dev} to retry now, or delete "
+                f"{failures.PATH}",
+            )
+        )
+    return results
+
+
 def collect() -> list[Result]:
     try:
         from version import __version__
@@ -124,6 +145,7 @@ def collect() -> list[Result]:
     results += _devices()
     results += _ovfetch()
     results += _models()
+    results += _failures()
     return results
 
 

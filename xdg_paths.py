@@ -28,6 +28,7 @@ def _base(env_var: str, fallback: str) -> Path:
 CONFIG_HOME = _base("XDG_CONFIG_HOME", "~/.config")
 CACHE_HOME = _base("XDG_CACHE_HOME", "~/.cache")
 DATA_HOME = _base("XDG_DATA_HOME", "~/.local/share")
+STATE_HOME = _base("XDG_STATE_HOME", "~/.local/state")
 
 
 def _migrate_legacy(home: Path) -> None:
@@ -50,6 +51,7 @@ for _home in (CONFIG_HOME, CACHE_HOME, DATA_HOME):
 CONFIG_DIR = CONFIG_HOME / APP
 CACHE_DIR = CACHE_HOME / APP
 DATA_DIR = DATA_HOME / APP
+STATE_DIR = STATE_HOME / APP
 
 # Icons the user drops in (picked up by the icon picker and plugin loader) and
 # the hicolor theme folder GTK and the tray search for per-user icons.

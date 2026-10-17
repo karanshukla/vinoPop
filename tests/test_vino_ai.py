@@ -145,6 +145,22 @@ def test_model_completeness(tmp_path, monkeypatch):
 # ---- llm.run with a fake pipeline -----------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _llm_state(monkeypatch, tmp_path):
+    """Fresh module state per test, failure records in tmp, and no real
+    openvino import for the fingerprint."""
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm, "_pipe_key", None)
+    monkeypatch.setattr(llm, "_late", {})
+    monkeypatch.setattr(llm, "_inflight", set())
+    monkeypatch.setattr(llm, "_schedule_unload", lambda: None)
+    monkeypatch.setattr(llm.failures, "PATH", tmp_path / "device-failures.json")
+    monkeypatch.setattr(
+        llm.failures, "fingerprint", lambda key, rev: {"model": key, "driver": "1.0"}
+    )
+    monkeypatch.setattr(llm.devices, "forced", lambda: None)
+
+
 class _FakeTokenizer:
     def apply_chat_template(self, history, add_generation_prompt):
         assert add_generation_prompt
@@ -240,7 +256,6 @@ def test_llm_falls_back_when_npu_compile_times_out_then_moves_back(monkeypatch, 
 
     monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
     monkeypatch.setattr(llm, "_pipe", None)
-    monkeypatch.setattr(llm, "_late", None)
     monkeypatch.setattr(llm, "_load_timeout", lambda: 0.05)
     monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
     monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
@@ -251,7 +266,7 @@ def test_llm_falls_back_when_npu_compile_times_out_then_moves_back(monkeypatch, 
 
     release.set()
     for _ in range(100):
-        if llm._late is not None:
+        if llm._late:
             break
         threading.Event().wait(0.01)
     assert llm._load(seen.append) == "NPU"
@@ -315,3 +330,235 @@ def test_doctor_json_runs_without_openvino(monkeypatch, capsys):
     code = doctor.main(as_json=True)
     out = capsys.readouterr().out
     assert '"checks"' in out and code in (0, 1)
+
+
+# ---- device lifecycle -----------------------------------------------------
+
+
+def _genai(monkeypatch, make):
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **_props):
+            return make(dev)
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+
+
+@pytest.fixture
+def loader(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU", "CPU"])
+    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: None)
+    return monkeypatch
+
+
+def test_failure_record_blocks_only_its_fingerprint(tmp_path):
+    from vino_ai import failures
+
+    path = tmp_path / "f.json"
+    fp = {"driver": "1.35.0", "openvino": "2026.4.1", "model": "m", "revision": "r"}
+    failures.record_error("NPU", fp, "Exception from src/x.cpp:12:\ncompile failed", path)
+    assert failures.blocking("NPU", fp, path)["error"] == "compile failed"
+    assert failures.blocking("NPU", {**fp, "driver": "1.36.0"}, path) is None
+    assert failures.blocking("GPU", fp, path) is None
+    failures.forget("NPU", path)
+    assert failures.blocking("NPU", fp, path) is None
+
+
+def test_compile_timeouts_block_after_repeated_runs(tmp_path):
+    from vino_ai import failures
+
+    path, fp = tmp_path / "f.json", {"driver": "1"}
+    failures.record_timeout("NPU", fp, path)
+    assert failures.blocking("NPU", fp, path) is None  # one slow compile isn't broken
+    failures.record_timeout("NPU", fp, path)
+    assert failures.blocking("NPU", fp, path) is not None
+    failures.record_timeout("NPU", {"driver": "2"}, path)  # new driver: count restarts
+    assert failures.blocking("NPU", {"driver": "2"}, path) is None
+
+
+def test_driver_version_from_soname(tmp_path):
+    from vino_ai import failures
+
+    (tmp_path / "libze_intel_npu.so.1.35.0").write_text("")
+    (tmp_path / "libze_intel_npu.so.1").symlink_to("libze_intel_npu.so.1.35.0")
+    assert failures.driver_version((str(tmp_path),)) == "1.35.0"
+    assert failures.driver_version((str(tmp_path / "none"),)) is None
+
+
+def test_failed_npu_is_recorded_and_skipped_next_start(loader):
+    tried = []
+
+    def make(dev):
+        tried.append(dev)
+        if dev == "NPU":
+            raise RuntimeError("compile failed")
+        return dev
+
+    _genai(loader, make)
+    assert llm._load(lambda _m: None) == "GPU"
+    llm._drop_pipe()
+    tried.clear()
+    seen = []
+    assert llm._load(seen.append) == "GPU"
+    assert tried == ["GPU"]
+    assert not any("NPU couldn't" in m for m in seen)  # told once, not every start
+
+
+def test_forced_device_is_tried_despite_a_record(loader):
+    _genai(loader, lambda dev: (_ for _ in ()).throw(RuntimeError("bad")) if dev == "NPU" else dev)
+    llm._load(lambda _m: None)
+    llm._drop_pipe()
+    loader.setattr(llm.devices, "forced", lambda: "NPU")
+    tried = []
+    _genai(loader, lambda dev: tried.append(dev) or dev)
+    assert llm._load(lambda _m: None) == "NPU"
+    assert tried == ["NPU"]
+
+
+def test_device_still_compiling_is_not_compiled_twice(loader):
+    import threading
+
+    release, tried = threading.Event(), []
+
+    def make(dev):
+        tried.append(dev)
+        if dev in ("NPU", "GPU"):
+            release.wait(5)
+        return dev
+
+    _genai(loader, make)
+    loader.setattr(llm, "_load_timeout", lambda: 0.05)
+    assert llm._load(lambda _m: None) == "CPU"
+    llm._drop_pipe()
+    assert llm._load(lambda _m: None) == "CPU"
+    assert tried.count("NPU") == 1 and tried.count("GPU") == 1
+    release.set()
+
+
+def test_late_npu_beats_late_gpu_whatever_finishes_last(loader):
+    import threading
+
+    npu_done, gpu_done = threading.Event(), threading.Event()
+    gates = {"NPU": threading.Event(), "GPU": threading.Event()}
+
+    def make(dev):
+        if dev in gates:
+            gates[dev].wait(5)
+            (npu_done if dev == "NPU" else gpu_done).set()
+        return dev
+
+    _genai(loader, make)
+    loader.setattr(llm, "_load_timeout", lambda: 0.05)
+    assert llm._load(lambda _m: None) == "CPU"
+    gates["NPU"].set()
+    npu_done.wait(2)
+    gates["GPU"].set()  # GPU finishes last
+    gpu_done.wait(2)
+    for _ in range(100):
+        if len(llm._late) == 2:
+            break
+        threading.Event().wait(0.01)
+    assert llm._load(lambda _m: None) == "NPU"
+    assert llm._late == {}
+
+
+class _LostPipe(_FakePipe):
+    def __init__(self, fail_after_stream=False):
+        super().__init__()
+        self.fail_after_stream = fail_after_stream
+
+    def generate(self, prompt, *, generation_config, streamer=None):
+        if self.fail_after_stream and streamer:
+            streamer("partial")
+        raise RuntimeError("L0 zeCommandQueueExecute ZE_RESULT_ERROR_DEVICE_LOST")
+
+
+def test_device_lost_reloads_and_retries_once(monkeypatch):
+    pipes = [_LostPipe(), _FakePipe()]
+    monkeypatch.setitem(sys.modules, "openvino_genai", types.ModuleType("openvino_genai"))
+    monkeypatch.setattr(llm, "_load", lambda _status: pipes.pop(0))
+    status = []
+    assert llm.run("summarize", "hello", on_status=status.append) == "Hola mundo"
+    assert any("reset" in m for m in status)
+
+
+def test_device_lost_after_streaming_is_not_retried(monkeypatch):
+    pipes = [_LostPipe(fail_after_stream=True), _FakePipe()]
+    monkeypatch.setitem(sys.modules, "openvino_genai", types.ModuleType("openvino_genai"))
+    monkeypatch.setattr(llm, "_load", lambda _status: pipes.pop(0))
+    with pytest.raises(RuntimeError, match="DEVICE_LOST"):
+        llm.run("summarize", "hello", on_token=lambda _c: None)
+    assert len(pipes) == 1  # no second attempt
+
+
+def test_idle_pipeline_is_unloaded(monkeypatch):
+    monkeypatch.setattr(llm, "_pipe", object())
+    monkeypatch.setattr(llm, "_pipe_key", ("m", "NPU"))
+    monkeypatch.setattr(llm, "_setting", lambda key, default: 5.0)
+    monkeypatch.setattr(llm, "_last_used", llm.time.monotonic())
+    assert llm.unload_if_idle() is False  # used just now
+    monkeypatch.setattr(llm, "_last_used", llm.time.monotonic() - 301)
+    assert llm.unload_if_idle() is True
+    assert llm._pipe is None and llm.device() is None
+
+
+def test_idle_unload_disabled_with_zero(monkeypatch):
+    monkeypatch.setattr(llm, "_pipe", object())
+    monkeypatch.setattr(llm, "_setting", lambda key, default: 0.0)
+    monkeypatch.setattr(llm, "_last_used", 0.0)
+    assert llm.unload_if_idle() is False
+
+
+def test_ocr_retries_on_next_device_when_inference_fails(monkeypatch):
+    from vino_ai import ocr
+
+    class _Engine:
+        def __init__(self, dev):
+            self.dev = dev
+
+        def __call__(self, path):
+            if self.dev == "GPU":
+                raise RuntimeError("GPU kernel failed")
+            return types.SimpleNamespace(txts=["hi"], boxes=[[(0, 0), (1, 0), (1, 1), (0, 1)]])
+
+    loads = iter(["GPU", "CPU"])
+
+    def fake_load():
+        if ocr._engine is None:
+            ocr._device = next(loads)
+            ocr._engine = _Engine(ocr._device)
+        return ocr._engine
+
+    monkeypatch.setattr(ocr, "_engine", None)
+    monkeypatch.setattr(ocr, "_broken", set())
+    monkeypatch.setattr(ocr, "_load", fake_load)
+    assert ocr.recognize("x.png") == "hi"
+    assert ocr._broken == {"GPU"} and ocr.device() == "CPU"
+
+
+def test_doctor_reports_skipped_device(monkeypatch, tmp_path):
+    from vino_ai import failures
+
+    model = models.llm_model()
+    fp = failures.fingerprint(model.key, model.revision)
+    failures.record_error("NPU", fp, "compile failed")
+    rows = doctor._failures()
+    assert [r.label for r in rows] == ["npu skipped"]
+    assert "compile failed" in rows[0].detail
+
+
+def test_prompt_is_cut_to_the_token_limit_for_dense_scripts(fake_pipe):
+    class _Ids:
+        def __init__(self, n):
+            self.data = [[0] * n]
+
+    class _CountingTokenizer(_FakeTokenizer):
+        def encode(self, s):  # one token per CJK char, like the real thing roughly
+            return types.SimpleNamespace(input_ids=_Ids(len(s)))
+
+    fake_pipe.get_tokenizer = lambda: _CountingTokenizer()
+    llm.run("summarize", "人" * 7000)
+    assert len(fake_pipe.prompts[0]) <= llm.MAX_PROMPT_LEN - llm._PROMPT_MARGIN
