@@ -51,6 +51,8 @@ security.help = "the same Bandit scan the Bandit workflow runs"
 check.sequence = ["lint", "fmt", "types", "test"]
 check.help = "everything CI runs, locally"
 doctor = "python main.py --doctor"
+hooks.cmd = "git config core.hooksPath .githooks"
+hooks.help = "run the CI lint checks before every commit"
 
 # ── Ruff ──────────────────────────────────────────────────────────────────────
 

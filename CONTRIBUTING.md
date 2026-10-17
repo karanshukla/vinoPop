@@ -119,6 +119,14 @@ uv run poe check    # ruff, ruff format --check, mypy, pytest
 `uv run poe fix` applies ruff's fixes and formatting, and
 `uv run poe security` runs the same Bandit scan as CI.
 
+Turn on the pre-commit hook so a commit can't fail CI's lint job. It runs
+`scripts/lint.sh` (ruff, ruff format --check, mypy), the same script CI
+runs:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Pull requests
 
 - Keep PRs focused - one concern per PR
