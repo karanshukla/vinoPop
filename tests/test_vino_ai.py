@@ -162,7 +162,7 @@ class _FakePipe:
     def get_generation_config(self):
         return self.cfg
 
-    def generate(self, prompt, cfg, streamer):
+    def generate(self, prompt, *, generation_config, streamer=None):  # VLMPipeline's shape
         self.prompts.append(prompt)
         for chunk in ("Hola", " mundo"):
             if streamer:

@@ -220,5 +220,8 @@ def run(
                 on_token(chunk)
             return running
 
-        result = pipe.generate(prompt, cfg, _stream if on_token else None)
+        # VLMPipeline (Gemma 4) takes these by name only, and rejects
+        # streamer=None.
+        extra = {"streamer": _stream} if on_token else {}
+        result = pipe.generate(prompt, generation_config=cfg, **extra)
     return str(result).strip()
