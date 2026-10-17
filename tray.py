@@ -59,26 +59,50 @@ def _tray_preexec() -> None:
         pass
 
 
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("Socket closed")
-        buf += chunk
-    return buf
+class FrameReader:
+    """Reassembles the length-prefixed JSON frames of the tray protocol from a
+    non-blocking socket (shared with tray_qt.py).
 
+    Reading frame by frame with recv(n) loses the bytes of a half-arrived
+    message, and cannot tell "nothing yet" from "the other side is gone": both
+    looked like an empty read, so a dead peer was never noticed."""
 
-def _recv_message(sock: socket.socket) -> dict | None:
-    try:
-        raw_len = _recv_exact(sock, 4)
-        msg_len = struct.unpack("!I", raw_len)[0]
-        if msg_len > 1_000_000:
-            return None
-        raw = _recv_exact(sock, msg_len)
-        return json.loads(raw.decode("utf-8"))
-    except (ConnectionError, OSError, json.JSONDecodeError):
-        return None
+    MAX_FRAME = 1_000_000
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._closed = False
+
+    def read(self, sock: socket.socket) -> list[dict]:
+        """Every complete message that has arrived. Raises ConnectionError once
+        the peer has closed the socket and its last messages were handed out."""
+        while not self._closed:
+            try:
+                chunk = sock.recv(65536)
+            except BlockingIOError:
+                break
+            if not chunk:
+                self._closed = True
+                break
+            self._buf += chunk
+        messages: list[dict] = []
+        while len(self._buf) >= 4:
+            (size,) = struct.unpack("!I", self._buf[:4])
+            if size > self.MAX_FRAME:
+                raise ConnectionError(f"oversized frame ({size} bytes)")
+            if len(self._buf) < 4 + size:
+                break
+            raw = bytes(self._buf[4 : 4 + size])
+            del self._buf[: 4 + size]
+            try:
+                message = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(message, dict):
+                messages.append(message)
+        if self._closed and not messages:
+            raise ConnectionError("socket closed")
+        return messages
 
 
 def _send_message(sock: socket.socket, msg: dict) -> None:
@@ -110,6 +134,7 @@ class Tray:
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
         self._connected = False
+        self._reader = FrameReader()
         self._restarts = 0
         self._next_restart_at = 0.0
         self._gave_up = False
@@ -167,6 +192,7 @@ class Tray:
                         sock.close()
                 else:
                     self._sock = sock
+                    self._reader = FrameReader()
                     self._connected = True
                     self._restarts = 0
                     # Sync initial watcher state
@@ -276,17 +302,13 @@ class Tray:
             return
         try:
             self._sock.setblocking(False)
-            while True:
-                try:
-                    msg = _recv_message(self._sock)
-                    if msg is None:
-                        break
-                    self._dispatch(msg.get("event", ""), msg.get("value"))
-                except BlockingIOError:
-                    break
-        except (OSError, ConnectionError):
+            messages = self._reader.read(self._sock)
+        except OSError:  # includes ConnectionError: the tray process is gone
             self._connected = False
             self._reconnect()
+            return
+        for msg in messages:
+            self._dispatch(msg.get("event", ""), msg.get("value"))
 
     def shutdown(self) -> None:
         """Tell tray subprocess to quit and wait for it."""
