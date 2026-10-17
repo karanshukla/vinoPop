@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from xdg_paths import CONFIG_DIR
+from xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
 
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
@@ -276,6 +276,7 @@ class Settings:
     def reload(self) -> None:
         self._data = {}
         if self.path.is_file():
+            make_private(self.path)  # files from older versions were 0644
             try:
                 with self.path.open("r", encoding="utf-8") as f:
                     loaded = json.load(f)
@@ -311,12 +312,12 @@ class Settings:
         self._data[key] = value
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.path.parent)
         merged = {**DEFAULTS, **self._data}
         # Atomic write: write to tmp, fsync, then rename. Avoids losing
         # all settings if the process dies (OOM, power) mid-write.
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
+        with open_private(tmp) as f:
             json.dump(merged, f, indent=2, ensure_ascii=False)
             f.write("\n")
             f.flush()
