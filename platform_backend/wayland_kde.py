@@ -147,6 +147,17 @@ class WaylandSelectionWatcher:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last_text = ""
+        self._last_clipboard: str | None = None
+
+    def _is_copy_button(self, text: str) -> bool:
+        """A page's Copy button selects a hidden field and copies it, so
+        PRIMARY and CLIPBOARD change together to the same text. A real
+        selection changes PRIMARY alone (copying it afterwards fires no
+        PRIMARY event)."""
+        clip = self._backend.read_selection("clipboard")
+        changed = self._last_clipboard is not None and clip != self._last_clipboard
+        self._last_clipboard = clip
+        return changed and clip == text
 
     def set_debounce_ms(self, ms: int) -> None:
         self._debounce_s = max(0.0, ms / 1000.0)
@@ -239,6 +250,9 @@ class WaylandSelectionWatcher:
                 continue
             text = self._backend.read_selection("primary")
             if not text or not text.strip():
+                continue
+            if self._is_copy_button(text):
+                print("[wayland] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")
                 continue
             self._last_text = text
             if cap_x is None:
