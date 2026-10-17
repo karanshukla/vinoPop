@@ -24,7 +24,7 @@ def _copy(text: str, label: str) -> None:
             "-t",
             "2500",
             "-i",
-            "preferences-system-time-symbolic",
+            "alarm-symbolic",
             label,
             text[:200],
         ],
@@ -156,7 +156,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="timestamp-convert",
-            icon="preferences-system-time-symbolic",
+            icon="alarm-symbolic",
             tooltip="Timestamp ↔ ISO",
             handler=_timestamp_convert,
             content_types=types,
@@ -167,7 +167,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="color-convert",
-            icon="preferences-color-symbolic",
+            icon="color-select-symbolic",
             tooltip="Color hex ↔ rgb",
             handler=_color_convert,
             content_types=types,
