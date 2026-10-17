@@ -1128,7 +1128,7 @@ class RecipeWizard:
 
         # Validation hint if something's missing
         provisional = self._build_recipe_dict()
-        errors = recipe_loader.validate(provisional)
+        errors = recipe_loader.validate(provisional) + recipe_loader.safety_errors(provisional)
         if errors:
             warn = _label(
                 "<b>One more thing:</b> " + GLib.markup_escape_text(errors[0]),
@@ -1157,7 +1157,7 @@ class RecipeWizard:
 
     def _on_apply(self, _btn) -> None:
         recipe = self._build_recipe_dict()
-        errors = recipe_loader.validate(recipe)
+        errors = recipe_loader.validate(recipe) + recipe_loader.safety_errors(recipe)
         if errors:
             msg = Adw.AlertDialog(heading="Couldn't save just yet", body="\n".join(errors))
             msg.add_response("ok", "OK")

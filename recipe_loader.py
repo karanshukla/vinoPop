@@ -191,12 +191,92 @@ class _DefaultMissing(dict):
         return "{" + key + "}"
 
 
+# Placeholders whose value is safe to drop UNQUOTED into a shell command line:
+# shlex-quoted, percent-encoded, or base64 (alphanumerics and + / =). Everything
+# else ({text}, {text_json}, {text_url_decode}, ...) can carry shell metacharacters
+# and would turn a click on attacker-controlled text into command execution.
+_SHELL_SAFE_PLACEHOLDERS = frozenset({"text_shell", "text_url", "text_b64"})
+# A replacement field's name, also when followed by a conversion or format spec
+# ({text!s}, {text:>5}) that str.format applies just the same.
+_FIELD_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?:[!:.\[][^{}]*)?\}")
+
+
+def unsafe_shell_placeholders(template: str) -> list[str]:
+    """Placeholders in `template` that must not reach a shell unquoted."""
+    names = set(_FIELD_RE.findall(template or "")) & set(_text_variables())
+    return sorted(names - _SHELL_SAFE_PLACEHOLDERS)
+
+
+def _text_variables() -> list[str]:
+    return [
+        "text",
+        "text_url",
+        "text_shell",
+        "text_upper",
+        "text_lower",
+        "text_strip",
+        "text_mock",
+        "text_json",
+        "text_json_min",
+        "text_b64",
+        "text_url_decode",
+        "text_b64_decode",
+    ]
+
+
+def safety_errors(recipe: dict) -> list[str]:
+    """Reasons a recipe must not be allowed to run shell commands. Kept apart
+    from validate(): an unsafe recipe still loads, as a button that explains
+    why it was disabled, rather than silently vanishing."""
+    action = recipe.get("action") if isinstance(recipe, dict) else None
+    if not isinstance(action, dict):
+        return []
+    quoting = "use {text_shell} (shell-quoted) or {text_url} (URL-encoded)"
+    errors = []
+    if action.get("type") == "run_command":
+        bad = unsafe_shell_placeholders(action.get("template", ""))
+        if bad:
+            errors.append(f"the command uses {bad} unquoted; {quoting}")
+    elif action.get("type") == "chain":
+        for i, step in enumerate(action.get("steps") or []):
+            if not isinstance(step, dict) or step.get("type") != "run_command":
+                continue
+            if not step.get("template"):
+                # An empty template would run the (transformed) selection itself
+                errors.append(f"chain.steps[{i}] (run_command) needs a command template")
+                continue
+            bad = unsafe_shell_placeholders(step["template"])
+            if bad:
+                errors.append(f"chain.steps[{i}] uses {bad} unquoted; {quoting}")
+    return errors
+
+
+def _disabled_handler(name: str) -> Callable[[str], None]:
+    def handler(_text: str) -> None:
+        notify(
+            "vinoPop recipe disabled",
+            f"{name}: unsafe command template - see ~/.cache/vinopop/vinopop.log",
+            "dialog-warning",
+            5000,
+        )
+
+    return handler
+
+
 def _build_handler(recipe: dict) -> Callable[[str], None]:
     action = recipe.get("action") or {}
     atype = action.get("type", "")
     template = action.get("template", "")
     title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "vinoPop")
     icon = recipe.get("icon") or "applications-other"
+
+    # Refuse to build a shell-running button that would feed the selection to
+    # the shell unquoted: the click then explains itself instead of running it.
+    problems = safety_errors(recipe)
+    if problems:
+        name = recipe.get("name") or recipe.get("tooltip") or "unnamed"
+        print(f"[recipe] REFUSED to load recipe {name!r}: {'; '.join(problems)}")
+        return _disabled_handler(name)
 
     if atype == "open_url":
 
@@ -209,45 +289,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
         return handler
 
     if atype == "run_command":
-        # Reject templates that embed the selection unquoted. Only
-        # {text_shell} and {text_url} survive shell evaluation safely;
-        # {text}, {text_upper}, {text_lower}, {text_strip} pass shell
-        # metacharacters through and turn the recipe into trivial RCE
-        # if the user ever clicks the button on attacker-controlled text.
-        # Refuse to register so the bug surfaces in logs instead of as
-        # a quiet wormhole.
-        import re as _re
-
-        unsafe = {"text", "text_upper", "text_lower", "text_strip", "text_mock"}
-        placeholders = set(_re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", template))
-        bad = placeholders & unsafe
-        if bad:
-            name = recipe.get("name") or recipe.get("tooltip") or "unnamed"
-            print(
-                f"[recipe] REFUSED to load run_command recipe {name!r}: "
-                f"template uses unsafe placeholder(s) {sorted(bad)} - "
-                f"replace with {{text_shell}} (shell-quoted) or "
-                f"{{text_url}} (URL-encoded)."
-            )
-
-            def disabled_handler(_text: str) -> None:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "5000",
-                        "-u",
-                        "critical",
-                        "-i",
-                        "dialog-warning",
-                        "vinoPop recipe disabled",
-                        f"{name}: unsafe template - see ~/.cache/vinopop/vinopop.log",
-                    ],
-                    check=False,
-                )
-
-            return disabled_handler
 
         def handler(text: str) -> None:
             cmd = _render(template, text)
@@ -602,7 +643,13 @@ def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
         name = str(recipe.get("name") or "")
         if not name or not all(c.isalnum() or c in "-_" for c in name):
             raise ValueError(f"invalid recipe name {name!r}")
-        target_path = RECIPES_DIR / f"{name}.json"
+        # Two buttons labelled "Search" must not overwrite each other. The name
+        # is also the plugin's identity (order, disable list), so it changes too.
+        unique, n = name, 2
+        while (RECIPES_DIR / f"{unique}.json").exists():
+            unique, n = f"{name}-{n}", n + 1
+        recipe = {**recipe, "name": unique}
+        target_path = RECIPES_DIR / f"{unique}.json"
     tmp = target_path.with_suffix(target_path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as f:
         json.dump(recipe, f, indent=2, ensure_ascii=False)
