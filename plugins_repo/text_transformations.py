@@ -235,7 +235,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="ascii-only",
-            icon="format-text-richtext-symbolic",
+            icon="text-x-generic-symbolic",
             tooltip="ASCII only",
             handler=_ascii_only,
             content_types=types,
@@ -258,7 +258,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="mock-case",
-            icon="face-laugh-symbolic",
+            icon="face-smile-big-symbolic",
             tooltip="mOcKiNg cAsE",
             handler=_mock_case,
             content_types=types,

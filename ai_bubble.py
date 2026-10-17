@@ -142,6 +142,8 @@ class ResultBubble:
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         motion.connect("leave", self._on_leave)
+        # Same stale-crossing problem as the popup: motion still fires.
+        motion.connect("motion", lambda _c, x, y: self._on_enter(_c, x, y))
         self.win.add_controller(motion)
 
         bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)

@@ -143,6 +143,13 @@ DEFAULTS: dict[str, Any] = {
     # Local LLM for summarize / rewrite / explain / translate. Keys are in
     # vino_ai/models.py: "gemma-4-e2b" (default) or "gemma-4-e4b".
     "ai_llm_model": "gemma-4-e2b",
+    # Download the LLM in the background at daemon start (first launch and
+    # onboarding included), so the first AI click doesn't wait for the download.
+    "ai_prefetch_model": True,
+    # Seconds to wait for a device to load the LLM before falling back to
+    # the next (NPU -> GPU -> CPU). A slow first NPU compile keeps running
+    # in the background and the model moves to the NPU once it's done.
+    "ai_load_timeout_seconds": 120.0,
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying
     # - 8 s felt sluggish in practice. Tunable via Settings → Timing.

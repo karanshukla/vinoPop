@@ -117,6 +117,17 @@ def _layer_shell():
     return _LAYER
 
 
+def _die_with_parent() -> None:
+    """preexec_fn: SIGTERM this child when the daemon dies, however it dies.
+    Without it every restart left a `wl-paste --watch` behind, all of them
+    pulling each new selection out of the source app."""
+    import ctypes
+    import signal
+
+    PR_SET_PDEATHSIG = 1
+    ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+
+
 # ---------------------------------------------------------------------------
 # Selection watcher: `wl-paste --primary --watch` notifies us; we then read
 # the primary selection and the cursor position, mirroring the X11 watcher's
@@ -136,6 +147,17 @@ class WaylandSelectionWatcher:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last_text = ""
+        self._last_clipboard: str | None = None
+
+    def _is_copy_button(self, text: str) -> bool:
+        """A page's Copy button selects a hidden field and copies it, so
+        PRIMARY and CLIPBOARD change together to the same text. A real
+        selection changes PRIMARY alone (copying it afterwards fires no
+        PRIMARY event)."""
+        clip = self._backend.read_selection("clipboard")
+        changed = self._last_clipboard is not None and clip != self._last_clipboard
+        self._last_clipboard = clip
+        return changed and clip == text
 
     def set_debounce_ms(self, ms: int) -> None:
         self._debounce_s = max(0.0, ms / 1000.0)
@@ -168,12 +190,14 @@ class WaylandSelectionWatcher:
                 ["wl-paste", "--primary", "--watch", "echo"],
                 stdout=subprocess.PIPE,
                 bufsize=0,
+                preexec_fn=_die_with_parent,
             )
         except OSError as exc:
             print(f"[wayland] could not start wl-paste --watch: {exc}")
             return
         assert self._proc.stdout is not None
         fd = self._proc.stdout.fileno()
+        self._last_clipboard = self._backend.read_selection("clipboard")
         first = True
         while not self._stop.is_set():
             # Block until at least one ping arrives (0.5 s wake-ups so stop()
@@ -226,6 +250,9 @@ class WaylandSelectionWatcher:
                 continue
             text = self._backend.read_selection("primary")
             if not text or not text.strip():
+                continue
+            if self._is_copy_button(text):
+                print("[wayland] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")
                 continue
             self._last_text = text
             if cap_x is None:

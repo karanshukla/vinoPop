@@ -40,7 +40,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="ai-summarize",
-            icon="view-list-bullet-symbolic",
+            icon="view-list-symbolic",
             tooltip="Summarize",
             handler=lambda t: _open("Summary", "summarize", t),
             predicate=_long_enough,

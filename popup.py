@@ -7,6 +7,7 @@ user clicks outside it.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 from collections.abc import Callable
@@ -27,6 +28,8 @@ import actions
 import plugin_loader
 from classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
+
+log = logging.getLogger("vinopop")
 
 _CSS = b"""
 /* The window itself is invisible; only the rounded bar paints. GTK 4 needs
@@ -377,6 +380,10 @@ class PopupWindow:
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         motion.connect("leave", self._on_leave)
+        # Hiding the popup with the pointer on it (every button click does)
+        # leaves GTK thinking the pointer never left, so the next show gets
+        # no "enter" and clicks read as outside. Motion still fires.
+        motion.connect("motion", self._on_motion)
         self.win.add_controller(motion)
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_press)
@@ -696,6 +703,13 @@ class PopupWindow:
         editable: bool = True,
         rect: tuple[int, int, int, int] | None = None,
     ) -> None:
+        if self.win.get_visible() and self._pointer_in_popup:
+            # The user is reaching for a button, so this isn't a selection
+            # they just made. On Wayland it's usually an app re-claiming
+            # PRIMARY on focus (a terminal with old text selected), and
+            # swapping the buttons now would run them on that text.
+            log.info("[popup] ignored a selection change while the pointer is on the popup")
+            return
         self._current_text = text
         self._anchor = (int(x), int(y))
         self._clear_buttons()
@@ -782,8 +796,8 @@ class PopupWindow:
                                 p.execute(text_snapshot)
                         else:
                             p.execute(text_snapshot)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[popup] plugin '{plugin_name}' failed: {exc}")
+                    except Exception:  # noqa: BLE001
+                        log.exception("[popup] plugin '%s' failed", plugin_name)
 
                 threading.Thread(
                     target=_worker,
@@ -1323,6 +1337,10 @@ class PopupWindow:
         self._pointer_in_popup = True
         self._cancel_initial_hide()
         self._cancel_hide_timeout()
+
+    def _on_motion(self, controller, x, y) -> None:
+        if not self._pointer_in_popup:
+            self._on_enter(controller, x, y)
 
     def _on_leave(self, _controller) -> None:
         self._pointer_in_popup = False

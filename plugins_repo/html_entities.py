@@ -41,7 +41,7 @@ def _copy(text: str, label: str) -> None:
             "-t",
             "2500",
             "-i",
-            "text-html-symbolic",
+            "applications-engineering-symbolic",
             label,
             text[:200],
         ],
@@ -62,7 +62,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="html-entity-encode",
-            icon="text-html-symbolic",
+            icon="applications-engineering-symbolic",
             tooltip="HTML entity encode",
             handler=_encode,
             content_types=types,
@@ -73,7 +73,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="html-entity-decode",
-            icon="text-html-symbolic",
+            icon="applications-engineering-symbolic",
             tooltip="HTML entity decode",
             handler=_decode,
             content_types=types,

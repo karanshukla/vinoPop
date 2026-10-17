@@ -117,7 +117,7 @@ def test_npu_is_still_tried_when_ovfetch_warns(monkeypatch):
 def test_models_registry():
     assert models.DEFAULT_LLM in models.LLM_MODELS
     for m in models.LLM_MODELS.values():
-        assert m.repo_id.startswith("OpenVINO/") and m.repo_id.endswith("-ov")
+        assert m.repo_id.split("/")[0] in ("OpenVINO", "arankays") and m.repo_id.endswith("-ov")
         # a full commit sha, or "main" until one is pinned
         assert m.revision == "main" or (len(m.revision) == 40 and int(m.revision, 16) >= 0)
 
@@ -129,8 +129,15 @@ def test_model_completeness(tmp_path, monkeypatch):
     path = models.model_dir(model)
     path.mkdir(parents=True)
     (path / "openvino_language_model.xml").write_text("")
-    assert not models.is_downloaded(model)
     (path / "openvino_tokenizer.xml").write_text("")
+    assert not models.is_downloaded(model)  # weights still missing
+    (path / "openvino_language_model.bin").write_text("")
+    assert models.is_downloaded(model)
+    in_flight = path / ".cache" / "huggingface" / "download"
+    in_flight.mkdir(parents=True)
+    (in_flight / "x.incomplete").write_text("")
+    assert not models.is_downloaded(model)  # a transfer is still running
+    (in_flight / "x.incomplete").unlink()
     assert models.is_downloaded(model)
     assert models.ensure_llm(model) == path  # no download when complete
 
@@ -155,7 +162,7 @@ class _FakePipe:
     def get_generation_config(self):
         return self.cfg
 
-    def generate(self, prompt, cfg, streamer):
+    def generate(self, prompt, *, generation_config, streamer=None):  # VLMPipeline's shape
         self.prompts.append(prompt)
         for chunk in ("Hola", " mundo"):
             if streamer:
@@ -194,6 +201,61 @@ def test_llm_translate_keeps_paragraphs_of_multi_paragraph_input(fake_pipe):
 def test_llm_run_truncates_long_input(fake_pipe):
     llm.run("summarize", "x" * (llm.MAX_INPUT_CHARS + 500))
     assert "x" * (llm.MAX_INPUT_CHARS + 1) not in fake_pipe.prompts[0]
+
+
+def test_llm_warns_when_npu_fails_and_another_device_loads(monkeypatch, tmp_path):
+    seen, notes = [], []
+
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **_props):
+            if dev == "NPU":
+                raise RuntimeError("compile failed")
+            return object()
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
+    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: notes.append(cmd))
+    llm._load(seen.append)
+    assert any("running on GPU" in m for m in seen)
+    assert notes and notes[0][0] == "notify-send"
+
+
+def test_llm_falls_back_when_npu_compile_times_out_then_moves_back(monkeypatch, tmp_path):
+    import threading
+
+    release, seen = threading.Event(), []
+
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **_props):
+            if dev == "NPU":
+                release.wait(5)
+            return dev
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm, "_late", None)
+    monkeypatch.setattr(llm, "_load_timeout", lambda: 0.05)
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
+    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: None)
+    assert llm._load(seen.append) == "GPU"
+    assert any("still compiling" in m for m in seen)
+
+    release.set()
+    for _ in range(100):
+        if llm._late is not None:
+            break
+        threading.Event().wait(0.01)
+    assert llm._load(seen.append) == "NPU"
+    assert llm.device() == "NPU"
 
 
 def test_llm_run_rejects_unknown_task():
