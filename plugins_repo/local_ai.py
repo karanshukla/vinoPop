@@ -3,7 +3,9 @@
 Everything runs on this machine through OpenVINO (NPU first, then iGPU,
 then CPU). The first click downloads the model once; after that it works
 offline. Answers stream into a bubble over the selection with Copy, and
-Rewrite adds Replace, which pastes the new text over the selection.
+Rewrite adds Replace, which pastes the new text over the selection; it is
+off when the selection was cut or the answer hit its length cap, since a
+partial rewrite would overwrite the whole selection.
 """
 
 from __future__ import annotations

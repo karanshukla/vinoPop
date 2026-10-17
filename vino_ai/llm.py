@@ -10,11 +10,15 @@ over the device.
 from __future__ import annotations
 
 import gc
+import json
 import logging
+import re
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 from xdg_paths import CACHE_DIR
 
@@ -27,6 +31,7 @@ log = logging.getLogger("vinopop")
 # token count decides, since CJK runs well under 4 chars per token.
 MAX_INPUT_CHARS = 8000
 MAX_PROMPT_LEN = 3072
+MIN_RESPONSE_LEN = 512
 # Room for what the pipeline adds around the templated prompt (measured
 # ~40 tokens on Gemma 4's VLM pipeline).
 _PROMPT_MARGIN = 96
@@ -192,7 +197,7 @@ def _load(on_status: Callable[[str], None]):
         on_status(f"Loading model on {dev}…")
         props: dict[str, object] = {"CACHE_DIR": str(cache)}
         if dev == "NPU":
-            props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=512)
+            props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=MIN_RESPONSE_LEN)
         try:
             if (path / "openvino_model.xml").is_file():
                 cls = ov_genai.LLMPipeline
@@ -289,33 +294,182 @@ def _count_tokens(tok, s: str) -> int | None:
         return None
 
 
+# Control tokens spelled out in a chat template: <|turn>, <turn|>, <|im_start|>.
+_TEMPLATE_TOKEN = re.compile(r"<\|[^<>|\s]{1,40}\|?>|<[^<>|\s]{1,40}\|>")
+_special_cache: dict[str, re.Pattern[str] | None] = {}
+
+
+def _config_special_tokens(path: Path) -> set[str]:
+    """Special tokens listed in the export's tokenizer_config.json."""
+    try:
+        cfg = json.loads((path / "tokenizer_config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    found: set[str] = set()
+
+    def add(value) -> None:
+        if isinstance(value, dict):
+            value = value.get("content")
+        if isinstance(value, str) and value:
+            found.add(value)
+
+    for entry in (cfg.get("added_tokens_decoder") or {}).values():
+        if isinstance(entry, dict) and entry.get("special"):
+            add(entry)
+    for key, value in cfg.items():
+        if key.endswith("_token"):
+            add(value)
+        elif key in ("additional_special_tokens", "extra_special_tokens"):
+            for v in value.values() if isinstance(value, dict) else value or ():
+                add(v)
+    return found
+
+
+def _special_pattern(tok, path: Path | None) -> re.Pattern[str] | None:
+    """One regex matching every special token of the active model, from its
+    tokenizer config, the tokenizer's own BOS/EOS/PAD and the literal
+    control tokens in its chat template. Cached per model directory."""
+    key = str(path)
+    if key in _special_cache:
+        return _special_cache[key]
+    found = _config_special_tokens(path) if path is not None else set()
+    for getter in ("get_bos_token", "get_eos_token", "get_pad_token"):
+        try:
+            value = getattr(tok, getter)()
+        except Exception:  # noqa: BLE001 - not every tokenizer has all three
+            continue
+        if isinstance(value, str) and value:
+            found.add(value)
+    try:
+        template = tok.chat_template
+    except Exception:  # noqa: BLE001
+        template = None
+    if isinstance(template, str):
+        found.update(_TEMPLATE_TOKEN.findall(template))
+    pattern = None
+    if found:
+        alts = sorted(found, key=len, reverse=True)
+        pattern = re.compile("|".join(re.escape(t) for t in alts))
+    _special_cache[key] = pattern
+    return pattern
+
+
+def _strip_special(text: str, pattern: re.Pattern[str] | None) -> str:
+    """Remove control tokens from user text, so a selection can't close the
+    user turn and forge a system or model turn. Repeated until stable, since
+    removing one can join the halves of another."""
+    if pattern is None:
+        return text
+    while True:
+        cleaned = pattern.sub("", text)
+        if cleaned == text:
+            return cleaned
+        text = cleaned
+
+
+_SENTENCE_END = re.compile(r"[.!?…](?=\s)|[。！？]|\n")
+
+
+def _cut(text: str, keep: int) -> str:
+    """`text` cut to at most `keep` chars, at a sentence end (or failing that
+    a space) when one is close to the cut."""
+    head = text[:keep]
+    ends = [m.end() for m in _SENTENCE_END.finditer(head)]
+    if ends and ends[-1] >= keep * 0.8:
+        return head[: ends[-1]].rstrip()
+    space = head.rfind(" ")
+    if space >= keep * 0.9:
+        return head[:space].rstrip()
+    return head
+
+
 def _fit_prompt(tok, task: str, text: str, lang: str) -> tuple[str, str]:
-    """The templated prompt and the (possibly shortened) text, cut until
-    the prompt fits MAX_PROMPT_LEN tokens."""
+    """The templated prompt and the (possibly shortened) text, cut by token
+    count until the prompt fits the NPU's MAX_PROMPT_LEN."""
     limit = MAX_PROMPT_LEN - _PROMPT_MARGIN
-    for _ in range(4):
+
+    def template(t: str) -> str:
         history = [
             {"role": "system", "content": _PROMPTS[task].format(lang=lang)},
-            {"role": "user", "content": text},
+            {"role": "user", "content": t},
         ]
-        prompt = tok.apply_chat_template(history, add_generation_prompt=True)
-        n = _count_tokens(tok, prompt)
-        if n is None or n <= limit or not text:
-            return prompt, text
-        keep = int(len(text) * limit / n * 0.95)
+        return tok.apply_chat_template(history, add_generation_prompt=True)
+
+    prompt = template(text)
+    n = _count_tokens(tok, prompt)
+    if n is None or n <= limit or not text:
+        return prompt, text
+    overhead = _count_tokens(tok, template("")) or 0
+    for _ in range(8):
+        # Scale by the text's share of the tokens, not the whole prompt's:
+        # with a long system prompt that would cut too little per pass.
+        room = max(limit - overhead, 0)
+        keep = int(len(text) * room / max(n - overhead, 1) * 0.97)
         log.info("[vino_ai] prompt is %d tokens, cutting the text to %d chars", n, keep)
-        text = text[:keep]
-    return prompt, text
+        text = _cut(text, min(keep, len(text) - 1))
+        prompt = template(text)
+        n = _count_tokens(tok, prompt) or 0
+        if n <= limit and text:
+            return prompt, text
+        if not text:
+            break
+    raise RuntimeError(f"the prompt is still {n} tokens after cutting the text (limit {limit})")
 
 
-def _generate(pipe, task: str, text: str, lang: str, on_token: Callable[[str], None] | None):
+def _num_generated(result, tok, text: str) -> int | None:
+    """Tokens the model produced: the pipeline's own count when it reports
+    one, else the answer re-encoded."""
+    try:
+        return int(result.perf_metrics.get_num_generated_tokens())
+    except Exception:  # noqa: BLE001 - plain str results, older GenAI
+        return _count_tokens(tok, text)
+
+
+@dataclass
+class Answer:
+    text: str
+    truncated_input: bool = False  # only part of the selection reached the model
+    hit_max_new_tokens: bool = False  # the answer stopped at its length cap
+
+    @property
+    def incomplete(self) -> bool:
+        return self.truncated_input or self.hit_max_new_tokens
+
+
+class Cancelled(Exception):
+    """The caller gave up on the run (bubble closed or superseded)."""
+
+
+def _generate(
+    pipe,
+    task: str,
+    text: str,
+    lang: str,
+    on_token: Callable[[str], None] | None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Answer:
     import openvino_genai as ov_genai
 
     tok = pipe.get_tokenizer()
+    text = _strip_special(text, _special_pattern(tok, models.model_dir(models.llm_model())))
+    before = len(text)
     prompt, text = _fit_prompt(tok, task, text, lang)
+    truncated = len(text) < before
 
     cfg = pipe.get_generation_config()
-    cfg.max_new_tokens = _MAX_NEW_TOKENS[task]
+    max_new = _MAX_NEW_TOKENS[task]
+    n_text = _count_tokens(tok, text)
+    if n_text:
+        # Short selections get short budgets: a runaway answer to a one-line
+        # rewrite ends (and is cancelled) sooner.
+        max_new = min(max_new, int(1.5 * n_text) + 64)
+    n_prompt = _count_tokens(tok, prompt)
+    if device() == "NPU" and n_prompt:
+        # The static pipeline's KV cache holds MAX_PROMPT_LEN + MIN_RESPONSE_LEN
+        # tokens and generation ends when it's full; cap at that so an answer
+        # cut short there is reported as one.
+        max_new = max(2, min(max_new, MAX_PROMPT_LEN + MIN_RESPONSE_LEN - n_prompt))
+    cfg.max_new_tokens = max_new
     cfg.do_sample = False
     if device() == "NPU":
         # The NPU decoder emits NaNs on a single-token step
@@ -328,20 +482,36 @@ def _generate(pipe, task: str, text: str, lang: str, on_token: Callable[[str], N
     if hasattr(cfg, "apply_chat_template"):
         cfg.apply_chat_template = False  # already applied above
 
-    running = getattr(getattr(ov_genai, "StreamingStatus", None), "RUNNING", False)
+    statuses = getattr(ov_genai, "StreamingStatus", None)
+    running = getattr(statuses, "RUNNING", False)
+    # CANCEL and STOP both end generate() at the next token; they differ only
+    # in the chat history, which a one-shot generate() doesn't keep. Older
+    # GenAI took a bool, where True meant stop.
+    cancel = getattr(statuses, "CANCEL", True)
+    is_cancelled = cancelled or (lambda: False)
 
     # VLMPipeline (Gemma 4) takes these by name only, and rejects
     # streamer=None.
     extra = {}
-    if on_token is not None:
-        sink = on_token
+    if on_token is not None or cancelled is not None:
+        sink = on_token or (lambda _c: None)
 
         def _stream(chunk: str):
+            if is_cancelled():
+                return cancel
             sink(chunk)
             return running
 
         extra["streamer"] = _stream
-    return pipe.generate(prompt, generation_config=cfg, **extra)
+    result = pipe.generate(prompt, generation_config=cfg, **extra)
+    if is_cancelled():
+        raise Cancelled()
+    answer = str(result).strip()
+    n_gen = _num_generated(result, tok, answer)
+    hit = n_gen is not None and n_gen >= max_new
+    if truncated or hit:
+        log.info("[vino_ai] %s: input cut=%s, hit %d new tokens=%s", task, truncated, max_new, hit)
+    return Answer(answer, truncated_input=truncated, hit_max_new_tokens=hit)
 
 
 def run(
@@ -351,13 +521,18 @@ def run(
     lang: str = "English",
     on_token: Callable[[str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
-) -> str:
-    """Run `task` on `text` and return the full answer. Blocking; call it
-    from a worker thread. `on_token` receives text as it streams,
-    `on_status` gets progress lines (download / load) worth showing."""
+    cancelled: Callable[[], bool] | None = None,
+) -> Answer:
+    """Run `task` on `text` and return the answer, flagged when the input
+    was cut or the output hit its cap. Blocking; call it from a worker
+    thread. `on_token` receives text as it streams, `on_status` gets
+    progress lines (download / load) worth showing. Once `cancelled()` is
+    true the run stops at the next token, or doesn't start if it was still
+    queued, and raises Cancelled."""
     if task not in _PROMPTS:
         raise ValueError(f"unknown task {task!r}")
-    text = text.strip()[:MAX_INPUT_CHARS]
+    full = text.strip()
+    text = full[:MAX_INPUT_CHARS]
     status = on_status or (lambda _m: None)
     global _last_used
     streamed = False
@@ -369,11 +544,15 @@ def run(
             on_token(chunk)
 
     with _lock:
+        if cancelled is not None and cancelled():
+            raise Cancelled()
         try:
             for attempt in range(2):
                 pipe = _load(status)
                 try:
-                    result = _generate(pipe, task, text, lang, _sink if on_token else None)
+                    result = _generate(
+                        pipe, task, text, lang, _sink if on_token else None, cancelled
+                    )
                     break
                 except Exception as exc:
                     if not failures.is_device_lost(exc):
@@ -389,4 +568,6 @@ def run(
         finally:
             _last_used = time.monotonic()
     _schedule_unload()
-    return str(result).strip()
+    if len(text) < len(full):
+        result.truncated_input = True
+    return result
