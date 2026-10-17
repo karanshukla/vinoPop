@@ -25,6 +25,7 @@ import random as _random
 import re
 import shlex
 import shutil
+import string
 import subprocess
 import urllib.parse
 from collections.abc import Callable
@@ -479,6 +480,15 @@ def _content_types(recipe: dict) -> tuple:
     return tuple(_CTYPE_BY_NAME[n] for n in names if n in _CTYPE_BY_NAME)
 
 
+def _template_problem(template: str) -> str | None:
+    """Why `template` can't be rendered (an unbalanced brace), or None."""
+    try:
+        list(string.Formatter().parse(template))
+    except ValueError as exc:
+        return str(exc)
+    return None
+
+
 def validate(recipe: dict) -> list[str]:
     """Return a list of human-readable validation errors (empty = OK)."""
     if not isinstance(recipe, dict):
@@ -521,9 +531,16 @@ def validate(recipe: dict) -> list[str]:
                     )
                 if stype == "transform" and not step.get("template"):
                     errors.append(f"chain.steps[{i}] (transform) needs a template")
+                problem = _template_problem(step.get("template") or "")
+                if problem:
+                    errors.append(f"chain.steps[{i}].template: {problem}")
     else:
         if not action.get("template", ""):
             errors.append("action.template is required")
+        else:
+            problem = _template_problem(action["template"])
+            if problem:
+                errors.append(f"action.template: {problem}")
     # An unrecognised name used to be dropped, and an all-unrecognised list
     # then meant "every content type": a typo made the button universal.
     names = recipe.get("content_types") or []

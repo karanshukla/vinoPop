@@ -177,3 +177,17 @@ def test_bundled_recipes_are_shell_safe():
         "plugins_repo/recipes/*.json"
     ):
         assert recipe_loader.safety_errors(json.loads(path.read_text())) == [], path.name
+
+
+@pytest.mark.parametrize("template", ["https://x/?q={text_url", "oops}", "{", "a {b {c}} d {"])
+def test_validate_flags_unbalanced_braces(template):
+    recipe = {"name": "x", "action": {"type": "open_url", "template": template}}
+    assert any("template" in e for e in recipe_loader.validate(recipe))
+    chain = {"name": "x", "action": {"type": "chain", "steps": [{"template": template}]}}
+    assert any("template" in e for e in recipe_loader.validate(chain))
+
+
+def test_validate_accepts_normal_templates():
+    for template in ("https://x/?q={text_url}", "{{literal}} {text}", "no placeholders"):
+        recipe = {"name": "x", "action": {"type": "open_url", "template": template}}
+        assert recipe_loader.validate(recipe) == [], template

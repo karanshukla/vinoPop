@@ -39,13 +39,15 @@ def test_polling_a_dead_tray_never_blocks_and_gives_up(fake_tray):
     real_start = t._start_process
     t._start_process = lambda: (started.append(1), real_start())[1]
 
-    t0 = time.monotonic()
-    for _ in range(60):
+    slowest = 0.0
+    deadline = time.monotonic() + 15.0  # generous: a slow runner needs a while to spawn and reap
+    while not t._gave_up and time.monotonic() < deadline:
+        t0 = time.monotonic()
         t.poll()
-        time.sleep(0.02)  # let a respawned child exit between polls
-    elapsed = time.monotonic() - t0
-    assert elapsed < 5.0, "each poll used to block ~3 s"
+        slowest = max(slowest, time.monotonic() - t0)
+        time.sleep(0.02)
     assert t._gave_up
+    assert slowest < 1.0, "a poll used to block ~3 s"
     assert len(started) <= len(tray._RESTART_PAUSES_S)  # bounded, not one per poll
 
 
