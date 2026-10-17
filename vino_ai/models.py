@@ -54,9 +54,11 @@ LLM_MODELS = {
     for m in (
         LlmModel(
             "gemma-4-e2b",
-            "OpenVINO/gemma-4-E2B-it-int4-ov",
+            # Re-quantized to channel-wise INT4: the official group-128
+            # export never finishes compiling on the NPU.
+            "arankays/gemma-4-E2B-it-int4-cw-ov",
             "Gemma 4 E2B (fast, low RAM)",
-            "3 GB",
+            "4 GB",
         ),
         LlmModel(
             "gemma-4-e4b",

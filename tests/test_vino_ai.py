@@ -117,7 +117,7 @@ def test_npu_is_still_tried_when_ovfetch_warns(monkeypatch):
 def test_models_registry():
     assert models.DEFAULT_LLM in models.LLM_MODELS
     for m in models.LLM_MODELS.values():
-        assert m.repo_id.startswith("OpenVINO/") and m.repo_id.endswith("-ov")
+        assert m.repo_id.split("/")[0] in ("OpenVINO", "arankays") and m.repo_id.endswith("-ov")
         # a full commit sha, or "main" until one is pinned
         assert m.revision == "main" or (len(m.revision) == 40 and int(m.revision, 16) >= 0)
 
