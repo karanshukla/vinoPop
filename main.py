@@ -240,12 +240,12 @@ class App:
         plugin_loader.load_all()
 
         self.popup = PopupWindow(
-            initial_grace_ms=int(self.settings.get("auto_hide_initial_ms")),
-            leave_grace_ms=int(self.settings.get("auto_hide_leave_ms")),
+            initial_grace_ms=self.settings.get_int("auto_hide_initial_ms"),
+            leave_grace_ms=self.settings.get_int("auto_hide_leave_ms"),
             on_open_plugin_order=lambda: self.open_plugins(tab="order"),
         )
 
-        self.min_len = int(self.settings.get("min_selection_length"))
+        self.min_len = self.settings.get_int("min_selection_length")
         self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
 
         self.watcher: SelectionWatcher | None = None
@@ -527,7 +527,7 @@ class App:
 
         self.watcher = get_backend().make_selection_watcher(
             on_selection,
-            int(self.settings.get("selection_debounce_ms")),
+            self.settings.get_int("selection_debounce_ms"),
         )
         self.watcher.start()
         self._watcher_active = True
@@ -705,10 +705,10 @@ class App:
                 self.settings = get_settings()
                 new_hotkey = (self.settings.get("hotkey") or "").strip()
                 new_clip = (self.settings.get("clipboard_hotkey") or "").strip()
-                self.min_len = int(self.settings.get("min_selection_length"))
+                self.min_len = self.settings.get_int("min_selection_length")
                 self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
-                self.popup._initial_grace_ms = int(self.settings.get("auto_hide_initial_ms"))
-                self.popup._leave_grace_ms = int(self.settings.get("auto_hide_leave_ms"))
+                self.popup._initial_grace_ms = self.settings.get_int("auto_hide_initial_ms")
+                self.popup._leave_grace_ms = self.settings.get_int("auto_hide_leave_ms")
                 # Live-update the tray icon if the user changed its style.
                 if self.tray is not None:
                     try:
@@ -717,7 +717,7 @@ class App:
                         pass
                 self._sync_watcher_with_settings()
                 if self.watcher is not None:
-                    self.watcher.set_debounce_ms(int(self.settings.get("selection_debounce_ms")))
+                    self.watcher.set_debounce_ms(self.settings.get_int("selection_debounce_ms"))
                 # Reload plugins so settings that gate plugin registration
                 # (e.g. ai_services) take effect immediately. Debounced so
                 # a burst of saves (textarea editing, multi-toggle bulk

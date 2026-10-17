@@ -730,7 +730,7 @@ class SettingsDialog:
         # touch-target territory mouse users don't benefit from, and it
         # turns the popup into a screen-spanning bar.
         size_adj = Gtk.Adjustment(
-            value=int(self._settings.get("popup_button_size", 22) or 22),
+            value=self._settings.get_int("popup_button_size"),
             lower=16,
             upper=32,
             step_increment=1,
@@ -836,7 +836,7 @@ class SettingsDialog:
         # makes the popup feel broken) and tops out at 40 (point of
         # diminishing returns; the chip handles the rest).
         count_adj = Gtk.Adjustment(
-            value=int(self._settings.get("max_popup_buttons", 24) or 24),
+            value=self._settings.get_int("max_popup_buttons"),
             lower=4,
             upper=40,
             step_increment=1,
@@ -1878,7 +1878,7 @@ class SettingsDialog:
         row = _plain(Adw.SpinRow.new_with_range(lo, hi, step))
         row.set_title(title)
         row.set_subtitle(subtitle)
-        row.set_value(int(self._settings.get(key)))
+        row.set_value(self._settings.get_int(key))
         row.connect("notify::value", self._on_spin, key)
         return row
 
@@ -1901,7 +1901,7 @@ class SettingsDialog:
         # Unit hint via tooltip - the row already shows the title and a
         # subtitle, no room for an inline suffix.
         row.set_tooltip_text("Value in seconds")
-        row.set_value(float(self._settings.get(key)) / 1000.0)
+        row.set_value(self._settings.get_int(key) / 1000.0)
 
         def _on_seconds_changed(sb: Adw.SpinRow, _pspec) -> None:
             self._save_key(key, int(round(sb.get_value() * 1000)))

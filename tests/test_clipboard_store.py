@@ -21,6 +21,15 @@ def ch(monkeypatch):
     return clipboard_history
 
 
+def test_non_numeric_history_size_falls_back_to_the_default(ch, monkeypatch):
+    # issue #24: a hand-edited "clipboard_history_size": "lots" raised in
+    # the watcher instead of using 25
+    stored = {"clipboard_history_size": "lots", "clipboard_poll_interval": None}
+    monkeypatch.setattr(ch, "_cfg", lambda k, d: stored.get(k, d))
+    assert ch._history_size() == 25
+    assert ch._poll_interval() == 0.5
+
+
 def test_unreadable_snippets_are_backed_up_not_overwritten(ch, tmp_path):
     path = tmp_path / "snippets.json"
     path.write_text('[{"id": "a", "timestamp": 1, "kind": "text", "text": "keep me"')  # truncated
