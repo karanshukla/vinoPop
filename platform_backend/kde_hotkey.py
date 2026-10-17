@@ -165,7 +165,7 @@ ROLES = {
     "clipboard": ("vinopop-clipboard", "Clipboard history"),
     "ocr": ("vinopop-ocr", "Screen OCR"),
 }
-# main.py's callbacks, for callers that don't pass role= (yet)
+# Fallback by callback name, for callers that don't pass role=
 _ROLE_BY_CALLBACK = {
     "show_popup_now": "popup",
     "_on_clipboard_hotkey": "clipboard",
