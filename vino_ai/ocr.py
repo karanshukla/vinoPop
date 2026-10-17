@@ -20,6 +20,8 @@ log = logging.getLogger("vinopop")
 _lock = threading.Lock()
 _engine = None
 _device = None
+# Devices that loaded but then failed to run, skipped for this session.
+_broken: set[str] = set()
 
 
 def _patch_device(dev: str) -> None:
@@ -48,6 +50,8 @@ def _load():
     params["Global.log_level"] = "warning"
     errors = []
     for dev in devices.candidates(devices.OCR_ORDER):
+        if dev in _broken:
+            continue
         try:
             _patch_device(dev)
             engine = RapidOCR(params=params)
@@ -90,9 +94,19 @@ def _reading_order(boxes, texts) -> str:
 def recognize(image_path: str) -> str:
     """OCR an image file and return its text ("" when nothing was found).
     Blocking; call it from a worker thread."""
+    global _engine, _device
     with _lock:
         engine = _load()
-        result = engine(str(image_path))
+        try:
+            result = engine(str(image_path))
+        except Exception as exc:  # noqa: BLE001 - retried on the next device
+            # A device can compile fine and still fail at inference (GPU
+            # driver bugs); drop it and run this capture on the next one.
+            log.warning("[vino_ai] OCR on %s failed while running: %s", _device, exc)
+            if _device is not None:
+                _broken.add(_device)
+            _engine, _device = None, None
+            result = _load()(str(image_path))
     if result is None or not getattr(result, "txts", None):
         return ""
     return _reading_order(result.boxes, result.txts).strip()

@@ -50,6 +50,13 @@ def _setting() -> str:
         return "AUTO"
 
 
+def forced() -> str | None:
+    """The device the user picked by hand, or None in auto mode. A forced
+    device is always tried, even one that failed before."""
+    choice = _setting()
+    return None if choice == "AUTO" else choice
+
+
 def candidates(order: tuple[str, ...]) -> list[str]:
     """Devices to try, best first. An explicit setting comes first and the
     rest of the order stays as fallback, so a missing NPU driver degrades
