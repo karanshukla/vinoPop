@@ -14,6 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Tray icon: runs in its own Qt process (tray_qt.py)
+tray = ["PySide6>=6.5"]
+
 # Offline AI, pinned like requirements-ai.txt (keep the two in step)
 ai = [
     "openvino==2026.4.1",

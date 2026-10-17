@@ -76,8 +76,17 @@ fi
 
 "$PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
     || { echo "[install] missing GTK 4 / libadwaita for python3-gi: sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1"; exit 1; }
-"$PYTHON" -c "import Xlib" 2>/dev/null \
-    || { echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"; exit 1; }
+"$PYTHON" -c "import PySide6" 2>/dev/null \
+    || echo "[install] note: PySide6 is not installed, so there will be no tray icon (pip install --user PySide6, or your distro's python3-pyside6)"
+if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
+    # Only the X11 backend needs it; a pure-Wayland (KDE Plasma) session runs without
+    if [[ -n "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
+        echo "[install] note: python-xlib is not installed (not needed on a pure Wayland session)"
+    else
+        echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"
+        exit 1
+    fi
+fi
 
 # Write the autostart .desktop with the absolute path to main.py
 mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$PLUGIN_DIR"

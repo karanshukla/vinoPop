@@ -129,6 +129,8 @@ class ResultBubble:
         # Set once destroyed, so late idle callbacks from a worker don't
         # touch dead widgets and a timeout + outside click can't race.
         self._dead = False
+        # Bumped by restart(); a run's sink (for_run) is ignored once stale.
+        self._gen = 0
 
         _install_css()
         self.win = Gtk.Window()
@@ -267,7 +269,10 @@ class ResultBubble:
             self._replace_btn.set_sensitive(ready)
 
     def restart(self) -> None:
-        """Clear for a new run (e.g. the translate target changed)."""
+        """Clear for a new run (e.g. the translate target changed). Feed the
+        new run through `for_run()`: the previous run can't be cancelled and
+        keeps streaming, and its late output must not land in this one."""
+        self._gen += 1
         self._text = ""
         self._busy = True
         if self._dismiss_id is not None:
@@ -284,6 +289,11 @@ class ResultBubble:
 
     def push_done(self, text: str | None = None, error: str | None = None) -> None:
         GLib.idle_add(self._finish, text, error)
+
+    def for_run(self) -> _RunSink:
+        """A feeder for the run starting now; once restart() is called it goes
+        quiet, so a superseded run can't write into the next one."""
+        return _RunSink(self, self._gen)
 
     # ---- actions ---------------------------------------------------------
     def _on_copy(self, *_):
@@ -314,6 +324,27 @@ class ResultBubble:
             self._click_watcher.stop()
             self._click_watcher = None
         self.win.destroy()
+
+
+class _RunSink:
+    """push_* feeder for one run of a bubble (see ResultBubble.for_run).
+    Staleness is checked on the main thread, when the update would apply."""
+
+    def __init__(self, bubble: ResultBubble, gen: int) -> None:
+        self._bubble = bubble
+        self._gen = gen
+
+    def _current(self) -> bool:
+        return self._gen == self._bubble._gen
+
+    def push_status(self, msg: str) -> None:
+        GLib.idle_add(lambda: self._current() and self._bubble._set_status(msg))
+
+    def push_token(self, chunk: str) -> None:
+        GLib.idle_add(lambda: self._current() and self._bubble._append(chunk))
+
+    def push_done(self, text: str | None = None, error: str | None = None) -> None:
+        GLib.idle_add(lambda: self._current() and self._bubble._finish(text, error))
 
 
 def replace_selection(text: str) -> None:

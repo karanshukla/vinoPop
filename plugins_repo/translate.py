@@ -79,7 +79,10 @@ def _translate(text: str) -> None:
 
     def _run(bubble) -> None:
         state["bubble"] = bubble
-        ai_worker.run_into(bubble, "translate", text, lang=_ENGLISH_NAME[state["code"]])
+        # A feeder tied to this run: after a language switch the previous run
+        # is still streaming, and must not write into the new one.
+        sink = bubble.for_run()
+        ai_worker.run_into(sink, "translate", text, lang=_ENGLISH_NAME[state["code"]])
 
     def _picker() -> Gtk.Widget:
         codes = [code for code, _label, _name in _LANGS]

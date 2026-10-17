@@ -45,6 +45,20 @@ sudo pacman -S python python-gobject gtk4 libadwaita \
 vinoPop uses GTK 4 (4.14 or newer) and libadwaita (1.5 or newer), so Ubuntu
 24.04, Fedora 40, Debian 13 or anything newer.
 
+For the tray icon, install PySide6 for the Python that runs vinoPop (it runs the
+icon in a small Qt process so it works natively on KDE and over StatusNotifier):
+
+```sh
+sudo apt-get install -y python3-pyside6.qtwidgets   # Ubuntu / Debian
+sudo dnf install -y python3-pyside6                 # Fedora
+sudo pacman -S pyside6                              # Arch
+# or, anywhere: pip install --user PySide6
+```
+
+Without it vinoPop runs fine but has no tray icon. Start with `--no-tray` to skip
+the attempt, and open the windows directly with `python3 settings_gui.py` and
+`python3 plugin_manager.py`.
+
 Optional: `qrencode` for the QR plugin, and gtk4-layer-shell for native popup
 placement on KDE Plasma / wlroots Wayland (`gir1.2-gtk4layershell-1.0` on
 Debian 13 / Ubuntu 24.10+, `gtk4-layer-shell` on Fedora and Arch).
