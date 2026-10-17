@@ -1255,7 +1255,7 @@ def _read_clipboard_target(target: str) -> bytes | None:
 # KeePassXC, KWallet and Plasma offer x-kde-passwordManagerHint with the value
 # "secret"; some apps use the macOS concealed type instead. Matched
 # case-insensitively because X11 atom names are echoed as the app wrote them.
-_PASSWORD_HINT_TARGET = "x-kde-passwordmanagerhint"
+_PASSWORD_HINT_TARGET = "x-kde-passwordmanagerhint"  # nosec B105
 _CONCEALED_TARGETS = ("application/x-nspasteboard-concealed-type",)
 
 
