@@ -646,7 +646,7 @@ class App:
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
         self.hotkey = get_backend().make_hotkey(
-            hotkey_str, self.show_popup_now, use_polling=use_polling
+            hotkey_str, self.show_popup_now, use_polling=use_polling, role="popup"
         )
         self.hotkey.start()
         self._bound_hotkey = hotkey_str
@@ -667,7 +667,7 @@ class App:
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
         self.ocr_hotkey = get_backend().make_hotkey(
-            hotkey_str, self._on_ocr_hotkey, use_polling=use_polling
+            hotkey_str, self._on_ocr_hotkey, use_polling=use_polling, role="ocr"
         )
         self.ocr_hotkey.start()
         self._bound_ocr_hotkey = hotkey_str
@@ -711,7 +711,7 @@ class App:
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
         self.clipboard_hotkey = get_backend().make_hotkey(
-            hotkey_str, self._on_clipboard_hotkey, use_polling=use_polling
+            hotkey_str, self._on_clipboard_hotkey, use_polling=use_polling, role="clipboard"
         )
         self.clipboard_hotkey.start()
         self._bound_clipboard_hotkey = hotkey_str
