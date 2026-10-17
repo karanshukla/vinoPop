@@ -1900,54 +1900,54 @@ def render_placeholders(
         nonlocal clipboard_value, cancelled
         if cancelled:
             return ""
-        token = m.group(1)
+        field = m.group(1)
         now = time.localtime()
-        if token == "date":
+        if field == "date":
             return time.strftime("%Y-%m-%d", now)
-        if token.startswith("date:"):
+        if field.startswith("date:"):
             # Three shapes:
             #   {date:%A}        - strftime now
             #   {date:+7d}       - now + 7d, default %Y-%m-%d
             #   {date:+7d:%A}    - now + 7d, formatted
             # Math units: d (day), w (week), m (≈30 days), y (≈365 days).
-            spec = token[5:]
+            spec = field[5:]
             try:
                 return _render_date_token(spec, now)
             except (ValueError, TypeError):
                 return m.group(0)
-        if token == "time":
+        if field == "time":
             return time.strftime("%H:%M", now)
-        if token == "datetime":
+        if field == "datetime":
             return time.strftime("%Y-%m-%d %H:%M", now)
-        if token == "weekday":
+        if field == "weekday":
             # %A is locale-aware: "Tirsdag" on nb_NO, "Tuesday" on en_US.
             return time.strftime("%A", now)
-        if token == "name":
+        if field == "name":
             return _full_user_name()
-        if token == "clipboard":
+        if field == "clipboard":
             if clipboard_value is None:
                 clipboard_value = _read_clipboard_text() or ""
             return clipboard_value
-        if token == "selection":
+        if field == "selection":
             # PRIMARY (the currently highlighted text). Captured fresh
             # at expansion time - whatever the user has selected when
             # the snippet fires gets pulled in. Enables transform-style
             # snippets: "Quote: {selection}", "TODO: {selection}".
             return _read_primary_selection()
-        if token == "cursor":
+        if field == "cursor":
             return _CURSOR_SENTINEL
-        if token.startswith("ask:"):
-            spec = token[4:]
+        if field.startswith("ask:"):
+            spec = field[4:]
             # Strip off |options to get just the label key used in the
             # answers dict.
             label = spec.split("|", 1)[0].strip() or "Value"
             if ask_answers is not None and label in ask_answers:
                 return ask_answers[label]
             return ""
-        if token.startswith("shell:"):
-            return _render_shell_token(token[6:])
-        if token.startswith("var:"):
-            return _resolve_var(token[4:])
+        if field.startswith("shell:"):
+            return _render_shell_token(field[6:])
+        if field.startswith("var:"):
+            return _resolve_var(field[4:])
         return m.group(0)
 
     rendered = _PLACEHOLDER_RE.sub(repl, text)
