@@ -203,6 +203,60 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
     view.add_controller(focus)
 
 
+def _doctor_checks() -> list[dict]:
+    """Run `main.py --doctor --json` and return its checks."""
+    import json
+    import sys
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parent / "main.py"
+    try:
+        res = subprocess.run(
+            [sys.executable, str(main_py), "--doctor", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return list(json.loads(res.stdout)["checks"])
+    except Exception as exc:  # noqa: BLE001 - shown in the page
+        return [{"status": "FAIL", "label": "doctor", "detail": f"couldn't run: {exc}"}]
+
+
+def _session_info() -> list[tuple[str, str]]:
+    import os
+    import platform
+
+    try:
+        from version import __version__
+    except Exception:  # noqa: BLE001
+        __version__ = "unknown"
+    env = os.environ.get
+    display = Gdk.Display.get_default()
+    try:
+        system = platform.freedesktop_os_release().get("PRETTY_NAME", "Linux")
+    except OSError:
+        system = platform.system()
+    return [
+        ("vinoPop", __version__),
+        (
+            "Desktop",
+            f"{env('XDG_CURRENT_DESKTOP') or 'unknown'} on {env('XDG_SESSION_TYPE') or 'unknown'}",
+        ),
+        ("GTK display", type(display).__name__ if display else "none"),
+        ("System", system),
+        ("Kernel", platform.release()),
+    ]
+
+
+def _open_path(path) -> None:
+    from gi.repository import Gio
+
+    try:
+        Gio.AppInfo.launch_default_for_uri(path.as_uri(), None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[settings] couldn't open {path}: {exc}")
+
+
 def _force_to_front(window: Gtk.Window) -> None:
     """Bring the window to the foreground. GTK 4 dropped keep_above and
     GdkWindow.raise_(), so present() (with an unminimize first) is the
@@ -342,9 +396,18 @@ _SETTING_ICONS = {
 
 
 class SettingsDialog:
-    def __init__(self, on_changed: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        on_changed: Callable[[], None] | None = None,
+        on_restart: Callable[[], None] | None = None,
+        on_open_plugins: Callable[..., None] | None = None,
+    ) -> None:
         gtk4_app.init()
         self._on_changed = on_changed
+        self._on_restart = on_restart
+        self._on_open_plugins = on_open_plugins
+        # Runs the doctor the first time the Debug page is opened.
+        self._debug_refresh: Callable[[], None] | None = None
         self._settings = get_settings()
         self._window: Adw.Window | None = None
         # Kept across a rebuild (Reset to defaults) so the user stays put.
@@ -381,7 +444,9 @@ class SettingsDialog:
                 if group.get_title() == title:
                     group.set_title("")
                 page.add(group)
-            self._decorate_badges(page)
+            # The Debug page's rows carry status icons instead.
+            if name != "debug":
+                self._decorate_badges(page)
             stack.add_titled(page, name, title).set_icon_name(icon)
 
         content_page = Adw.NavigationPage()
@@ -423,6 +488,9 @@ class SettingsDialog:
             child = stack.get_child_by_name(name)
             content_page.set_title(stack.get_page(child).get_title() or "")
             self._page_name = name
+            if name == "debug" and self._debug_refresh is not None:
+                refresh, self._debug_refresh = self._debug_refresh, None
+                refresh()
 
         def _on_row(_box, row) -> None:
             if row is None:
@@ -482,6 +550,16 @@ class SettingsDialog:
                 "Advanced",
                 "emblem-system-symbolic",
                 [self._build_advanced_group],
+            ),
+            (
+                "debug",
+                "Debug",
+                "dialog-information-symbolic",
+                [
+                    self._build_troubleshoot_group,
+                    self._build_session_group,
+                    self._build_diagnostics_group,
+                ],
             ),
         ]
 
@@ -1534,6 +1612,166 @@ class SettingsDialog:
             return False
 
         GLib.idle_add(_rebuild)
+
+    # ---- debug page ----------------------------------------------------------
+
+    def _build_diagnostics_group(self) -> Adw.PreferencesGroup:
+        """`vinopop --doctor`, run in a child process: it imports OpenVINO
+        and probes devices, which would stall this window."""
+        group = Adw.PreferencesGroup()
+        group.set_title("Diagnostics")
+        group.set_description("What the on-device AI needs from this machine (vinopop --doctor).")
+        buttons = Gtk.Box(spacing=6)
+        rerun = self._suffix_icon_button("view-refresh-symbolic", "Run the checks again")
+        copy = self._suffix_icon_button("edit-copy-symbolic", "Copy a report for a bug report")
+        buttons.append(rerun)
+        buttons.append(copy)
+        group.set_header_suffix(buttons)
+
+        status_icons = {
+            "ok": ("emblem-ok-symbolic", "success"),
+            "warn": ("dialog-warning-symbolic", "warning"),
+            "FAIL": ("dialog-error-symbolic", "error"),
+        }
+        rows: list[Gtk.Widget] = []
+        report = {"text": ""}
+
+        def _set_rows(checks: list[dict]) -> None:
+            for row in rows:
+                group.remove(row)
+            rows.clear()
+            for check in checks:
+                row = _plain(Adw.ActionRow())
+                row.set_title(check.get("label", ""))
+                row.set_subtitle(check.get("detail", ""))
+                row.set_subtitle_selectable(True)
+                icon, css = status_icons.get(
+                    check.get("status", ""), ("dialog-question-symbolic", "dim-label")
+                )
+                img = Gtk.Image.new_from_icon_name(icon)
+                img.add_css_class(css)
+                row.add_prefix(img)
+                group.add(row)
+                rows.append(row)
+
+        def _done(checks: list[dict]) -> bool:
+            _set_rows(checks)
+            width = max((len(c.get("label", "")) for c in checks), default=0)
+            report["text"] = "\n".join(
+                f"[{c.get('status', ''):>4}] {c.get('label', ''):<{width}}  {c.get('detail', '')}"
+                for c in checks
+            )
+            rerun.set_sensitive(True)
+            return False
+
+        def _run() -> None:
+            rerun.set_sensitive(False)
+            _set_rows([{"status": "", "label": "Running checks…"}])
+
+            def _worker() -> None:
+                checks = _doctor_checks()
+                GLib.idle_add(_done, checks)
+
+            threading.Thread(target=_worker, daemon=True, name="doctor").start()
+
+        def _copy(*_) -> None:
+            text = "\n".join(
+                [f"{label}: {value}" for label, value in _session_info()] + ["", report["text"]]
+            )
+            Gdk.Display.get_default().get_clipboard().set(text.strip() + "\n")
+            copy.set_tooltip_text("Copied")
+
+        rerun.connect("clicked", lambda *_: _run())
+        copy.connect("clicked", _copy)
+        _set_rows([{"status": "", "label": "Checks run when this page opens"}])
+        self._debug_refresh = _run
+        return group
+
+    def _build_session_group(self) -> Adw.PreferencesGroup:
+        from xdg_paths import LOG_FILE
+
+        group = Adw.PreferencesGroup()
+        group.set_title("This session")
+        for label, value in _session_info():
+            row = _plain(Adw.ActionRow())
+            row.set_title(label)
+            row.set_subtitle(value)
+            row.set_subtitle_selectable(True)
+            row.add_css_class("property")
+            group.add(row)
+
+        log_row = _plain(Adw.ActionRow())
+        log_row.set_title("Log file")
+        log_row.set_subtitle(str(LOG_FILE))
+        log_row.set_subtitle_selectable(True)
+        open_log = Gtk.Button(label="Open")
+        open_log.set_valign(Gtk.Align.CENTER)
+        open_log.connect("clicked", lambda *_: _open_path(LOG_FILE))
+        folder = self._suffix_icon_button("folder-open-symbolic", "Open the log folder")
+        folder.connect("clicked", lambda *_: _open_path(LOG_FILE.parent))
+        log_row.add_suffix(open_log)
+        log_row.add_suffix(folder)
+        group.add(log_row)
+        return group
+
+    def _build_troubleshoot_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
+        group.set_title("Troubleshooting")
+
+        def _button_row(title: str, subtitle: str, label: str, on_click) -> Adw.ActionRow:
+            row = _plain(Adw.ActionRow())
+            row.set_title(title)
+            row.set_subtitle(subtitle)
+            btn = Gtk.Button(label=label)
+            btn.set_valign(Gtk.Align.CENTER)
+            btn.connect("clicked", on_click)
+            row.add_suffix(btn)
+            row.set_activatable_widget(btn)
+            group.add(row)
+            return row
+
+        restart = _button_row(
+            "Restart vinoPop",
+            "Try this first if the popup, hotkeys or tray stop responding.",
+            "Restart",
+            lambda *_: self._on_restart() if self._on_restart else None,
+        )
+        restart.set_sensitive(self._on_restart is not None)
+
+        def _setup(*_) -> None:
+            from onboarding import OnboardingWindow
+
+            win = OnboardingWindow(self._settings, on_open_plugins=self._on_open_plugins)
+            if self._window is not None:
+                win.set_transient_for(self._window)
+            win.present()
+
+        _button_row(
+            "Run the setup again",
+            "Walk through the first-run setup: hotkeys, plugins and permissions.",
+            "Open",
+            _setup,
+        )
+
+        from vino_ai import failures
+
+        skipped = sorted(failures.all_records())
+        if skipped:
+
+            def _forget(btn: Gtk.Button) -> None:
+                for dev in skipped:
+                    failures.forget(dev)
+                btn.set_sensitive(False)
+                btn.set_label("Forgotten")
+
+            _button_row(
+                "Retry AI devices that failed",
+                f"{', '.join(skipped)} failed to load the model before and are skipped. "
+                "Clear that so the next AI action tries them again.",
+                "Retry",
+                _forget,
+            )
+        return group
 
     def _build_terminal_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
