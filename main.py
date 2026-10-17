@@ -23,6 +23,16 @@ if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
+def _notify(title: str, body: str) -> None:
+    try:
+        subprocess.run(
+            ["notify-send", "--hint=byte:transient:1", "-i", "vinopop", title, body],
+            check=False,
+        )
+    except FileNotFoundError:
+        pass
+
+
 # Mutter-based desktops: no wlr-layer-shell, so a native Wayland surface
 # can't be placed at the selection.
 _MUTTER_DESKTOPS = ("GNOME", "UNITY", "PANTHEON", "BUDGIE", "CINNAMON")
@@ -277,6 +287,24 @@ class App:
         if enable_tray:
             self._start_tray()
         self._maybe_first_run()
+        self._maybe_prefetch_model()
+
+    def _maybe_prefetch_model(self) -> None:
+        if not self.settings.get("ai_prefetch_model"):
+            return
+        try:
+            from vino_ai import available, models
+
+            if not available()[0]:
+                return
+
+            def _done(model, error):
+                body = f"{model.label} is ready." if error is None else f"Download failed: {error}"
+                _notify("vinoPop AI model", body)
+
+            models.prefetch(_done)
+        except Exception:
+            log.exception("model prefetch failed to start")
 
     # ---- popup invocation ----------------------------------------------------
 

@@ -58,7 +58,7 @@ def _load(on_status: Callable[[str], None]):
         return _pipe
     if not models.is_downloaded(model):
         on_status(f"Downloading {model.label} ({model.size}, one time only)…")
-    path = models.ensure_llm(model)
+    path = models.ensure_llm(model, on_status)
 
     import openvino_genai as ov_genai
 

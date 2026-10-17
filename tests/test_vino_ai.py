@@ -129,8 +129,15 @@ def test_model_completeness(tmp_path, monkeypatch):
     path = models.model_dir(model)
     path.mkdir(parents=True)
     (path / "openvino_language_model.xml").write_text("")
-    assert not models.is_downloaded(model)
     (path / "openvino_tokenizer.xml").write_text("")
+    assert not models.is_downloaded(model)  # weights still missing
+    (path / "openvino_language_model.bin").write_text("")
+    assert models.is_downloaded(model)
+    in_flight = path / ".cache" / "huggingface" / "download"
+    in_flight.mkdir(parents=True)
+    (in_flight / "x.incomplete").write_text("")
+    assert not models.is_downloaded(model)  # a transfer is still running
+    (in_flight / "x.incomplete").unlink()
     assert models.is_downloaded(model)
     assert models.ensure_llm(model) == path  # no download when complete
 
