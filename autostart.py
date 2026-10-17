@@ -58,7 +58,9 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
             # that the DE silently fails to launch.
             from shlex import quote as _q
 
-            exec_line = f"/usr/bin/python3 {_q(str(main_py))}"
+            # The running interpreter, so a venv that holds the AI
+            # packages keeps being used at login.
+            exec_line = f"{_q(sys.executable)} {_q(str(main_py))}"
             AUTOSTART_FILE.write_text(
                 _desktop_file_contents(exec_line),
                 encoding="utf-8",

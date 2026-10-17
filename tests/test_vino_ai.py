@@ -181,6 +181,16 @@ def test_llm_run_streams_and_formats_prompt(fake_pipe):
     assert fake_pipe.cfg.do_sample is False
 
 
+def test_llm_translate_stops_at_blank_line_for_single_paragraph(fake_pipe):
+    llm.run("translate", "hello world", lang="German")
+    assert fake_pipe.cfg.stop_strings == {"\n\n"}
+
+
+def test_llm_translate_keeps_paragraphs_of_multi_paragraph_input(fake_pipe):
+    llm.run("translate", "hello\n\nworld", lang="German")
+    assert not hasattr(fake_pipe.cfg, "stop_strings")
+
+
 def test_llm_run_truncates_long_input(fake_pipe):
     llm.run("summarize", "x" * (llm.MAX_INPUT_CHARS + 500))
     assert "x" * (llm.MAX_INPUT_CHARS + 1) not in fake_pipe.prompts[0]
