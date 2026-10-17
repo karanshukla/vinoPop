@@ -124,7 +124,6 @@ Right-click the tray icon and pick **Settings**, or edit
 | `min_selection_length_enabled` | `false` | Enable the minimum-selection-length filter |
 | `min_selection_length` | `2` | When enabled, ignore selections shorter than this |
 | `terminal_keep_open` | `true` | Keep terminal open after running a command |
-| `ai_paste_delay_seconds` | `2.5` | Wait before auto-pasting into a chat AI |
 | `double_click_popup_enabled` | `false` | Hold a modifier + double-click a word to pop the bar |
 | `double_click_modifier` | `ctrl` | Modifier for the double-click trigger (`ctrl`/`alt`/`super`/`shift`) |
 | `translate_target_lang` | `en` | Target language for the Translate plugin (ISO code) |
@@ -151,7 +150,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="my-plugin",
-            icon="emblem-favorite",
+            icon="emblem-favorite-symbolic",
             tooltip="Do something",
             handler=_handler,
             content_types=(ContentType.PLAIN_TEXT,),

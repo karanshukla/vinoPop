@@ -268,6 +268,7 @@ class App:
         # mirrors are the source of truth for the live-rebind diff.
         self._bound_hotkey: str = ""
         self._bound_clipboard_hotkey: str = ""
+        self._bound_ocr_hotkey: str = ""
         # Same mirror for the polling toggle - flipping it has to
         # rebuild both hotkey threads (poll vs grab is decided at
         # thread start, not per-event).
@@ -577,6 +578,7 @@ class App:
             hotkey_str, self._on_ocr_hotkey, use_polling=use_polling
         )
         self.ocr_hotkey.start()
+        self._bound_ocr_hotkey = hotkey_str
         log.info("[ocr] hotkey '%s' bound (polling=%s)", hotkey_str, use_polling)
 
     def _on_ocr_hotkey(self) -> None:
@@ -731,11 +733,21 @@ class App:
                     self._bound_clipboard_hotkey = ""
                     if new_clip:
                         self._start_clipboard_hotkey()
-                # Bind the OCR hotkey if it just became usable - e.g. the
-                # user installed the OCR dependencies via the Settings Install button -
-                # so it starts working without a daemon restart.
-                if (self.settings.get("ocr_hotkey") or "").strip() and self.ocr_hotkey is None:
-                    self._start_ocr_hotkey()
+                # Rebind the OCR hotkey when it was edited or cleared, and bind it
+                # if it just became usable (the user installed the OCR dependencies
+                # via the Settings Install button), so neither needs a restart.
+                new_ocr = (self.settings.get("ocr_hotkey") or "").strip()
+                if (
+                    new_ocr != self._bound_ocr_hotkey
+                    or polling_changed
+                    or (new_ocr and self.ocr_hotkey is None)
+                ):
+                    if self.ocr_hotkey is not None:
+                        self.ocr_hotkey.stop()
+                        self.ocr_hotkey = None
+                    self._bound_ocr_hotkey = ""
+                    if new_ocr:
+                        self._start_ocr_hotkey()
                 # Live-apply the double-click watcher toggle.
                 self._maybe_start_dblclick_watcher()
                 log.info("settings reloaded")
@@ -780,11 +792,12 @@ class App:
         )
         about.set_license_type(Gtk.License.MIT_X11)
         about.set_application_icon("vinopop")
-        # Only set the website link if it was overridden via env var, so we
-        # don't ship a 404 placeholder. Set VINOPOP_PROJECT_URL when forking.
-        project_url = os.environ.get("VINOPOP_PROJECT_URL")
-        if project_url:
-            about.set_website(project_url)
+        # Forks can point this at their own repo via VINOPOP_PROJECT_URL.
+        project_url = (
+            os.environ.get("VINOPOP_PROJECT_URL") or "https://github.com/karanshukla/vinoPop"
+        )
+        about.set_website(project_url)
+        about.set_issue_url(f"{project_url.rstrip('/')}/issues")
         about.set_developer_name("Karan Shukla")
         # vinoPop is a fork of LinuxPop; credit the original project.
         about.add_credit_section(
@@ -884,7 +897,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv or sys.argv[1:])
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.reset_first_run:
         # Wipe every first-run marker so the welcome flow AND the
         # plugin/recipe seeders fire again. Useful for testing the
@@ -951,6 +964,10 @@ def main(argv: list[str] | None = None) -> int:
         app.hotkey.stop()
     if app.clipboard_hotkey:
         app.clipboard_hotkey.stop()
+    if app.ocr_hotkey:
+        app.ocr_hotkey.stop()
+    if app.dblclick_watcher:
+        app.dblclick_watcher.stop()
     return 0
 
 

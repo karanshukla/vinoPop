@@ -814,7 +814,7 @@ def _build_pages(settings):
             return d
 
     popup_key = _g("hotkey", "super+shift+y")
-    clip_key = _g("clipboard_hotkey", "ctrl+super+v")
+    clip_key = _g("clipboard_hotkey", "super+shift+v")
 
     def _fmt(combo):
         return "+".join(p.strip().capitalize() for p in combo.split("+") if p.strip())
@@ -1109,7 +1109,7 @@ if __name__ == "__main__":  # standalone preview / replay
                 pass
 
         _s = _Dummy(
-            show_welcome_dialog=True, hotkey="super+shift+y", clipboard_hotkey="ctrl+super+v"
+            show_welcome_dialog=True, hotkey="super+shift+y", clipboard_hotkey="super+shift+v"
         )
     try:
         from theme import install_premium_theme

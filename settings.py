@@ -94,19 +94,6 @@ DEFAULTS: dict[str, Any] = {
     # from elsewhere with a hostile {shell:...} would run code on your
     # machine; treat this like enabling macros in a document. 5 s timeout.
     "snippet_shell_enabled": False,
-    # After paste-mode AI services (Claude, Gemini, ChatGPT with paste
-    # fallback) drop the prompt in, also send Return so the chat sends
-    # immediately. Off by default - lets you tweak the prompt before
-    # hitting Enter. Has no effect on URL-mode services that already
-    # auto-submit (Google AI, Perplexity, ChatGPT URL mode).
-    "ai_paste_auto_submit": False,
-    # How long _send_via_paste waits for the chat website to open and
-    # focus. The browser-tab dance has phases: window-spawn, page-load,
-    # editor-mount. We poll for each phase with these timeouts.
-    "ai_window_timeout_seconds": 10.0,
-    "ai_focus_timeout_seconds": 3.0,
-    "ai_focus_stability_seconds": 0.25,
-    "ai_paste_settle_seconds": 0.2,
     # Clipboard history depth. 25 is enough that you can scroll back
     # to anything you copied within the last day of work; bigger
     # values just make the picker harder to search.

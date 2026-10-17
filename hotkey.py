@@ -346,6 +346,7 @@ class Hotkey:
         bit_idx = keycode % 8
         bit_val = 1 << bit_idx
         prev_pressed = False
+        failures = 0
         # Seed prev_pressed from current state so a held key at startup
         # isn't treated as a rising edge.
         try:
@@ -367,8 +368,13 @@ class Hotkey:
                         )
                         GLib.idle_add(self._safe_trigger)
                 prev_pressed = pressed
+                failures = 0
             except Exception as exc:  # noqa: BLE001
+                failures += 1
                 print(f"[hotkey] poll error: {exc}")
+                if failures >= 40:  # ~2 s of nothing but errors: the X connection is gone
+                    print(f"[hotkey] '{self._hotkey_str}' polling stopped")
+                    return
             _time.sleep(0.05)
 
     def _safe_trigger(self) -> bool:

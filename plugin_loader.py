@@ -400,8 +400,27 @@ def _load_user_plugins() -> None:
             traceback.print_exc()
 
 
+def _shutdown_user_plugins() -> None:
+    """Let the previous copy of each user plugin stop its background threads
+    before a fresh copy of the file is executed: a plugin with a
+    `shutdown()` function gets it called, so reloading doesn't stack watchers
+    on top of each other."""
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("vinopop_user_"):
+            continue
+        hook = getattr(module, "shutdown", None)
+        if not callable(hook):
+            continue
+        try:
+            hook()
+        except Exception:
+            print(f"[plugin_loader] shutdown of {name} failed:")
+            traceback.print_exc()
+
+
 def load_all() -> None:
     """Idempotent: clears existing registry and reloads everything."""
+    _shutdown_user_plugins()
     _PLUGINS.clear()
     _SOURCE_BY_NAME.clear()
     _install_all_icons()
