@@ -8,7 +8,8 @@ keystrokes, positioning the popup - goes through a `PlatformBackend`.
 Two concrete backends:
   - `x11.X11Backend`        - the original behaviour (xclip / Xlib / xdotool)
   - `wayland_kde.WaylandKdeBackend` - KDE Plasma 6 / Wayland (wl-clipboard /
-    KWin cursorPos over DBus / gtk4-layer-shell / wtype / KGlobalAccel)
+    KWin cursorPos over DBus / gtk4-layer-shell / RemoteDesktop portal or
+    ydotool / KGlobalAccel)
 
 `platform_backend.get_backend()` picks one at startup (see __init__.detect).
 The rest of the app talks only to the returned object and never imports Xlib /
@@ -151,7 +152,10 @@ class PlatformBackend(abc.ABC):
         hotkey_str: str,
         on_trigger: Callable[[], None],
         use_polling: bool = False,
-    ) -> Hotkey: ...
+        role: str | None = None,
+    ) -> Hotkey:
+        """role ('popup', 'clipboard', 'ocr') names the hotkey where the
+        desktop keeps a registry of them (KGlobalAccel); X11 ignores it."""
 
     @abc.abstractmethod
     def make_double_click_watcher(

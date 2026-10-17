@@ -9,8 +9,10 @@ it, importing openvino to read its version would phone home and update
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
+import shutil
 import sys
 from dataclasses import asdict, dataclass
 
@@ -157,6 +159,54 @@ def _failures() -> list[Result]:
     return results
 
 
+def _wayland_input() -> list[Result]:
+    """Key injection (Paste/Cut) and /dev/input access on native Wayland."""
+    import os
+
+    if (os.environ.get("XDG_SESSION_TYPE") or "").lower() != "wayland" or os.environ.get(
+        "VINOPOP_BACKEND", ""
+    ).lower() == "x11":
+        return []
+    # import_module keeps mypy from following platform_backend into the
+    # untyped GTK/X11 modules it can reach.
+    evdev_input = importlib.import_module("platform_backend.evdev_input")
+    keyinject = importlib.import_module("platform_backend.keyinject")
+
+    portal = keyinject.portal_keyboard_available()
+    ydotool = keyinject.ydotool_usable()
+    used = []
+    if portal:
+        used.append("RemoteDesktop portal (keysyms; asks once)")
+    if ydotool:
+        used.append(f"ydotool via {keyinject.ydotool_socket()}")
+    elif shutil.which("ydotool"):
+        used.append("ydotool installed but ydotoold isn't running (no socket)")
+    if keyinject.wtype_usable():
+        used.append("wtype")
+    if portal or ydotool or keyinject.wtype_usable():
+        results = [Result(OK, "key injection", "; ".join(used))]
+    else:
+        hint = (
+            "none: Paste/Cut only copy. Needs xdg-desktop-portal-kde (RemoteDesktop), "
+            "or ydotool with ydotoold running"
+        )
+        if portal is None:
+            hint += " (couldn't ask the portal: no gi or session bus)"
+        results = [Result(WARN, "key injection", hint)]
+    try:
+        kbd, ptr, denied = evdev_input.access_summary()
+    except OSError as exc:
+        return results + [Result(UNKNOWN, "input devices", str(exc))]
+    detail = f"{kbd} keyboard(s), {ptr} pointer(s) readable"
+    if kbd and ptr:
+        results.append(Result(OK, "input devices", detail))
+    else:
+        if denied:
+            detail += f"; {denied} not readable: add yourself to the 'input' group"
+        results.append(Result(WARN, "input devices", detail + "; modifier+double-click needs both"))
+    return results
+
+
 def collect() -> list[Result]:
     try:
         from version import __version__
@@ -173,6 +223,7 @@ def collect() -> list[Result]:
     results += _ovfetch()
     results += _models()
     results += _failures()
+    results += _wayland_input()
     return results
 
 
