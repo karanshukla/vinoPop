@@ -23,6 +23,7 @@ if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
+
 def _notify(title: str, body: str) -> None:
     try:
         subprocess.run(

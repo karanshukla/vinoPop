@@ -206,7 +206,9 @@ def ensure_llm(
     return path
 
 
-def prefetch(on_done: Callable[[LlmModel, str | None], None] | None = None) -> threading.Thread | None:
+def prefetch(
+    on_done: Callable[[LlmModel, str | None], None] | None = None,
+) -> threading.Thread | None:
     """Download the configured LLM in the background so the first AI click
     doesn't wait for it. No-op (returns None) when it's already on disk."""
     model = llm_model()
