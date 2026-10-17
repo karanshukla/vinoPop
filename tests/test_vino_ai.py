@@ -203,6 +203,28 @@ def test_llm_run_truncates_long_input(fake_pipe):
     assert "x" * (llm.MAX_INPUT_CHARS + 1) not in fake_pipe.prompts[0]
 
 
+def test_llm_warns_when_npu_fails_and_another_device_loads(monkeypatch, tmp_path):
+    seen, notes = [], []
+
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **_props):
+            if dev == "NPU":
+                raise RuntimeError("compile failed")
+            return object()
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
+    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: notes.append(cmd))
+    llm._load(seen.append)
+    assert any("running on GPU" in m for m in seen)
+    assert notes and notes[0][0] == "notify-send"
+
+
 def test_llm_run_rejects_unknown_task():
     with pytest.raises(ValueError):
         llm.run("poem", "text")

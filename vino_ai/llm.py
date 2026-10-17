@@ -10,6 +10,7 @@ lock: two clicks in a row queue instead of fighting over the device.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 from collections.abc import Callable
 
@@ -80,9 +81,32 @@ def _load(on_status: Callable[[str], None]):
             errors.append(f"{dev}: {exc}")
             continue
         log.info("[vino_ai] LLM %s loaded on %s", model.repo_id, dev)
+        if errors and errors[0].startswith("NPU:"):
+            _warn_fallback(dev, errors[0], on_status)
         _pipe, _pipe_key = pipe, (model.key, dev)
         return pipe
     raise RuntimeError("could not load the model: " + "; ".join(errors))
+
+
+def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -> None:
+    """The NPU is the point of vinoPop: say so loudly when the model ended
+    up somewhere slower and hotter."""
+    msg = f"The NPU couldn't load the model, so it's running on {dev} (slower, warmer)."
+    log.warning("[vino_ai] %s %s", msg, npu_error)
+    on_status(msg)
+    try:
+        subprocess.run(
+            [
+                "notify-send",
+                "-i",
+                "vinopop",
+                "vinoPop AI is not on the NPU",
+                f"{msg}\n{npu_error}"[:300],
+            ],
+            check=False,
+        )
+    except FileNotFoundError:
+        pass
 
 
 def device() -> str | None:
