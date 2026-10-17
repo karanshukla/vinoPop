@@ -86,7 +86,9 @@
   and is never read as shell code, so <code>notify-send {text}</code> and
   <code>notify-send "{text}"</code> are both safe for any selection. Two things are refused:
   a conversion or format spec on a text placeholder (<code>{text:.3}</code>), and a placeholder
-  inside shell arithmetic (<code>$(( {text} + 1 ))</code>), which would evaluate the text.</p>
+  anywhere bash evaluates it as arithmetic, which would run code hidden in the text:
+  <code>$(( ))</code>, <code>(( ))</code>, <code>[[ ]]</code> (use <code>[ ]</code> instead),
+  <code>let</code>, <code>declare -i</code> and array subscripts like <code>${a[...]}</code>.</p>
 
   <p>Click any variable chip under the field to insert it at the cursor.</p>
 

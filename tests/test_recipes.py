@@ -216,13 +216,27 @@ def test_echo_text_prints_the_selection(fake_desktop):
 
 def test_command_argv_keeps_the_values_out_of_the_script():
     argv = recipe_loader._command_argv("echo {text} {text_shell} {text_url}", "a;b")
-    assert argv == ["bash", "-c", 'echo "${1}" "${2}" "${3}"', "vinopop", "a;b", "a;b", "a%3Bb"]
+    assert argv == [
+        "bash",
+        "-c",
+        'vinopop_1=$1 vinopop_2=$2 vinopop_3=$3; echo "${vinopop_1}" "${vinopop_2}" "${vinopop_3}"',
+        "vinopop",
+        "a;b",
+        "a;b",
+        "a%3Bb",
+    ]
     # the same placeholder twice is one argument
     assert recipe_loader._command_argv("echo {text}{text}", "a")[2:] == [
-        'echo "${1}""${1}"',
+        'vinopop_1=$1; echo "${vinopop_1}""${vinopop_1}"',
         "vinopop",
         "a",
     ]
+
+
+def test_a_function_or_set_in_the_template_cant_shadow_the_value(fake_desktop):
+    for template in ("f() {{ notify-send {text}; }}; f", "set -- other; notify-send {text}"):
+        logged, _ = fake_desktop(recipe_loader._build_handler(_run(template)), "sel")
+        assert logged[-1] == "sel", template
 
 
 def test_command_preview_shows_the_effective_command():
@@ -260,10 +274,74 @@ def test_placeholders_are_accepted_in_commands(template):
         "(( {text} > 1 )) && echo big",
         'echo "$(({text}))"',
         "cat <<'EOF'\n{text}\nEOF",  # nothing expands in a quoted heredoc
+        'let "x = {text} + 1"',  # quoting doesn't help in arithmetic
+        "declare -x -i x={text}",
     ],
 )
 def test_templates_that_would_change_or_evaluate_the_value_are_refused(template):
     assert recipe_loader.safety_errors(_run(template))
+
+
+# Spots where bash evaluates an operand as arithmetic, and so runs a[$(cmd)]
+# even from a quoted reference. Each is a real hole if the value went there.
+_ARITHMETIC_TEMPLATES = [
+    "echo $(( {text} + 1 ))",
+    "(( {text} > 1 )) && echo big",
+    "echo $[{text}+1]",
+    "[[ {text} -eq 1 ]] && echo one",
+    '[[ "{text}" -lt 5 ]]',
+    "if [[ -n x && {text} -gt 0 ]]; then echo y; fi",
+    "let x={text}",
+    "let x+={text}",
+    "declare -i x={text}",
+    "typeset -i x={text}",
+    "f() {{ local -i x={text}; }}; f",
+    "declare -ai a=({text})",
+    "a=(1 2); echo ${{a[{text}]}}",
+    'a=(1 2); echo "${{a[{text}]}}"',
+    "a=(); a[{text}]=1",
+]
+
+
+@pytest.mark.parametrize("template", _ARITHMETIC_TEMPLATES)
+def test_arithmetic_spots_are_refused_and_never_run(template, tmp_path, request, monkeypatch):
+    import subprocess
+
+    canary = tmp_path / "PWNED"
+    payload = f"a[$(touch {canary})]"
+    # The hole is real: rendered without the check, bash runs the payload
+    with monkeypatch.context() as m:
+        m.setattr(recipe_loader, "_field_problem", lambda *a: None)
+        argv = recipe_loader._command_argv(template, payload)
+    subprocess.run(argv, capture_output=True, timeout=10)
+    assert canary.exists(), argv
+    canary.unlink()
+    # ...so the recipe is refused, and clicking it runs nothing
+    assert recipe_loader.safety_errors(_run(template))
+    monkeypatch.setattr(recipe_loader, "notify", lambda *a, **kw: None)
+    fake_desktop = request.getfixturevalue("fake_desktop")  # patches Popen from here on
+    fake_desktop(recipe_loader._build_handler(_run(template)), payload)
+    assert not canary.exists()
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "[ {text} -eq 1 ] && echo one",  # [ / test don't evaluate expressions
+        "test {text} -gt 0",
+        "echo let {text}",  # only as the command word
+        "declare x={text}; echo $x",
+        "let x=1; echo {text}",
+        "echo [{text}]",
+        'notify-send "[{text_upper}]"',
+        "echo {text}; [[ -z x ]]",
+    ],
+)
+def test_lookalikes_of_arithmetic_spots_still_run_safely(template, tmp_path, fake_desktop):
+    canary = tmp_path / "PWNED"
+    assert recipe_loader.safety_errors(_run(template)) == []
+    fake_desktop(recipe_loader._build_handler(_run(template)), f"a[$(touch {canary})]")
+    assert not canary.exists()
 
 
 def test_escaped_braces_render_as_literals_in_a_command():

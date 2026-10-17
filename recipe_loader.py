@@ -280,43 +280,65 @@ def _text_variables() -> list[str]:
 # ---- commands ----------------------------------------------------------------
 #
 # A run_command template is never rendered into shell source with the user's
-# text in it. Each placeholder becomes a reference to a positional parameter
-# and the values go in as arguments:
+# text in it. The values go in as arguments, a prelude copies them into
+# variables (so a function or `set --` in the template can't shadow them), and
+# each placeholder becomes a reference to one:
 #
-#   notify-send {text}   ->   bash -c 'notify-send "${1}"' vinopop "<selection>"
+#   notify-send {text}  ->  bash -c 'vinopop_1=$1; notify-send "${vinopop_1}"'
+#                                   vinopop "<selection>"
 #
-# bash expands "${1}" once and never parses the result as code, so no quoting
+# bash expands the reference once and never parses the result as code, so no quoting
 # in the template, missing or wrong, lets selected text, the clipboard or an
 # {ask:} answer run as a command. {text_shell} maps to the same reference, for
 # recipes written when quoting was the author's job.
 
-# Where a value reference can't go. Arithmetic evaluates the value as an
-# expression (a[$(cmd)] runs cmd), and a quoted heredoc expands nothing.
+# Where a value reference can't go. Bash evaluates arithmetic operands as
+# expressions, and an expression like a[$(cmd)] runs cmd: that happens in
+# $(( )), (( )), [[ -eq ]], let, declare -i and array subscripts, quoted or
+# not. A quoted heredoc expands nothing.
 _COMMAND_CONTEXT_PROBLEMS = {
-    "arith": "can't be used inside $(( )) or (( )): arithmetic runs code found in the value",
+    "arith": "can't be used inside $(( )), (( )) or $[ ]: arithmetic runs code found in the value",
+    "dbl": "can't be used inside [[ ]]: -eq and friends run code found in the value; use [ ]",
+    "let": "can't be an argument to let or declare/typeset/local -i: they evaluate it as arithmetic",
+    "param": "can't be used inside ${...}: an array subscript runs code found in the value",
+    "subscript": "can't be used as an array subscript (name[...]): it runs code found in the value",
     "heredoc_quoted": "can't go inside a quoted heredoc (<<'EOF'): nothing expands there",
 }
+# Stack states that make a field refused however it's quoted
+_ARITH_STATES = ("arith", "arith_b", "dbl", "let", "param", "subscript")
+# A command word can start here: after a separator or a keyword
+_COMMAND_START_RE = re.compile(
+    r"(?:^|[;&|(\n{!]|\b(?:then|do|else|elif|if|while|until|time))[ \t]*$"
+)
+_ARITH_COMMAND_RE = re.compile(r"(let|declare|typeset|local)(?=[ \t])((?:[ \t]+-\w+)*)")
 
 
 def _shell_contexts(skeleton: str) -> list[str]:
     """The quoting context at each \\x00 in `skeleton` (a command template with
     its fields replaced by \\x00): "plain" (an ordinary word, also inside $(...)
     or backticks), "dq" (inside "..." or an unquoted heredoc), "sq" (inside
-    '...'), "arith" or "heredoc_quoted".
+    '...'), "heredoc_quoted", or a _COMMAND_CONTEXT_PROBLEMS key for a spot
+    where bash would evaluate the value as arithmetic.
 
-    This only picks how a reference is written so the value stays one word in
-    that spot. It is not what stops injection: however the reference is
-    written, the value is expanded and never parsed. A wrong guess costs word
-    splitting, not a command.
+    The quoting part only picks how a reference is written so the value stays
+    one word in that spot. It is not what stops injection: however the
+    reference is written, the value is expanded and never parsed. A wrong
+    guess there costs word splitting, not a command. The arithmetic spots err
+    towards refusing.
     """
     contexts: list[str] = []
-    stack = ["plain"]  # plain, cmd, bt, dq, sq, arith
+    stack = ["plain"]  # plain, cmd, bt, dq, sq + the _ARITH_STATES
     heredocs: list[tuple[str, bool, bool]] = []  # (delimiter, quoted, strip tabs)
     i, n = 0, len(skeleton)
     while i < n:
         top, c = stack[-1], skeleton[i]
+        m: re.Match[str] | None = None
         if c == "\x00":
-            contexts.append("plain" if top in ("cmd", "bt") else top)
+            danger = next((s for s in reversed(stack) if s in _ARITH_STATES), None)
+            if danger:
+                contexts.append("arith" if danger == "arith_b" else danger)
+            else:
+                contexts.append("plain" if top in ("cmd", "bt") else top)
         elif top == "sq":
             if c == "'":
                 stack.pop()
@@ -328,11 +350,19 @@ def _shell_contexts(skeleton: str) -> list[str]:
         elif skeleton.startswith("$(", i):
             stack.append("cmd")
             i += 1
+        elif skeleton.startswith("$[", i):
+            stack.append("arith_b")
+            i += 1
+        elif skeleton.startswith("${", i):
+            stack.append("param")
+            i += 1
         elif c == "`":
             if top == "bt":
                 stack.pop()
             else:
                 stack.append("bt")
+        elif (c == "}" and top == "param") or (c == "]" and top in ("arith_b", "subscript")):
+            stack.pop()
         elif top == "dq":
             if c == '"':
                 stack.pop()
@@ -340,6 +370,9 @@ def _shell_contexts(skeleton: str) -> list[str]:
             stack.append("sq")
         elif c == '"':
             stack.append("dq")
+        elif top == "let" and c in ";&|\n)":
+            stack.pop()
+            continue  # the terminator still ends whatever else it ends
         elif c == "(":
             if top != "arith" and skeleton.startswith("((", i):
                 stack += ["arith", "arith"]
@@ -349,6 +382,20 @@ def _shell_contexts(skeleton: str) -> list[str]:
         elif c == ")":
             if len(stack) > 1 and top in ("cmd", "arith"):
                 stack.pop()
+        elif skeleton.startswith("[[", i) and _COMMAND_START_RE.search(skeleton[:i]):
+            stack.append("dbl")
+            i += 1
+        elif skeleton.startswith("]]", i) and top == "dbl":
+            stack.pop()
+            i += 1
+        elif c == "[" and i and (skeleton[i - 1].isalnum() or skeleton[i - 1] in "_\x00"):
+            # name[...]: an assignment or unset subscript on an indexed array
+            stack.append("subscript")
+        elif (m := _ARITH_COMMAND_RE.match(skeleton, i)) and _COMMAND_START_RE.search(skeleton[:i]):
+            if m.group(1) == "let" or "i" in m.group(2).replace("-", ""):
+                stack.append("let")
+            i = m.end()
+            continue
         elif skeleton.startswith("<<", i) and not skeleton.startswith("<<<", i):
             m = re.match(r"<<(-?)[ \t]*([^\s;&|<>()]+)", skeleton[i:])
             if m:
@@ -421,7 +468,7 @@ def command_template_problems(template: str) -> list[str]:
 
 def _command_parts(template: str, text: str, preview: bool = False) -> tuple[str, list[str]]:
     """The `bash -c` script for a command template and the arguments its
-    "${N}" references point at. With preview=True the values are written
+    prelude copies into the variables it references. With preview=True the values are written
     into the script, shell-quoted, for showing to the user (never for
     running). Raises ValueError for a template command_template_problems()
     refuses."""
@@ -448,9 +495,11 @@ def _command_parts(template: str, text: str, preview: bool = False) -> tuple[str
         elif preview:
             out.append(shlex.quote(value))
         else:
-            ref = f"${{{index[field.token]}}}"
+            ref = f"${{vinopop_{index[field.token]}}}"
             out.append({"dq": ref, "sq": f"'\"{ref}\"'"}.get(context, f'"{ref}"'))
         out.append(literal)
+    if args and not preview:
+        out.insert(0, " ".join(f"vinopop_{k}=${k}" for k in range(1, len(args) + 1)) + "; ")
     return "".join(out), args
 
 
