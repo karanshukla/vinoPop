@@ -143,6 +143,10 @@ def run(
         cfg = pipe.get_generation_config()
         cfg.max_new_tokens = _MAX_NEW_TOKENS[task]
         cfg.do_sample = False
+        if device() == "NPU":
+            # The NPU decoder emits NaNs on a single-token step
+            # (openvino#35222); forcing a second token avoids it.
+            cfg.min_new_tokens = 2
         if task == "translate" and "\n\n" not in text:
             # Phi-3.5 appends "(Note: ...)" disclaimers after a blank line
             # however the prompt forbids them.
