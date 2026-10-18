@@ -1,6 +1,7 @@
 """Which PRIMARY changes the Wayland watcher treats as real selections."""
 
 import subprocess
+import sys
 import threading
 import time
 
@@ -271,18 +272,30 @@ def _helper(monkeypatch, *procs):
 
 
 def test_kwin_helper_reuses_one_process(monkeypatch):
-    proc = _Proc(["10 20\n", "org.kde.dolphin\tHome\n"])
+    proc = _Proc([b"10 20\n", b"org.kde.dolphin\tHome\n"])
     h = _helper(monkeypatch, proc)
     assert h.query("cursor") == "10 20"
     assert h.query("active") == "org.kde.dolphin\tHome"
-    assert proc.stdin.written == ["cursor\n", "active\n"]
+    assert proc.stdin.written == [b"cursor\n", b"active\n"]
 
 
 def test_kwin_helper_restarts_after_no_answer(monkeypatch):
-    dead, fresh = _Proc([""]), _Proc(["1 2\n"])
+    dead, fresh = _Proc([b""]), _Proc([b"1 2\n"])
     h = _helper(monkeypatch, dead, fresh)
     assert h.query("cursor") == ""
     assert h.query("cursor") == "1 2"
+
+
+def test_kwin_helper_runs_a_real_process(monkeypatch):
+    # A stand-in helper that answers with a "\r" inside the line: it must
+    # come back whole, and Popen must accept the helper's arguments.
+    echo = "import sys\nfor _ in sys.stdin:\n    print('a\\rb', flush=True)"
+    monkeypatch.setattr(wayland_kde._KWinHelper, "_ARGV", [sys.executable, "-c", echo])
+    h = wayland_kde._KWinHelper()
+    assert h.query("cursor") == "a\rb"
+    assert h.query("active") == "a\rb"
+    h._proc.kill()
+    h._proc.wait()
 
 
 def test_active_window_prefetch_is_used_once(monkeypatch):
