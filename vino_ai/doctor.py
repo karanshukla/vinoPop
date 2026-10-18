@@ -1,10 +1,9 @@
 """`vinopop --doctor`: what the offline AI needs from this machine.
 
 Modelled on vinowhisper-doctor. Reads, never changes anything, and needs
-no GTK, so it also works over SSH and in a bug report (`--json`). The one
-write is OpenVINO's telemetry consent file, if there isn't one yet: without
-it, importing openvino to read its version would phone home and update
-~/intel/stats (see telemetry.py).
+no GTK, so it also works over SSH and in a bug report (`--json`). OpenVINO's
+telemetry is blocked before openvino is imported to read its version (see
+telemetry.py).
 """
 
 from __future__ import annotations
@@ -64,21 +63,12 @@ def _packages() -> list[Result]:
 def _telemetry() -> list[Result]:
     from . import telemetry
 
-    path = telemetry.consent_path()
-    on = telemetry.read_consent()
-    if on is None:
-        if importlib.util.find_spec("openvino") is None:
-            return [Result(OK, "openvino telemetry", "openvino not installed")]
-        return [Result(WARN, "openvino telemetry", f"ENABLED: no consent file at {path}")]
-    if on:
-        return [
-            Result(
-                WARN,
-                "openvino telemetry",
-                f"ENABLED ({path}); turn it off in Settings > Advanced > Privacy",
-            )
-        ]
-    return [Result(OK, "openvino telemetry", f"opted out ({path})")]
+    if importlib.util.find_spec("openvino") is None:
+        return [Result(OK, "openvino telemetry", "openvino not installed")]
+    telemetry.prepare()
+    if telemetry.blocked():
+        return [Result(OK, "openvino telemetry", "blocked: vinoPop never loads it")]
+    return [Result(WARN, "openvino telemetry", "loaded before vinoPop could block it")]
 
 
 def _devices() -> list[Result]:

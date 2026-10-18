@@ -16,10 +16,12 @@ The only network traffic is something you click that is plainly online:
 OCR, summarize, rewrite, explain and translate run on the local OpenVINO
 models; the selected text never leaves the machine.
 
-OpenVINO ships Intel's own usage telemetry, which is on unless you opt out.
-vinoPop opts out for you before it first loads OpenVINO by writing `0` to
-`~/intel/openvino_telemetry`; Settings > Advanced > Privacy turns it back on
-if you want to share the stats.
+OpenVINO ships Intel's own usage telemetry (Google Analytics), which is on
+unless you opt out. vinoPop never loads it: before OpenVINO is imported,
+its `openvino_telemetry` module is blocked for the vinoPop process, so
+OpenVINO falls back to a no-op stub. There is no setting to turn it on.
+Your `~/intel/openvino_telemetry` consent file is left alone and still
+applies to other OpenVINO tools you run.
 
 ## Clipboard history
 
