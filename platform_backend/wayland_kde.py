@@ -30,7 +30,7 @@ from collections.abc import Callable
 
 from gi.repository import GLib
 
-from .base import PlatformBackend
+from .base import PlatformBackend, is_copy_button, take_expected
 from .monitors import layer_margins, monitor_at
 
 _LAYER = None
@@ -101,30 +101,9 @@ def _die_with_parent() -> None:
 # A selecting gesture this long before a PRIMARY burst still counts for it
 # (Shift+arrow lands a few ms before the ping it causes).
 _GESTURE_LEAD_S = 0.5
-# A CLIPBOARD change this close to a PRIMARY burst came from the same action.
-_COPY_BURST_S = 0.3
 # Quiet time after the gesture ends before reading PRIMARY. Apps that set it
 # on button release do so within a frame or two.
 _AFTER_GESTURE_S = 0.05
-_EXPECT_TTL_S = 3.0
-
-_expected: tuple[str, float] | None = None
-
-
-def expect_selection(text: str) -> None:
-    """vinoPop is about to put `text` on PRIMARY itself (OCR) and wants the
-    popup for it, though no gesture or copy-button rule would allow it."""
-    global _expected
-    _expected = (text, time.monotonic())
-
-
-def _take_expected(text: str) -> bool:
-    global _expected
-    if _expected is None or _expected[0] != text:
-        return False
-    fresh = time.monotonic() - _expected[1] < _EXPECT_TTL_S
-    _expected = None
-    return fresh
 
 
 class _SelectionGestures:
@@ -240,16 +219,12 @@ class WaylandSelectionWatcher:
         self._clip_changed_at: float | None = None
 
     def _is_copy_button(self, text: str, burst_t0: float) -> bool:
-        """A page's Copy button selects a hidden field and copies it, so
-        PRIMARY and CLIPBOARD change together to the same text. Copying a
-        real selection later changes CLIPBOARD alone, outside the burst."""
-        changed = self._clip_changed_at
-        if changed is None or changed < burst_t0 - _COPY_BURST_S:
-            return False
-        return self._backend.read_selection("clipboard") == text
+        return is_copy_button(
+            text, burst_t0, self._clip_changed_at, lambda: self._backend.read_selection("clipboard")
+        )
 
     def _should_show(self, text: str, burst_t0: float) -> bool:
-        if _take_expected(text):
+        if take_expected(text):
             return True
         if self._is_copy_button(text, burst_t0):
             print("[wayland] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")

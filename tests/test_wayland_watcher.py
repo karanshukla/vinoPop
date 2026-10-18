@@ -10,6 +10,7 @@ pytest.importorskip("gi")
 
 from platform_backend import evdev_input as ev  # noqa: E402
 from platform_backend import wayland_kde  # noqa: E402
+from platform_backend.base import expect_selection  # noqa: E402
 from platform_backend.wayland_kde import WaylandSelectionWatcher  # noqa: E402
 
 
@@ -65,7 +66,7 @@ def test_primary_change_without_gesture_is_ignored():
 def test_ocr_text_is_shown_though_clipboard_matches_and_no_gesture():
     w, _ = _watcher("recognised text", selected=False)
     w._clip_changed_at = time.monotonic()
-    wayland_kde.expect_selection("recognised text")
+    expect_selection("recognised text")
     assert w._should_show("recognised text", burst_t0=time.monotonic())
     # only once
     assert not w._should_show("recognised text", burst_t0=time.monotonic())

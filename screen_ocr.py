@@ -24,6 +24,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from platform_backend.base import expect_selection
+
 log = logging.getLogger("vinopop")
 
 
@@ -33,13 +35,10 @@ def _stage_text(text: str) -> None:
     which isn't installed on a Wayland box - so OCR'd text silently never
     reached the clipboard."""
     data = text.encode("utf-8")
+    # No gesture behind this PRIMARY change, and CLIPBOARD gets the same text
+    # first, which the copy-button filter would otherwise swallow.
+    expect_selection(text)
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
-        try:
-            from platform_backend.wayland_kde import expect_selection
-
-            expect_selection(text)  # no gesture behind this PRIMARY change
-        except Exception:  # noqa: BLE001
-            pass
         for extra in ([], ["--primary"]):
             try:
                 subprocess.run(["wl-copy", *extra], input=data, check=False, timeout=2.0)
