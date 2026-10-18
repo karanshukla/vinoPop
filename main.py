@@ -13,7 +13,6 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING
 
 # `--doctor` runs before GTK is imported so it also works over SSH or
@@ -125,7 +124,14 @@ from platform_backend import get_backend  # noqa: E402
 from popup import PopupWindow  # noqa: E402
 from settings import get_settings  # noqa: E402
 from version import __version__  # noqa: E402
-from xdg_paths import CACHE_DIR, CONFIG_DIR, LOG_FILE  # noqa: E402
+from xdg_paths import (  # noqa: E402
+    CACHE_DIR,
+    CONFIG_DIR,
+    LOG_FILE,
+    PrivateRotatingFileHandler,
+    make_private,
+    private_dir,
+)
 
 if TYPE_CHECKING:
     from watcher import SelectionWatcher
@@ -196,11 +202,16 @@ _popup_prep = threading.Lock()
 
 
 def _setup_logging(debug: bool) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    private_dir(CACHE_DIR)
+    # Logs older versions wrote with the default umask.
+    for i in range(1, 4):
+        make_private(LOG_FILE.with_name(f"{LOG_FILE.name}.{i}"))
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     level = logging.DEBUG if debug else logging.INFO
 
-    file_handler = RotatingFileHandler(LOG_FILE, maxBytes=512_000, backupCount=3)
+    file_handler = PrivateRotatingFileHandler(
+        LOG_FILE, maxBytes=512_000, backupCount=3, encoding="utf-8"
+    )
     file_handler.setFormatter(fmt)
     file_handler.setLevel(level)
 
@@ -392,8 +403,9 @@ class App:
             log.info("[blocked] suppressed popup -- active window matches blocklist")
             return
         ctype = classify(text)
-        preview = text[:60].replace("\n", "↵")
-        log.info("[%s] %r", ctype.value, preview)
+        # What was selected only at --debug: it can be a password or a token.
+        log.info("[%s] %d-char selection", ctype.value, len(text))
+        log.debug("[%s] %r", ctype.value, text[:60].replace("\n", "↵"))
         # AT-SPI / WM_CLASS probe - drives which plugins are eligible.
         # Done here (not in popup.show_for) so the popup module stays
         # accessibility-agnostic and we can pipe extra user blocklist

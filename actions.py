@@ -482,7 +482,8 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
                 wrapped = _wrap_for_terminal(edited)
                 try:
                     _spawn_terminal([*prefix, wrapped], log)
-                    log.info("[terminal] launched (%s): %s", binary, edited[:120])
+                    log.info("[terminal] launched (%s), %d chars", binary, len(edited))
+                    log.debug("[terminal] command: %s", edited[:120])
                 except OSError:
                     pass  # already logged inside _spawn_terminal
         else:
@@ -604,7 +605,8 @@ def run_in_terminal(text: str) -> None:
     wrapped = _wrap_for_terminal(cmd)
     try:
         _spawn_terminal([*prefix, wrapped], log)
-        log.info("[terminal] launched (%s): %s", binary, cmd[:120])
+        log.info("[terminal] launched (%s), %d chars", binary, len(cmd))
+        log.debug("[terminal] command: %s", cmd[:120])
     except OSError:
         pass  # already logged
 
