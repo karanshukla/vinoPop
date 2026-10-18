@@ -4,8 +4,8 @@ Proven on Fedora 44 KDE Plasma (KWin 6.6.5) during the Fase 0 spike:
   - clipboard / primary    -> wl-clipboard (wl-copy / wl-paste)
   - selection change watch  -> `wl-paste --primary --watch`
   - global pointer position -> KWin `workspace.cursorPos` over DBus
-                               (see _kwin_cursor.py; subprocess per query,
-                               concurrent callers share one)
+                               (see _kwin_cursor.py; asked through one
+                               long-lived _kwin_query.py process)
   - keystroke injection     -> wtype
   - popup positioning        -> gtk4-layer-shell (anchor top-left + margins);
                                XWayland override-redirect when it's missing
@@ -103,6 +103,9 @@ def _die_with_parent() -> None:
 _GESTURE_LEAD_S = 0.5
 # A CLIPBOARD change this close to a PRIMARY burst came from the same action.
 _COPY_BURST_S = 0.3
+# Quiet time after the gesture ends before reading PRIMARY. Apps that set it
+# on button release do so within a frame or two.
+_AFTER_GESTURE_S = 0.05
 _EXPECT_TTL_S = 3.0
 
 _expected: tuple[str, float] | None = None
@@ -146,6 +149,7 @@ class _SelectionGestures:
         self._press_t = 0.0
         self._release_t = 0.0
         self._multi = False
+        self.button_down = False
         self.last = 0.0  # monotonic time of the last selecting gesture
 
     def start(self) -> None:
@@ -160,6 +164,15 @@ class _SelectionGestures:
         if handle is not None and self._hub is not None:
             self._hub.unsubscribe(handle)
 
+    def settle_s(self, burst_t0: float, default: float) -> float:
+        """How long the PRIMARY stream must stay quiet before the selection
+        counts as done. The full debounce exists to wait out a drag; once
+        the gesture behind this burst has ended (button up, key pressed),
+        a short pause is enough."""
+        if self.button_down or self.last < burst_t0 - _GESTURE_LEAD_S:
+            return default
+        return min(default, max(_AFTER_GESTURE_S, self.last + _AFTER_GESTURE_S - time.monotonic()))
+
     def selected_since(self, t: float) -> bool:
         if self._hub is None or not self._hub.devices():
             return True
@@ -173,7 +186,9 @@ class _SelectionGestures:
             if ev.value == 1:
                 self._multi = ev.time - self._release_t < self._MULTI_CLICK_S
                 self._press_t = ev.time
+                self.button_down = True
             elif ev.value == 0:
+                self.button_down = False
                 if (
                     self._multi
                     or self._held & self._SHIFT
@@ -345,6 +360,8 @@ class WaylandSelectionWatcher:
             if not got:
                 continue
             burst_t0 = time.monotonic()
+            if not first:
+                self._backend.prefetch_active_window()
             # Capture the cursor at the FIRST event of the burst, then re-
             # capture on every subsequent selection change. The last capture
             # therefore lands on the final change -- the drag release, right at
@@ -365,7 +382,7 @@ class WaylandSelectionWatcher:
             settle = max(0.2, self._debounce_s)
             ended = False
             while True:
-                more = self._ping(fd, settle)
+                more = self._ping(fd, self._gestures.settle_s(burst_t0, settle))
                 if not more:
                     ended = more is None
                     break
@@ -622,6 +639,63 @@ class WaylandDoubleClickWatcher:
         return False  # one-shot
 
 
+class _KWinHelper:
+    """Client for the long-lived _kwin_query process. A one-shot helper per
+    query cost ~61 ms, ~55 of it Python startup. Respawned after a timeout
+    or crash."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            self._ensure()
+
+    def _ensure(self) -> subprocess.Popen | None:
+        if self._proc is not None and self._proc.poll() is None:
+            return self._proc
+        try:
+            self._proc = subprocess.Popen(
+                [sys.executable, "-m", "platform_backend._kwin_query"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                newline="\n",  # only "\n" ends an answer, not "\r" in a title
+                bufsize=1,
+                env=_kwin_subprocess_env(),
+                preexec_fn=_die_with_parent,
+            )
+        except OSError as exc:
+            print(f"[wayland] could not start the KWin helper: {exc}")
+            self._proc = None
+        return self._proc
+
+    def query(self, kind: str, timeout: float = 3.0) -> str:
+        """The helper's answer line, or "" on any failure."""
+        with self._lock:
+            proc = self._ensure()
+            if proc is None or proc.stdin is None or proc.stdout is None:
+                return ""
+            line = ""
+            try:
+                proc.stdin.write(kind + "\n")
+                proc.stdin.flush()
+                readable, _, _ = _select.select([proc.stdout], [], [], timeout)
+                if readable:
+                    line = proc.stdout.readline()
+            except (OSError, ValueError):
+                pass
+            if not line.endswith("\n"):
+                # Timed out or died: a late answer would be read as the reply
+                # to the next query, so start over with a fresh process.
+                print(f"[wayland] KWin helper gave no answer to {kind!r}; restarting it")
+                self._proc = None
+                threading.Thread(target=_reap, args=(proc,), daemon=True).start()
+                return ""
+            return line.rstrip("\n")
+
+
 class WaylandKdeBackend(PlatformBackend):
     name = "wayland_kde"
     popup_uses_xlib = False
@@ -633,6 +707,9 @@ class WaylandKdeBackend(PlatformBackend):
         self._pointer_lock = threading.Lock()
         # (monotonic time the query finished, coords, succeeded)
         self._pointer_last: tuple[float, tuple[int, int], bool] | None = None
+        self._kwin = _KWinHelper()
+        self._active_lock = threading.Lock()
+        self._active_pending: tuple[float, threading.Event, list[list[str]]] | None = None
         # KGlobalAccel signal delivery needs dbus-python bound to the GLib
         # main loop. Set it as the default before any SessionBus is created
         # so the hotkey's add_signal_receiver works.
@@ -648,6 +725,7 @@ class WaylandKdeBackend(PlatformBackend):
         if not os.environ.get("WAYLAND_DISPLAY"):
             print("[wayland] WAYLAND_DISPLAY not set - wrong backend.", file=sys.stderr)
             sys.exit(2)
+        self._kwin.start()  # pay its Python startup now, not on the first popup
         desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
         if "KDE" not in desktop:
             print(
@@ -702,27 +780,16 @@ class WaylandKdeBackend(PlatformBackend):
             return xy
 
     def _query_pointer(self) -> tuple[tuple[int, int], bool]:
+        out = self._kwin.query("cursor")
+        parts = out.split()
         try:
-            out = subprocess.run(
-                [sys.executable, "-m", "platform_backend._kwin_cursor"],
-                capture_output=True,
-                text=True,
-                timeout=3.0,
-                env=_kwin_subprocess_env(),
-            )
-            parts = out.stdout.strip().split()
             if len(parts) == 2:
                 return (int(parts[0]), int(parts[1])), True
-            # Empty/short stdout means the KWin script round-trip produced
-            # nothing (timeout, KWin busy). This is the silent path that
-            # lands the popup at the top-left corner.
-            print(
-                f"[wayland] cursor query gave no coords "
-                f"(rc={out.returncode}, stdout={out.stdout!r}, "
-                f"stderr={out.stderr.strip()!r}) -> falling back to (0,0)"
-            )
-        except (OSError, subprocess.SubprocessError, ValueError) as exc:
-            print(f"[wayland] cursor query failed: {exc}")
+        except ValueError:
+            pass
+        # No coords: the KWin round-trip timed out or KWin was busy. This is
+        # the silent path that lands the popup at the top-left corner.
+        print(f"[wayland] cursor query gave no coords ({out!r}) -> falling back to (0,0)")
         return (0, 0), False
 
     def can_paste(self) -> bool:
@@ -750,22 +817,36 @@ class WaylandKdeBackend(PlatformBackend):
 
     # ---- active window ---------------------------------------------------
     def active_window_haystacks(self) -> list[str]:
-        # Only called when the user actually has blocklist patterns (caller
-        # short-circuits on empty), so the KWin round-trip never costs the
-        # default no-blocklist path anything.
-        try:
-            out = subprocess.run(
-                [sys.executable, "-m", "platform_backend._kwin_active"],
-                capture_output=True,
-                text=True,
-                timeout=3.0,
-                env=_kwin_subprocess_env(),
-            )
-            cls, _, caption = out.stdout.strip().partition("\t")
-            return [s.lower() for s in (cls, caption) if s]
-        except (OSError, subprocess.SubprocessError) as exc:
-            print(f"[wayland] active-window query failed: {exc}")
-            return []
+        with self._active_lock:
+            pending, self._active_pending = self._active_pending, None
+        if pending is not None and time.monotonic() - pending[0] < self._ACTIVE_PREFETCH_S:
+            pending[1].wait(3.0)
+            if pending[2]:
+                return pending[2][0]
+        return self._query_active()
+
+    # A prefetch this old is a different moment from the caller's; ask again.
+    _ACTIVE_PREFETCH_S = 2.0
+
+    def prefetch_active_window(self) -> None:
+        """Start the active-window lookup now, for the next
+        active_window_haystacks() call to pick up. The selection watcher
+        calls this as a selection starts, so the lookup overlaps the settle
+        wait instead of following it."""
+        done = threading.Event()
+        result: list[list[str]] = []
+        with self._active_lock:
+            self._active_pending = (time.monotonic(), done, result)
+
+        def run() -> None:
+            result.append(self._query_active())
+            done.set()
+
+        threading.Thread(target=run, daemon=True, name="vinopop-active-prefetch").start()
+
+    def _query_active(self) -> list[str]:
+        cls, _, caption = self._kwin.query("active").partition("\t")
+        return [s.lower() for s in (cls, caption) if s]
 
     # ---- opening URLs ----------------------------------------------------
     def open_url(self, url: str) -> None:

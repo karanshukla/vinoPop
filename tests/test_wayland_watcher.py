@@ -1,6 +1,7 @@
 """Which PRIMARY changes the Wayland watcher treats as real selections."""
 
 import subprocess
+import threading
 import time
 
 import pytest
@@ -210,3 +211,90 @@ def test_ctrl_double_click_from_a_virtual_keyboard_fires(monkeypatch):
     assert len(fired) == 1
     w.stop()
     assert hub.subs == {}
+
+
+# ---- settle: a short pause once the selecting gesture has ended -----------------
+
+
+def test_settle_is_short_after_release():
+    g, send = _gestures()
+    t0 = time.monotonic()
+    send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, 10.0))
+    assert g.settle_s(t0, 0.2) == 0.2  # still dragging
+    send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, 10.6))
+    assert g.settle_s(t0, 0.2) <= wayland_kde._AFTER_GESTURE_S
+
+
+def test_settle_is_full_without_a_gesture():
+    g, send = _gestures()
+    send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, 10.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, 10.08))  # click to focus
+    assert g.settle_s(time.monotonic(), 0.2) == 0.2
+
+
+# ---- KWin helper client ------------------------------------------------------
+
+
+class _Pipe:
+    def __init__(self, lines):
+        self.lines = list(lines)
+        self.written = []
+
+    def write(self, s):
+        self.written.append(s)
+
+    def flush(self):
+        pass
+
+    def readline(self):
+        return self.lines.pop(0)
+
+
+class _Proc:
+    def __init__(self, lines):
+        self.stdin, self.stdout = _Pipe([]), _Pipe(lines)
+
+    def poll(self):
+        return None
+
+
+def _helper(monkeypatch, *procs):
+    procs = list(procs)
+    monkeypatch.setattr(wayland_kde.subprocess, "Popen", lambda *a, **kw: procs.pop(0))
+    monkeypatch.setattr(wayland_kde._select, "select", lambda r, *_: (r, [], []))
+    monkeypatch.setattr(wayland_kde, "_reap", lambda p: None)
+    return wayland_kde._KWinHelper()
+
+
+def test_kwin_helper_reuses_one_process(monkeypatch):
+    proc = _Proc(["10 20\n", "org.kde.dolphin\tHome\n"])
+    h = _helper(monkeypatch, proc)
+    assert h.query("cursor") == "10 20"
+    assert h.query("active") == "org.kde.dolphin\tHome"
+    assert proc.stdin.written == ["cursor\n", "active\n"]
+
+
+def test_kwin_helper_restarts_after_no_answer(monkeypatch):
+    dead, fresh = _Proc([""]), _Proc(["1 2\n"])
+    h = _helper(monkeypatch, dead, fresh)
+    assert h.query("cursor") == ""
+    assert h.query("cursor") == "1 2"
+
+
+def test_active_window_prefetch_is_used_once(monkeypatch):
+    backend = wayland_kde.WaylandKdeBackend.__new__(wayland_kde.WaylandKdeBackend)
+    backend._active_lock = threading.Lock()
+    backend._active_pending = None
+    answers = iter(["org.kde.kate\tnotes.txt", "org.kde.konsole\tbash"])
+    backend._kwin = type("K", (), {"query": lambda self, kind: next(answers)})()
+    backend.prefetch_active_window()
+    assert backend.active_window_haystacks() == ["org.kde.kate", "notes.txt"]
+    assert backend.active_window_haystacks() == ["org.kde.konsole", "bash"]
+
+
+def test_kwin_answer_cannot_break_framing():
+    pytest.importorskip("dbus")
+    from platform_backend._kwin_query import _one_line
+
+    title = "evil\rpage\ntitle\u2028x\x85y\tz"
+    assert _one_line(title) == "evil page title x y z"

@@ -1,9 +1,9 @@
 """Print the active window's "resourceClass\\tcaption" and exit (KDE Wayland).
 
 Same KWin-scripting-over-DBus trick as _kwin_cursor.py, used by
-WaylandKdeBackend.active_window_haystacks for the popup blocklist. Only spawned
-when the user actually has blocklist patterns, so its cost never hits the
-default no-blocklist path.
+WaylandKdeBackend.active_window_haystacks for the popup blocklist and the
+editable fallback. The app asks through _kwin_query.py; this one-shot form
+is for debugging.
 """
 
 from __future__ import annotations
