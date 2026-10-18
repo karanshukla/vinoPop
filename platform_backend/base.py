@@ -157,6 +157,12 @@ class PlatformBackend(abc.ABC):
         """role ('popup', 'clipboard', 'ocr') names the hotkey where the
         desktop keeps a registry of them (KGlobalAccel); X11 ignores it."""
 
+    def can_bind_hotkey(self, hotkey_str: str) -> bool:
+        """Whether make_hotkey() could grab this combo at all. The settings
+        recorder asks before saving, so a key with no name in this backend
+        (e.g. the Copilot key's XF86Assistant on KDE) is refused up front."""
+        return True
+
     @abc.abstractmethod
     def make_double_click_watcher(
         self, on_double_click: Callable[[int, int], None]

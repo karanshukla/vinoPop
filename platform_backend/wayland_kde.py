@@ -677,6 +677,9 @@ class WaylandKdeBackend(PlatformBackend):
     def make_hotkey(self, hotkey_str, on_trigger, use_polling=False, role=None):
         return WaylandKdeHotkey(hotkey_str, on_trigger, role=role)
 
+    def can_bind_hotkey(self, hotkey_str):
+        return _qt_keycode(hotkey_str) is not None
+
     def make_double_click_watcher(self, on_double_click):
         # XRecord (the old path) only sees XWayland windows on KWin, so the
         # gesture was dead for native Wayland apps. Read mouse buttons +

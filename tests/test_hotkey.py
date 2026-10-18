@@ -97,6 +97,19 @@ def test_qt_keycode_for_recorded_names(qt_keycode, combo, expected):
     assert qt_keycode(combo) == expected
 
 
-@pytest.mark.parametrize("combo", ["", "ctrl+", "hyper+x", "ctrl+not_a_key"])
+@pytest.mark.parametrize(
+    "combo",
+    # The last is what GTK recorded for the Copilot key (XF86Assistant, no Qt key).
+    ["", "ctrl+", "hyper+x", "ctrl+not_a_key", "shift+super+0x10081247"],
+)
 def test_qt_keycode_rejects_what_it_cannot_encode(qt_keycode, combo):
     assert qt_keycode(combo) is None
+
+
+@pytest.mark.parametrize("combo,ok", [("super+shift+y", True), ("shift+super+0x10081247", False)])
+def test_x11_can_bind_hotkey(combo, ok):
+    try:
+        from platform_backend.x11 import X11Backend
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"x11 backend unavailable: {exc}")
+    assert X11Backend.can_bind_hotkey(None, combo) is ok
