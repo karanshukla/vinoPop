@@ -238,17 +238,63 @@ def reinstall_popup_css() -> None:
     _install_css()
 
 
+_BTN_MOUSE = {0x110, 0x111, 0x112}  # BTN_LEFT / RIGHT / MIDDLE
+_BTN_TOOL_FINGER = 0x145
+_BTN_TOUCH = 0x14A
+# libinput's tap timeout is 180 ms; a contact that lifts within this is a tap.
+_TAP_MAX_S = 0.25
+
+
+def _has_key_bit(bitmap: str, code: int) -> bool:
+    """Is `code` set in a sysfs capabilities/key bitmap? The file is
+    space-separated hex words, most significant first, each as wide as a
+    C long (64 bits on every platform vinoPop runs on)."""
+    words = bitmap.split()
+    idx = code // 64
+    if idx >= len(words):
+        return False
+    try:
+        return bool(int(words[-1 - idx], 16) >> (code % 64) & 1)
+    except ValueError:
+        return False
+
+
+def _touch_event_paths() -> set[str]:
+    """/dev/input nodes of touchpads (and touchscreens): they report finger
+    contact as BTN_TOUCH and may not show up as *-event-mouse."""
+    import glob
+    import os
+
+    out = set()
+    for cap in glob.glob("/sys/class/input/event*/device/capabilities/key"):
+        try:
+            with open(cap) as f:
+                bitmap = f.read()
+        except OSError:
+            continue
+        if _has_key_bit(bitmap, _BTN_TOUCH) and _has_key_bit(bitmap, _BTN_TOOL_FINGER):
+            node = cap.split("/")[4]  # /sys/class/input/<eventN>/...
+            out.add(os.path.join("/dev/input", node))
+    return out
+
+
 class _ClickWatcher:
     """Wayland fallback for the X11 pointer-button poll. KWin doesn't deliver
     clicks that land outside a no-focus layer-shell surface, so we read the
     raw mouse devices via /dev/input while the popup is up and fire a callback
     on any button press. Needs the user in the 'input' group (same as the
-    snippet trigger watcher); silently inert otherwise."""
+    snippet trigger watcher); silently inert otherwise.
+
+    Touchpad tap-to-click is done by libinput in userspace: the kernel only
+    sends BTN_TOUCH down/up, never BTN_LEFT. A contact that lifts within
+    _TAP_MAX_S counts as a click; a longer one is the finger moving the
+    pointer, which must not dismiss."""
 
     def __init__(self, on_click) -> None:
         self._on_click = on_click
         self._stop = threading.Event()
         self._thread = None
+        self._touch_down_at: float | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -260,6 +306,19 @@ class _ClickWatcher:
     def stop(self) -> None:
         self._stop.set()
 
+    def _is_click(self, code: int, val: int, now: float) -> bool:
+        """Feed one EV_KEY event (`now` is its timestamp in seconds); True
+        when it completes a click or tap."""
+        if code in _BTN_MOUSE:
+            return val == 1
+        if code == _BTN_TOUCH:
+            if val == 1:
+                self._touch_down_at = now
+                return False
+            down, self._touch_down_at = self._touch_down_at, None
+            return val == 0 and down is not None and now - down <= _TAP_MAX_S
+        return False
+
     def _run(self) -> None:
         import glob
         import os
@@ -267,7 +326,6 @@ class _ClickWatcher:
         import struct
 
         EV_KEY = 0x01
-        BTNS = {0x110, 0x111, 0x112}  # BTN_LEFT / RIGHT / MIDDLE
         fmt = "llHHi"
         size = struct.calcsize(fmt)
         paths = set()
@@ -276,7 +334,9 @@ class _ClickWatcher:
                 paths.add(os.path.realpath(p))
             except OSError:
                 pass
-        if not paths:
+        if paths:
+            paths |= _touch_event_paths()
+        else:
             paths = set(glob.glob("/dev/input/event*"))
         fds = []
         for path in sorted(paths):
@@ -295,8 +355,8 @@ class _ClickWatcher:
                     except (BlockingIOError, OSError):
                         continue
                     for off in range(0, len(data) - size + 1, size):
-                        _s, _us, et, code, val = struct.unpack_from(fmt, data, off)
-                        if et == EV_KEY and code in BTNS and val == 1:
+                        sec, usec, et, code, val = struct.unpack_from(fmt, data, off)
+                        if et == EV_KEY and self._is_click(code, val, sec + usec / 1e6):
                             GLib.idle_add(self._on_click)
         finally:
             for fd in fds:
@@ -304,6 +364,75 @@ class _ClickWatcher:
                     os.close(fd)
                 except OSError:
                     pass
+
+
+def _x11_input_state(xdpy, esc_keycode: int) -> tuple[bool, int, int, bool]:
+    """(any of buttons 1-3 held, root x, root y, Esc held) via Xlib. Works
+    without focus or a seat grab, which ibus/Cinnamon can refuse."""
+    data = xdpy.screen().root.query_pointer()
+    pressed = bool(data.mask & (X.Button1Mask | X.Button2Mask | X.Button3Mask))
+    esc = False
+    if esc_keycode:
+        keymap = xdpy.query_keymap()
+        esc = bool(keymap[esc_keycode // 8] & (1 << (esc_keycode % 8)))
+    return pressed, data.root_x, data.root_y, esc
+
+
+class _XInputPoll:
+    """The popup's X11 button/Esc poll, for other never-focused windows (the
+    AI bubble): fires on_click / on_escape on each new press. start()
+    returns False when there's no X server to poll (Wayland, no Xlib)."""
+
+    def __init__(self, on_click, on_escape) -> None:
+        self._on_click = on_click
+        self._on_escape = on_escape
+        self._xdpy = None
+        self._esc_keycode = 0
+        self._prev = (True, True)  # (button, esc): a held input isn't a new press
+        self._id: int | None = None
+
+    def start(self) -> bool:
+        if xdisplay is None or not get_backend().popup_uses_xlib:
+            return False
+        try:
+            self._xdpy = xdisplay.Display()
+            self._esc_keycode = self._xdpy.keysym_to_keycode(XK.string_to_keysym("Escape"))
+            pressed, _x, _y, esc = _x11_input_state(self._xdpy, self._esc_keycode)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] could not open Xlib display: {exc}")
+            self._xdpy = None
+            return False
+        self._prev = (pressed, esc)
+        self._id = GLib.timeout_add(150, self._tick)
+        return True
+
+    def stop(self) -> None:
+        if self._id is not None:
+            GLib.source_remove(self._id)
+            self._id = None
+        if self._xdpy is not None:
+            try:
+                self._xdpy.close()
+            except Exception:
+                pass
+            self._xdpy = None
+
+    def _tick(self) -> bool:
+        if self._xdpy is None:
+            self._id = None
+            return False
+        try:
+            pressed, _x, _y, esc = _x11_input_state(self._xdpy, self._esc_keycode)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] xlib query failed: {exc}")
+            return True
+        was_pressed, was_esc = self._prev
+        self._prev = (pressed, esc)
+        if esc and not was_esc:
+            self._on_escape()
+        elif pressed and not was_pressed:
+            self._on_click()
+        return self._id is not None
 
 
 class PopupWindow:
@@ -444,6 +573,7 @@ class PopupWindow:
                 child = nxt
         # Collapse row 2 until something gets added to it.
         self._row2.set_visible(False)
+        self._bar.set_size_request(-1, -1)  # drop _expand's width hold
 
     def _add_button(
         self,
@@ -916,6 +1046,10 @@ class PopupWindow:
         btn.set_child(img)
 
         def _expand(_b):
+            # Hold the bar's width: without the chevron row 1 is a button
+            # narrower, which would leave the pointer (still where the
+            # chevron was) outside the popup and start the leave-grace hide.
+            self._bar.set_size_request(self._bar.get_width(), -1)
             self._row1.remove(_b)
             per_row = self._max_per_row()
             shown2 = min(len(rest), per_row)
@@ -925,13 +1059,32 @@ class PopupWindow:
             if extra > 0:
                 self._add_overflow_chip(extra, max_btns, row=self._row2)
             self._row2.set_visible(True)
-            try:
-                self.win.queue_resize()
-            except Exception:
-                pass
+            self._refit()
 
         btn.connect("clicked", _expand)
         self._row1.append(btn)
+
+    def _refit(self) -> None:
+        """Re-measure after the bar grew (row 2 revealed), keep it on its
+        monitor and refresh _popup_rect. The X11 tick's click-outside and
+        safe-zone tests read that rect; left at the one-row height, a click
+        on row 2 counted as outside and hid the popup instead of running."""
+        _, natural = self.win.get_preferred_size()
+        w = max(natural.width, 1)
+        h = max(natural.height, 1)
+        x, y, _, _ = self._popup_rect
+        monitor = _monitor_for_point(self.win.get_display(), x + w / 2, y, True)
+        if monitor is not None:
+            geom = monitor.get_geometry()
+            x = max(geom.x + 4, min(x, geom.x + geom.width - w - 4))
+            y = max(geom.y + 4, min(y, geom.y + geom.height - h - 4))
+        if (x, y) != self._popup_rect[:2]:
+            get_backend().move_popup_window(self.win, x, y)
+        self._popup_rect = (x, y, w, h)
+        try:
+            self.win.queue_resize()
+        except Exception:
+            pass
 
     def show_actions(
         self,
@@ -1096,16 +1249,9 @@ class PopupWindow:
         # still suppressed, but a truly idle pointer is correctly tracked.
         if self._xdpy is not None:
             try:
-                data = self._xdpy.screen().root.query_pointer()
-                btn_mask = X.Button1Mask | X.Button2Mask | X.Button3Mask
-                self._prev_button_pressed = bool(data.mask & btn_mask)
-                if self._esc_keycode:
-                    keymap = self._xdpy.query_keymap()
-                    byte_idx = self._esc_keycode // 8
-                    bit_idx = self._esc_keycode % 8
-                    self._prev_esc_pressed = bool(keymap[byte_idx] & (1 << bit_idx))
-                else:
-                    self._prev_esc_pressed = False
+                pressed, _rx, _ry, esc = _x11_input_state(self._xdpy, self._esc_keycode)
+                self._prev_button_pressed = pressed
+                self._prev_esc_pressed = esc
             except Exception:
                 # Fall back to the old conservative seed if Xlib query fails.
                 self._prev_button_pressed = True
@@ -1219,10 +1365,9 @@ class PopupWindow:
         # is denied by ibus/cinnamon). Edge-detect 0→1 transitions.
         if self._xdpy is not None:
             try:
-                data = self._xdpy.screen().root.query_pointer()
-                button_mask = X.Button1Mask | X.Button2Mask | X.Button3Mask
-                pressed = bool(data.mask & button_mask)
-                phys_x, phys_y = data.root_x, data.root_y
+                pressed, phys_x, phys_y, esc_pressed = _x11_input_state(
+                    self._xdpy, self._esc_keycode
+                )
                 click_lx = phys_x / self._scale
                 click_ly = phys_y / self._scale
                 px, py = click_lx, click_ly
@@ -1233,16 +1378,11 @@ class PopupWindow:
                         return False
                 self._prev_button_pressed = pressed
 
-                if self._esc_keycode:
-                    keymap = self._xdpy.query_keymap()
-                    byte_idx = self._esc_keycode // 8
-                    bit_idx = self._esc_keycode % 8
-                    esc_pressed = bool(keymap[byte_idx] & (1 << bit_idx))
-                    if esc_pressed and not self._prev_esc_pressed:
-                        self._prev_esc_pressed = esc_pressed
-                        self.hide()
-                        return False
+                if esc_pressed and not self._prev_esc_pressed:
                     self._prev_esc_pressed = esc_pressed
+                    self.hide()
+                    return False
+                self._prev_esc_pressed = esc_pressed
             except Exception as exc:  # noqa: BLE001
                 print(f"[popup] xlib query failed: {exc}")
 
