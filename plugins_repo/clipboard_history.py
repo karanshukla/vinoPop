@@ -27,6 +27,7 @@ import re
 import select as _select
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -190,12 +191,16 @@ POLL_INTERVAL = _poll_interval()
 
 from xdg_paths import CACHE_DIR as _LP_CACHE
 from xdg_paths import CONFIG_DIR as _LP_CONFIG
+from xdg_paths import DATA_DIR as _LP_DATA
 from xdg_paths import make_private, open_private, private_dir
 
 CACHE_DIR = _LP_CACHE / "clipboard"
 HISTORY_FILE = CACHE_DIR / "history.json"
 SNIPPETS_FILE = _LP_CONFIG / "snippets.json"
 IMAGES_DIR = CACHE_DIR / "images"
+# Pinned images get their own copy here: history evicts (and the cache can
+# be cleared) without taking a snippet's image with it.
+SNIPPET_IMAGES_DIR = _LP_DATA / "snippet_images"
 
 
 # ----- data --------------------------------------------------------------
@@ -222,6 +227,9 @@ class Entry:
     # "Code", "Personal"). Empty = "General" bucket. Keeps the picker
     # navigable once you have 20+ snippets.
     category: str = ""
+    # sha1 of an image entry's PNG, so re-copying an image already in
+    # history moves it up instead of saving a duplicate. Empty on older saves.
+    image_hash: str = ""
 
     def trigger_list(self) -> list[str]:
         """Parse `trigger` into a list of clean shortcodes."""
@@ -267,15 +275,25 @@ _watcher_stop = threading.Event()
 
 def _atomic_write_json(path: Path, data) -> None:
     private_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open_private(tmp) as f:
-        json.dump(data, f, ensure_ascii=False)
-        f.flush()
+    # A temp name per write: with one shared ".tmp", two writers (the old
+    # watcher outliving a plugin reload, say) replace each other's file and
+    # one save is lost. mkstemp creates it 0600.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
         try:
-            os.fsync(f.fileno())
+            os.unlink(tmp)
         except OSError:
             pass
-    os.replace(tmp, path)
+        raise
 
 
 def _load_list(path: Path, target: list[Entry]) -> bool:
@@ -334,27 +352,54 @@ def _save_snippets() -> None:
         print(f"[clipboard] could not save snippets: {exc}")
 
 
-def _add_entry(entry: Entry) -> None:
+def _same_content(a: Entry, b: Entry) -> bool:
+    if a.kind != b.kind:
+        return False
+    if a.kind == "text":
+        return a.text == b.text
+    if a.image_hash and a.image_hash == b.image_hash:
+        return True
+    return bool(a.image_path) and a.image_path == b.image_path
+
+
+def _promote_existing(entry: Entry) -> bool:
+    """If history already holds this content, move that entry to the top
+    and return True. Pasting an older entry puts it back on the clipboard,
+    and the watcher would otherwise record it a second time."""
     with _history_lock:
-        if _history and _history[0].kind == entry.kind:
-            if entry.kind == "text" and _history[0].text == entry.text:
-                return
-            if entry.kind == "image" and _history[0].image_path == entry.image_path:
-                return
+        i = next((i for i, e in enumerate(_history) if _same_content(e, entry)), -1)
+        if i < 0:
+            return False
+        if i > 0:
+            found = _history.pop(i)
+            found.timestamp = entry.timestamp
+            _history.insert(0, found)
+    if i > 0:
+        _save_history()
+    return True
+
+
+def _add_entry(entry: Entry) -> None:
+    if _promote_existing(entry):
+        return
+    evicted: list[Entry] = []
+    with _history_lock:
         _history.insert(0, entry)
         while len(_history) > _history_size():
-            old = _history.pop()
-            if old.kind == "image" and old.image_path:
-                try:
-                    Path(old.image_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
+            evicted.append(_history.pop())
     _save_history()
+    for old in evicted:
+        if old.kind == "image" and old.image_path and not _snippet_uses_image(old.image_path):
+            try:
+                Path(old.image_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _snippet_uses_image(image_path: str) -> bool:
-    """True if a snippet points at this image file. Pinning shares the file
-    rather than copying it, so history must not delete it from under one."""
+    """True if a snippet points at this image file. Pins now get their own
+    copy, but snippets pinned by older versions share the history file, so
+    history must not delete it from under one."""
     with _snippets_lock:
         return any(s.kind == "image" and s.image_path == image_path for s in _snippets)
 
@@ -379,28 +424,63 @@ def _remove_history_entry(entry_id: str) -> bool:
     return True
 
 
-def _pin_entry(entry: Entry, name: str = "") -> None:
-    """Copy a history entry into the persistent snippets store."""
+def _pin_entry(
+    entry: Entry,
+    name: str = "",
+    trigger: str = "",
+    category: str = "",
+    text: str | None = None,
+) -> str | None:
+    """Copy a history entry into the persistent snippets store. `text`
+    replaces the body of a text entry (the Pin dialog lets you edit it).
+    Returns the new snippet's id, or None if an image couldn't be copied."""
     new_id = uuid.uuid4().hex[:12]
+    image_path = ""
+    if entry.kind == "image":
+        # The snippet gets its own file: the history one is deleted when the
+        # entry ages out of history.
+        dest = SNIPPET_IMAGES_DIR / f"{new_id}.png"
+        try:
+            private_dir(SNIPPET_IMAGES_DIR)
+            with open(entry.image_path, "rb") as src, open_private(dest, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        except OSError as exc:
+            print(f"[clipboard] could not copy the image to pin it: {exc}")
+            return None
+        image_path = str(dest)
     snippet = Entry(
         id=new_id,
         timestamp=time.time(),
         kind=entry.kind,
-        text=entry.text,
-        image_path=entry.image_path,
+        text=entry.text if text is None or entry.kind != "text" else text,
+        image_path=image_path,
         name=name,
+        trigger=trigger.strip(),
+        category=category.strip(),
+        image_hash=entry.image_hash,
     )
     with _snippets_lock:
         _snippets.insert(0, snippet)
     _save_snippets()
     _rebuild_trigger_index()
+    return new_id
 
 
 def _unpin_snippet(snippet_id: str) -> None:
     with _snippets_lock:
+        removed = [s for s in _snippets if s.id == snippet_id]
         _snippets[:] = [s for s in _snippets if s.id != snippet_id]
     _save_snippets()
     _rebuild_trigger_index()
+    # Only the snippet's own copy goes; an older pin's shared history file
+    # is left for history to clean up.
+    for s in removed:
+        p = Path(s.image_path) if s.kind == "image" and s.image_path else None
+        if p is not None and p.parent == SNIPPET_IMAGES_DIR and not _snippet_uses_image(str(p)):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _create_snippet(name: str, text: str, trigger: str = "", category: str = "") -> None:
@@ -1055,6 +1135,61 @@ def _trigger_blocked() -> bool:
     return _matches_blocklist(patterns, _active_window_haystacks())
 
 
+def _snapshot_clipboard() -> tuple[str, bytes] | None:
+    """The clipboard as (type, data), so a trigger expansion can put it back
+    after staging the snippet there. Keeps the text, or failing that the
+    PNG, not every format the app offered. None when it's empty or
+    unreadable, or a password manager's copy: restoring that would undo its
+    auto-clear and drop the hint that keeps it out of history."""
+    targets = _read_clipboard_targets()
+    if not targets or _is_password_copy(targets):
+        return None
+    if any(t in _TEXT_TARGETS for t in targets):
+        text = _read_clipboard_text()
+        return ("text", text.encode("utf-8")) if text else None
+    if "image/png" in targets:
+        data = _read_clipboard_image()
+        return ("image/png", data) if data else None
+    return None
+
+
+def _write_clipboard(kind: str, data: bytes, primary: bool = False) -> None:
+    """Put `data` on CLIPBOARD (or PRIMARY). `kind` is "text" or a MIME type."""
+    if _is_wayland():
+        args = ["wl-copy", "--primary"] if primary else ["wl-copy"]
+    else:
+        args = ["xclip", "-selection", "primary" if primary else "clipboard"]
+    if kind != "text":
+        args += ["-t", kind]
+    subprocess.run(args, input=data, check=False, timeout=2.0)
+
+
+def _restore_clipboard(saved: tuple[str, bytes] | None, staged: str) -> None:
+    """Put back what was on the clipboard before an expansion staged
+    `staged` there, unless something else was copied in the meantime. The
+    watcher is told it's ours, so it doesn't land in history again (or for
+    the first time, if it came from a blocklisted app)."""
+    if saved is None or _read_clipboard_text() != staged:
+        return
+    kind, data = saved
+    if kind == "text":
+        _mark_own_copy(data.decode("utf-8"))
+    else:
+        import hashlib
+
+        _mark_own_copy(hashlib.sha1(data, usedforsecurity=False).digest())
+    try:
+        _write_clipboard(kind, data)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[triggers] could not restore the clipboard: {exc}")
+
+
+# How long the target app gets to read the staged snippet before the
+# user's clipboard goes back. It asks for the data after the paste key
+# arrives, so too short and it pastes the old clipboard instead.
+_RESTORE_DELAY = 0.3
+
+
 def _fire_trigger_expansion(
     trigger: str,
     typed: str,
@@ -1117,14 +1252,12 @@ def _fire_trigger_expansion(
         # Give the receiving app a moment to settle before we move on
         # to clipboard staging + paste.
         time.sleep(0.08)
-        # Stage the rendered text on the clipboard.
+        # Stage the rendered text on the clipboard, keeping what the user
+        # had there to put back afterwards.
+        saved = _snapshot_clipboard()
+        _mark_own_copy(rendered)
         try:
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=rendered.encode("utf-8"),
-                check=False,
-                timeout=2.0,
-            )
+            _write_clipboard("text", rendered.encode("utf-8"))
         except (OSError, subprocess.SubprocessError):
             return
         subprocess.run(
@@ -1157,6 +1290,8 @@ def _fire_trigger_expansion(
             ["xdotool", "keyup", "ctrl", "shift", "alt", "super", "Control_L", "Control_R"],
             check=False,
         )
+        time.sleep(_RESTORE_DELAY)
+        _restore_clipboard(saved, rendered)
 
     def worker_wayland():
         if not shutil.which("ydotool") or not shutil.which("wl-copy"):
@@ -1177,12 +1312,14 @@ def _fire_trigger_expansion(
         time.sleep(0.03)
         # 2. Stage the expansion on BOTH clipboard and primary. This carries
         #    full unicode (ae/oe/aa etc.) that 'ydotool type' silently drops,
-        #    since type maps through a US keycode table.
+        #    since type maps through a US keycode table. Both are put back
+        #    afterwards.
+        saved = _snapshot_clipboard()
+        saved_primary = _read_primary_selection()
+        _mark_own_copy(rendered)
         try:
-            subprocess.run(["wl-copy"], input=rendered.encode("utf-8"), check=False, timeout=2.0)
-            subprocess.run(
-                ["wl-copy", "--primary"], input=rendered.encode("utf-8"), check=False, timeout=2.0
-            )
+            _write_clipboard("text", rendered.encode("utf-8"))
+            _write_clipboard("text", rendered.encode("utf-8"), primary=True)
         except (OSError, subprocess.SubprocessError):
             return
         time.sleep(0.05)
@@ -1197,6 +1334,13 @@ def _fire_trigger_expansion(
                 lf += ["105:1", "105:0"]
             subprocess.run(["ydotool", "key", *lf], env=env, check=False)
         _kbd_suppress_until = time.monotonic() + 0.25
+        time.sleep(_RESTORE_DELAY)
+        _restore_clipboard(saved, rendered)
+        if saved_primary and _read_primary_selection() == rendered:
+            try:
+                _write_clipboard("text", saved_primary.encode("utf-8"), primary=True)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
     worker = worker_wayland if _is_wayland() else worker_x11
     threading.Thread(target=worker, daemon=True, name="trigger-expansion").start()
@@ -1364,6 +1508,27 @@ def _read_clipboard_image() -> bytes | None:
 
 _state = {"last_text": "", "last_image_hash": b""}
 
+# What vinoPop itself just put on the clipboard (a trigger expansion, and
+# the user's copy restored after it), text or image sha1, with a monotonic
+# deadline. The watcher counts these as seen instead of recording them.
+_OWN_COPY_TTL = 5.0
+_own_copies: dict[str | bytes, float] = {}
+_own_copies_lock = threading.Lock()
+
+
+def _mark_own_copy(content: str | bytes) -> None:
+    now = time.monotonic()
+    with _own_copies_lock:
+        for k in [k for k, t in _own_copies.items() if t < now]:
+            del _own_copies[k]
+        _own_copies[content] = now + _OWN_COPY_TTL
+
+
+def _is_own_copy(content: str | bytes) -> bool:
+    with _own_copies_lock:
+        return _own_copies.get(content, 0.0) >= time.monotonic()
+
+
 # Persistent dedup-hash file. Without this, every daemon restart with
 # an image still on the clipboard re-saves it as a "new" entry.
 _DEDUP_STATE_FILE = CACHE_DIR / "last_image.sha1"
@@ -1418,7 +1583,7 @@ def _tighten_permissions() -> None:
     """One-time fix-up for files older versions wrote with the default
     umask (0644 files in 0755 folders): only the user should be able to
     read what they copied."""
-    for d in (_LP_CACHE, CACHE_DIR, IMAGES_DIR, _LP_CONFIG):
+    for d in (_LP_CACHE, CACHE_DIR, IMAGES_DIR, _LP_CONFIG, SNIPPET_IMAGES_DIR):
         make_private(d)
     for f in (HISTORY_FILE, SNIPPETS_FILE, _DEDUP_STATE_FILE):
         make_private(f)
@@ -1433,64 +1598,83 @@ def _capture_current_clipboard() -> None:
         return  # this copy of the module was replaced by a reload
     try:
         targets = _read_clipboard_targets()
-        has_image = _capture_images() and any(t.startswith("image/") for t in targets)
-        has_text = any(
-            t in ("UTF8_STRING", "TEXT", "STRING", "text/plain", "text/plain;charset=utf-8")
-            for t in targets
-        )
-        if has_image:
-            data = _read_clipboard_image()
-            if data:
-                import hashlib
-
-                h = hashlib.sha1(data, usedforsecurity=False).digest()
-                if h != _state["last_image_hash"]:
-                    _state["last_image_hash"] = h
-                    _save_dedup_state(h)
-                    if _skip_capture(targets):
-                        return
-                    if len(data) > _max_image_bytes():
-                        print(f"[clipboard] not keeping a {len(data) // 1024} KB image (too big)")
-                        return
-                    private_dir(CACHE_DIR)
-                    private_dir(IMAGES_DIR)
-                    eid = uuid.uuid4().hex[:12]
-                    path = IMAGES_DIR / f"{eid}.png"
-                    try:
-                        with open_private(path, "wb") as f:
-                            f.write(data)
-                        _add_entry(
-                            Entry(
-                                id=eid,
-                                timestamp=time.time(),
-                                kind="image",
-                                image_path=str(path),
-                            )
-                        )
-                    except OSError as exc:
-                        print(f"[clipboard] could not save image: {exc}")
-        elif has_text:
-            text = _read_clipboard_text()
-            if text and text != _state["last_text"] and text.strip():
-                _state["last_text"] = text
-                if _skip_capture(targets):
-                    return
-                size = len(text.encode("utf-8", errors="replace"))
-                if size > _max_text_bytes():
-                    # Skipped rather than cut: pasting half a log back
-                    # would be worse than not having it in history.
-                    print(f"[clipboard] not keeping a {size // 1024} KB copy (too big)")
-                    return
-                _add_entry(
-                    Entry(
-                        id=uuid.uuid4().hex[:12],
-                        timestamp=time.time(),
-                        kind="text",
-                        text=text,
-                    )
-                )
+        # Text wins when both are offered: a LibreOffice cell is its text
+        # plus a bitmap of it, and the text is what you want back.
+        if any(t in _TEXT_TARGETS for t in targets):
+            _capture_text(_read_clipboard_text(), targets)
+            return
+        if not _capture_images() or not any(t.startswith("image/") for t in targets):
+            return
+        data = _read_clipboard_image()
+        if data:
+            _capture_image(data, targets)
+        elif _SVG_TARGET in targets:
+            # Inkscape and friends offer SVG only, no PNG. It's text, so keep
+            # it as text rather than recording nothing.
+            svg = _read_clipboard_target(_SVG_TARGET)
+            if svg:
+                _capture_text(svg.decode("utf-8", errors="replace"), targets)
     except Exception as exc:  # noqa: BLE001
         print(f"[clipboard] capture error: {exc}")
+
+
+_TEXT_TARGETS = ("UTF8_STRING", "TEXT", "STRING", "text/plain", "text/plain;charset=utf-8")
+_SVG_TARGET = "image/svg+xml"
+
+
+def _capture_image(data: bytes, targets: list[str]) -> None:
+    import hashlib
+
+    h = hashlib.sha1(data, usedforsecurity=False).digest()
+    if h == _state["last_image_hash"]:
+        return
+    _state["last_image_hash"] = h
+    _state["last_text"] = ""  # so copying the same text again counts as new
+    _save_dedup_state(h)
+    if _is_own_copy(h) or _skip_capture(targets):
+        return
+    if len(data) > _max_image_bytes():
+        print(f"[clipboard] not keeping a {len(data) // 1024} KB image (too big)")
+        return
+    eid = uuid.uuid4().hex[:12]
+    path = IMAGES_DIR / f"{eid}.png"
+    entry = Entry(
+        id=eid, timestamp=time.time(), kind="image", image_path=str(path), image_hash=h.hex()
+    )
+    # Checked before writing so a re-copied image doesn't leave a second PNG
+    if _promote_existing(entry):
+        return
+    private_dir(CACHE_DIR)
+    private_dir(IMAGES_DIR)
+    try:
+        with open_private(path, "wb") as f:
+            f.write(data)
+        _add_entry(entry)
+    except OSError as exc:
+        print(f"[clipboard] could not save image: {exc}")
+
+
+def _capture_text(text: str, targets: list[str]) -> None:
+    if not text or text == _state["last_text"] or not text.strip():
+        return
+    _state["last_text"] = text
+    _state["last_image_hash"] = b""  # so copying the same image again counts as new
+    if _is_own_copy(text) or _skip_capture(targets):
+        return
+    size = len(text.encode("utf-8", errors="replace"))
+    if size > _max_text_bytes():
+        # Skipped rather than cut: pasting half a log back
+        # would be worse than not having it in history.
+        print(f"[clipboard] not keeping a {size // 1024} KB copy (too big)")
+        return
+    _add_entry(
+        Entry(
+            id=uuid.uuid4().hex[:12],
+            timestamp=time.time(),
+            kind="text",
+            text=text,
+        )
+    )
 
 
 def _watcher_loop() -> None:
@@ -1522,7 +1706,8 @@ def _watcher_loop() -> None:
         _capture_current_clipboard()
         while not _watcher_stop.is_set():
             try:
-                readable, _, _ = _select.select([fd], [], [], 5.0)
+                # Short timeout so shutdown() can join this thread quickly
+                readable, _, _ = _select.select([fd], [], [], 0.5)
             except (OSError, ValueError):
                 break
             if not readable:
@@ -1544,7 +1729,7 @@ def _watcher_loop() -> None:
 def _poll_only_loop() -> None:
     while not _watcher_stop.is_set():
         _capture_current_clipboard()
-        time.sleep(_poll_interval())
+        _watcher_stop.wait(_poll_interval())
 
 
 def shutdown() -> None:
@@ -1555,6 +1740,10 @@ def shutdown() -> None:
     every snippet a second time."""
     global _watcher_thread, _trigger_watcher
     _watcher_stop.set()
+    # Wait (briefly) for a capture in progress to finish, so it can't save
+    # history.json after the reloaded copy has loaded it.
+    if _watcher_thread is not None and _watcher_thread is not threading.current_thread():
+        _watcher_thread.join(timeout=1.0)
     _watcher_thread = None
     if _trigger_watcher is not None:
         try:
@@ -2944,17 +3133,12 @@ class _PickerDialog:
         )
         if result is None:
             return  # cancelled
-        name, trigger, category, _new_text = result
-        _pin_entry(entry, name)
-        # _pin_entry inserts at index 0 - find that newest snippet and
-        # write the trigger/category through. Avoids reaching into internals.
-        with _snippets_lock:
-            new_id = _snippets[0].id if _snippets else None
-        if new_id is not None:
-            if trigger:
-                _set_snippet_trigger(new_id, trigger)
-            if category:
-                _set_snippet_category(new_id, category)
+        name, trigger, category, new_text = result
+        conflicts = _find_trigger_conflicts([t.strip() for t in trigger.split(",") if t.strip()])
+        if conflicts and not self._confirm_trigger_conflicts(conflicts):
+            return
+        if _pin_entry(entry, name, trigger=trigger, category=category, text=new_text) is None:
+            return
         self._populate_snippets()
         if self.notebook is not None:
             self.notebook.set_current_page(1)

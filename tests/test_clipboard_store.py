@@ -4,6 +4,8 @@ import json
 import os
 import stat
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 
@@ -128,10 +130,12 @@ def store(ch, monkeypatch, tmp_path):
     monkeypatch.setattr(ch, "IMAGES_DIR", clip / "images")
     monkeypatch.setattr(ch, "SNIPPETS_FILE", config / "snippets.json")
     monkeypatch.setattr(ch, "_DEDUP_STATE_FILE", clip / "last_image.sha1")
+    monkeypatch.setattr(ch, "SNIPPET_IMAGES_DIR", tmp_path / "data" / "vinopop" / "snippet_images")
     monkeypatch.setattr(ch, "_history", [])
     monkeypatch.setattr(ch, "_snippets", [])
     monkeypatch.setitem(ch._state, "last_text", "")
     monkeypatch.setitem(ch._state, "last_image_hash", b"")
+    monkeypatch.setattr(ch, "_own_copies", {})
     settings: dict = {}
     monkeypatch.setattr(ch, "_cfg", lambda k, d: settings.get(k, d))
     ch.settings = settings  # tests set keys here
@@ -241,6 +245,10 @@ def _image_entry(store, eid):
     return store.Entry(id=eid, timestamp=1.0, kind="image", image_path=str(path))
 
 
+def _image_snippet(store, image_path):
+    return store.Entry(id="s", timestamp=1.0, kind="image", image_path=image_path)
+
+
 def test_delete_removes_the_entry_and_its_image(store):
     text = store.Entry(id="t1", timestamp=2.0, kind="text", text="oops my password")
     img = _image_entry(store, "i1")
@@ -256,9 +264,10 @@ def test_delete_removes_the_entry_and_its_image(store):
 
 
 def test_delete_keeps_an_image_a_snippet_uses(store):
+    # snippets pinned before #39 share the history entry's file
     img = _image_entry(store, "i2")
     store._history[:] = [img]
-    store._pin_entry(img, "logo")
+    store._snippets[:] = [_image_snippet(store, img.image_path)]
 
     store._remove_history_entry("i2")
     assert store._history == []
@@ -308,3 +317,221 @@ def test_long_preview_matches_the_short_one(store):
     e = store.Entry(id="p", timestamp=1.0, kind="text", text="a\tb\n" * 1000)
     assert e.preview(10) == ("a  b↵" * 3)[:10] + "…"
     assert store.Entry(id="q", timestamp=1.0, kind="text", text="short").preview() == "short"
+
+
+# ----- issue #39 ---------------------------------------------------------------
+
+
+def test_a_pinned_image_survives_its_history_entry_ageing_out(store, monkeypatch):
+    store.settings["clipboard_history_size"] = 3
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG screenshot")
+    store._capture_current_clipboard()
+    shot = store._history[0]
+    store._pin_entry(shot, "screenshot")
+    snippet = store._snippets[0]
+    assert snippet.image_path != shot.image_path
+    assert Path(snippet.image_path).parent == store.SNIPPET_IMAGES_DIR
+    assert _mode(Path(snippet.image_path)) == 0o600
+
+    for i in range(5):
+        _clipboard(store, monkeypatch, ["text/plain"], text=f"copy {i}")
+        store._capture_current_clipboard()
+    assert shot not in store._history
+    assert not Path(shot.image_path).exists()  # history's own file is still cleaned up
+    assert Path(snippet.image_path).read_bytes() == b"\x89PNG screenshot"
+
+    store._unpin_snippet(snippet.id)  # and the snippet's copy goes with the snippet
+    assert not Path(snippet.image_path).exists()
+
+
+def test_eviction_keeps_an_image_an_older_pin_shares(store, monkeypatch):
+    store.settings["clipboard_history_size"] = 1
+    img = _image_entry(store, "old")
+    store._history[:] = [img]
+    store._snippets[:] = [_image_snippet(store, img.image_path)]
+    _clipboard(store, monkeypatch, ["text/plain"], text="push it out")
+    store._capture_current_clipboard()
+    assert [e.text for e in store._history] == ["push it out"]
+    assert Path(img.image_path).exists()
+
+
+def _kinds(store):
+    return [(e.kind, e.text) for e in store._history]
+
+
+def test_text_copied_again_after_an_image_comes_back_to_the_top(store, monkeypatch):
+    _clipboard(store, monkeypatch, ["text/plain"], text="A")
+    store._capture_current_clipboard()
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG one")
+    store._capture_current_clipboard()
+    _clipboard(store, monkeypatch, ["text/plain"], text="A")
+    store._capture_current_clipboard()
+    assert _kinds(store) == [("text", "A"), ("image", "")]
+
+
+def test_image_copied_again_after_text_comes_back_to_the_top(store, monkeypatch):
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG one")
+    store._capture_current_clipboard()
+    _clipboard(store, monkeypatch, ["text/plain"], text="A")
+    store._capture_current_clipboard()
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG one")
+    store._capture_current_clipboard()
+    assert _kinds(store) == [("image", ""), ("text", "A")]
+    assert len(list(store.IMAGES_DIR.iterdir())) == 1
+
+
+def test_text_wins_when_an_image_is_offered_too(store, monkeypatch):
+    # LibreOffice Calc: the cell's text plus a bitmap of it
+    _clipboard(store, monkeypatch, ["image/png", "text/plain"], text="42", image=b"\x89PNG cell")
+    store._capture_current_clipboard()
+    assert _kinds(store) == [("text", "42")]
+
+
+def test_an_svg_only_copy_is_kept_as_text(store, monkeypatch):
+    # Inkscape offers image/svg+xml and no PNG
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+    _clipboard(store, monkeypatch, ["image/svg+xml"], image=None, hint=svg)
+    store._capture_current_clipboard()
+    assert _kinds(store) == [("text", svg.decode())]
+
+
+def test_pasting_an_older_text_entry_moves_it_up(store, monkeypatch):
+    for t in ("A", "B", "C"):
+        _clipboard(store, monkeypatch, ["text/plain"], text=t)
+        store._capture_current_clipboard()
+    first_id = store._history[-1].id
+    # the picker puts "A" back on the clipboard and the watcher sees it
+    _clipboard(store, monkeypatch, ["text/plain"], text="A")
+    store._capture_current_clipboard()
+    assert [e.text for e in store._history] == ["A", "C", "B"]
+    assert store._history[0].id == first_id
+    assert [e["text"] for e in json.loads(store.HISTORY_FILE.read_text())] == ["A", "C", "B"]
+
+
+def test_pasting_an_older_image_moves_it_up_without_a_second_file(store, monkeypatch):
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG one")
+    store._capture_current_clipboard()
+    first = store._history[0]
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG two")
+    store._capture_current_clipboard()
+    _clipboard(store, monkeypatch, ["image/png"], image=b"\x89PNG one")
+    store._capture_current_clipboard()
+    assert [e.id for e in store._history][0] == first.id
+    assert len(store._history) == 2
+    assert len(list(store.IMAGES_DIR.iterdir())) == 2
+
+
+@pytest.fixture
+def picker(store, monkeypatch):
+    p = store._PickerDialog()
+    monkeypatch.setattr(p, "_populate_snippets", lambda: None)
+    return p
+
+
+def test_pin_keeps_the_edited_body_trigger_and_category(store, picker, monkeypatch):
+    entry = store.Entry(id="h", timestamp=1.0, kind="text", text="draft")
+    monkeypatch.setattr(
+        picker, "_ask_edit_snippet_meta", lambda **_: ("Sig", ";sig", "Email", "Regards, K")
+    )
+    picker._on_pin_clicked(None, entry)
+    [s] = store._snippets
+    assert (s.name, s.trigger, s.category, s.text) == ("Sig", ";sig", "Email", "Regards, K")
+    assert store._trigger_index[";sig"] is s
+    assert entry.text == "draft"  # the history entry is left alone
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_pin_checks_for_trigger_conflicts(store, picker, monkeypatch, confirm):
+    store._create_snippet("Old", "old body", trigger=";x")
+    asked = []
+    monkeypatch.setattr(picker, "_confirm_trigger_conflicts", lambda c: asked.append(c) or confirm)
+    monkeypatch.setattr(picker, "_ask_edit_snippet_meta", lambda **_: ("New", ";x", "", "new"))
+    picker._on_pin_clicked(None, store.Entry(id="h", timestamp=1.0, kind="text", text="new"))
+    assert asked == [[(";x", "Old")]]
+    assert [s.name for s in store._snippets] == (["New", "Old"] if confirm else ["Old"])
+
+
+def test_expansion_text_and_the_restored_copy_are_not_recorded(store, monkeypatch):
+    _clipboard(store, monkeypatch, ["text/plain"], text="mine")
+    store._capture_current_clipboard()
+    store._mark_own_copy("Kind regards, Karan")  # what the expansion stages
+    _clipboard(store, monkeypatch, ["text/plain"], text="Kind regards, Karan")
+    store._capture_current_clipboard()
+    assert [e.text for e in store._history] == ["mine"]
+
+    # put back after the paste: a copy from a blocklisted app must stay unrecorded
+    store._mark_own_copy("from keepassxc")
+    _clipboard(store, monkeypatch, ["text/plain"], text="from keepassxc")
+    store._capture_current_clipboard()
+    assert [e.text for e in store._history] == ["mine"]
+
+
+def test_expansion_restores_the_clipboard(store, monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        store, "_write_clipboard", lambda kind, data, primary=False: writes.append((kind, data))
+    )
+    _clipboard(store, monkeypatch, ["text/plain"], text="mine")
+    saved = store._snapshot_clipboard()
+    assert saved == ("text", b"mine")
+
+    # something else was copied in the meantime: leave it
+    store._restore_clipboard(saved, staged="snippet")
+    assert writes == []
+
+    _clipboard(store, monkeypatch, ["text/plain"], text="snippet")
+    store._restore_clipboard(saved, staged="snippet")
+    assert writes == [("text", b"mine")]
+    assert store._is_own_copy("mine")
+
+
+def test_a_password_copy_is_not_snapshotted(store, monkeypatch):
+    _clipboard(store, monkeypatch, ["text/plain", "x-kde-passwordManagerHint"], text="hunter2")
+    assert store._snapshot_clipboard() is None
+
+
+def test_concurrent_saves_are_not_lost(store):
+    errors = []
+
+    def writer(n):
+        for i in range(200):
+            try:
+                store._atomic_write_json(store.HISTORY_FILE, [n, i])
+            except OSError as exc:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert json.loads(store.HISTORY_FILE.read_text())[1] == 199
+    assert _mode(store.HISTORY_FILE) == 0o600
+    assert [p.name for p in store.HISTORY_FILE.parent.iterdir()] == ["history.json"]
+
+
+def test_shutdown_waits_for_the_watcher(ch, monkeypatch):
+    ch._watcher_stop.clear()
+    finished = []
+
+    def loop():
+        ch._watcher_stop.wait()
+        time.sleep(0.2)  # a capture still saving
+        finished.append(1)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    monkeypatch.setattr(ch, "_watcher_thread", t)
+    monkeypatch.setattr(ch, "_trigger_watcher", None)
+    ch.shutdown()
+    ch._watcher_stop.clear()
+    assert finished == [1]
+
+
+def test_capture_still_works_with_a_bad_history_size(store, monkeypatch):
+    # a hand-edited "clipboard_history_size": "lots" used to raise on every copy
+    store.settings["clipboard_history_size"] = "lots"
+    _clipboard(store, monkeypatch, ["text/plain"], text="still here")
+    store._capture_current_clipboard()
+    assert [e.text for e in store._history] == ["still here"]
