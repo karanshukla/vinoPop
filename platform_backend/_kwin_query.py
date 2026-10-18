@@ -12,6 +12,7 @@ late callback from a timed-out query can't answer the next one.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 
@@ -26,13 +27,21 @@ _TIMEOUT_MS = 1500
 _HELPERS = {"cursor": _kwin_cursor, "active": _kwin_active}
 
 
+def _one_line(s: str) -> str:
+    """Control characters (tab and every line break included) -> spaces."""
+    return _CONTROL.sub(" ", s)
+
+
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
 class _State:
     def __init__(self) -> None:
         self.loop: GLib.MainLoop | None = None
         self.out: str | None = None
 
     def report(self, out: str) -> None:
-        self.out = out.replace("\n", " ")
+        self.out = out
         if self.loop is not None:
             self.loop.quit()
 
@@ -93,7 +102,9 @@ def main() -> int:
     class _Active(dbus.service.Object):
         @dbus.service.method(_kwin_active.IFACE, in_signature="ss", out_signature="")
         def Report(self, cls, caption):  # noqa: N802
-            state.report(f"{cls}\t{caption}")
+            # A page title is attacker-controlled; a line break in it would
+            # split the answer and desync every later query.
+            state.report(f"{_one_line(str(cls))}\t{_one_line(str(caption))}")
 
     _objs = (_Cursor(bus, _kwin_cursor.OBJ_PATH), _Active(bus, _kwin_active.OBJ_PATH))
     scripting = dbus.Interface(

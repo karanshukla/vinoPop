@@ -661,6 +661,7 @@ class _KWinHelper:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 text=True,
+                newline="\n",  # only "\n" ends an answer, not "\r" in a title
                 bufsize=1,
                 env=_kwin_subprocess_env(),
                 preexec_fn=_die_with_parent,

@@ -290,3 +290,11 @@ def test_active_window_prefetch_is_used_once(monkeypatch):
     backend.prefetch_active_window()
     assert backend.active_window_haystacks() == ["org.kde.kate", "notes.txt"]
     assert backend.active_window_haystacks() == ["org.kde.konsole", "bash"]
+
+
+def test_kwin_answer_cannot_break_framing():
+    pytest.importorskip("dbus")
+    from platform_backend._kwin_query import _one_line
+
+    title = "evil\rpage\ntitle\u2028x\x85y\tz"
+    assert _one_line(title) == "evil page title x y z"
