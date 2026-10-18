@@ -9,7 +9,10 @@ import pytest
 pytest.importorskip("gi")
 
 from platform_backend import evdev_input as ev  # noqa: E402
-from platform_backend import wayland_kde  # noqa: E402
+from platform_backend import (
+    gestures,  # noqa: E402
+    wayland_kde,  # noqa: E402
+)
 from platform_backend.base import expect_selection  # noqa: E402
 from platform_backend.wayland_kde import WaylandSelectionWatcher  # noqa: E402
 
@@ -90,7 +93,7 @@ class _DevHub:
 
 def _gestures(devices=("kbd",)):
     hub = _DevHub(devices)
-    g = wayland_kde._SelectionGestures(hub)
+    g = gestures.SelectionGestures(hub)
     g.start()
     return g, hub.subs[1]
 
@@ -223,7 +226,7 @@ def test_settle_is_short_after_release():
     send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, 10.0))
     assert g.settle_s(t0, 0.2) == 0.2  # still dragging
     send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, 10.6))
-    assert g.settle_s(t0, 0.2) <= wayland_kde._AFTER_GESTURE_S
+    assert g.settle_s(t0, 0.2) <= gestures.AFTER_GESTURE_S
 
 
 def test_settle_is_full_without_a_gesture():

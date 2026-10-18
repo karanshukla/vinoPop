@@ -16,6 +16,7 @@ from Xlib import display
 from Xlib.ext import xfixes
 
 from platform_backend.base import is_copy_button, take_expected
+from platform_backend.gestures import GESTURE_LEAD_S, SelectionGestures
 
 
 class SelectionWatcher:
@@ -23,8 +24,10 @@ class SelectionWatcher:
         self,
         on_selection: Callable[[str, int, int], None],
         debounce_ms: int = 300,
+        gestures: SelectionGestures | None = None,
     ) -> None:
         self._on_selection = on_selection
+        self._gestures = gestures
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_text: str = ""
@@ -36,11 +39,18 @@ class SelectionWatcher:
         self._clip_changed_at: float | None = None
 
     def start(self) -> None:
+        if self._gestures is None:
+            from platform_backend.x11_input import get_xrecord_input
+
+            self._gestures = SelectionGestures(get_xrecord_input())
+        self._gestures.start()
         self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-watcher")
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        if self._gestures is not None:
+            self._gestures.stop()
 
     def set_debounce_ms(self, ms: int) -> None:
         """Update the debounce window live. Read by the event loop on its
@@ -89,7 +99,17 @@ class SelectionWatcher:
         if is_copy_button(text, burst_t0, self._clip_changed_at, self._read_clipboard):
             print("[watcher] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")
             return False
+        if self._gestures is not None and not self._gestures.selected_since(
+            burst_t0 - GESTURE_LEAD_S
+        ):
+            print("[watcher] ignored a PRIMARY change with no selecting gesture")
+            return False
         return True
+
+    def _settle_s(self, burst_t0: float) -> float:
+        if self._gestures is None:
+            return self._debounce_s
+        return self._gestures.settle_s(burst_t0, self._debounce_s)
 
     def _handle_selection_change(self, dpy: display.Display, burst_t0: float) -> None:
         # Try a few times to read the new content. The xfixes event fires
@@ -183,7 +203,7 @@ class SelectionWatcher:
             now = time.monotonic()
             if pending:
                 # Wait at most until the debounce window expires
-                timeout = max(0.0, self._debounce_s - (now - last_event_at))
+                timeout = max(0.0, self._settle_s(burst_t0) - (now - last_event_at))
             else:
                 timeout = IDLE_TIMEOUT
             try:
@@ -206,7 +226,7 @@ class SelectionWatcher:
             if (
                 pending
                 and not self._stop.is_set()
-                and (time.monotonic() - last_event_at) >= self._debounce_s
+                and (time.monotonic() - last_event_at) >= self._settle_s(burst_t0)
             ):
                 pending = False
                 self._handle_selection_change(dpy, burst_t0)
