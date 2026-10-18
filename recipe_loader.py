@@ -576,9 +576,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
         def handler(text: str) -> None:
             url = _render(template, text).strip()
-            from platform_backend import get_backend
+            import actions
 
-            get_backend().open_url(url)
+            # A template starting with {text} could produce any scheme.
+            actions.open_web_url(url)
 
         return handler
 
@@ -746,9 +747,9 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     )
                 elif stype == "open_url":
                     url = (rendered or current).strip()
-                    from platform_backend import get_backend
+                    import actions
 
-                    get_backend().open_url(url)
+                    actions.open_web_url(url)
                 else:
                     log.warning("[chain] unknown step type %r in %s", stype, recipe.get("name"))
                 # Any terminal step ends the chain.

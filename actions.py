@@ -253,15 +253,53 @@ def _desktop_env() -> dict:
     return env
 
 
-def open_url(text: str) -> None:
-    url = _strip_invisible(text)
-    # Naked URLs (no scheme) get https:// so the browser routes them correctly
-    if not url.lower().startswith(("http://", "https://", "ftp://", "file://", "mailto:")):
-        url = "https://" + url
+# The only schemes handed to xdg-open as links. Anything else (file:, a
+# custom handler like steam: or vscode:) would go to whatever app claims it,
+# and selected text is whatever a web page put there.
+_WEB_SCHEMES = ("http", "https", "ftp", "mailto")
+
+
+def open_web_url(url: str) -> bool:
+    """xdg-open `url` if its scheme is a web one; otherwise refuse, with a
+    notification saying why. True if it was opened."""
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in _WEB_SCHEMES:
+        shown = f"{scheme}:" if scheme else "a link without a scheme"
+        print(f"[actions] refused to open {shown} link")
+        notify("vinoPop", f"Not opening {shown}: only web links open from here")
+        return False
     from platform_backend import get_backend
 
     get_backend().open_url(url)
-    print(f"[actions] opened URL: {url}")
+    return True
+
+
+def _open_file_url(url: str) -> None:
+    """A file:// URL: open the folder, never the file. xdg-open on the file
+    runs its MIME handler, which for an .exe or .desktop file a page got into
+    ~/Downloads means running it."""
+    path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+    folder = path if os.path.isdir(path) else os.path.dirname(path)
+    if not folder or not os.path.isdir(folder):
+        notify("vinoPop", f"No such folder: {folder or path}")
+        return
+    try:
+        subprocess.Popen(["xdg-open", folder], start_new_session=True, env=_desktop_env())
+        print(f"[actions] opened folder of a file URL: {folder}")
+    except FileNotFoundError:
+        print("[actions] xdg-open not available")
+
+
+def open_url(text: str) -> None:
+    url = _strip_invisible(text)
+    if url.lower().startswith("file://"):
+        _open_file_url(url)
+        return
+    # Naked URLs (no scheme) get https:// so the browser routes them correctly
+    if not url.lower().startswith(("http://", "https://", "ftp://", "mailto:")):
+        url = "https://" + url
+    if open_web_url(url):
+        print(f"[actions] opened URL: {url}")
 
 
 # General-purpose web search engines. The value is a URL template - '{q}'
