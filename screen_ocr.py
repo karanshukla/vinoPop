@@ -34,6 +34,12 @@ def _stage_text(text: str) -> None:
     reached the clipboard."""
     data = text.encode("utf-8")
     if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        try:
+            from platform_backend.wayland_kde import expect_selection
+
+            expect_selection(text)  # no gesture behind this PRIMARY change
+        except Exception:  # noqa: BLE001
+            pass
         for extra in ([], ["--primary"]):
             try:
                 subprocess.run(["wl-copy", *extra], input=data, check=False, timeout=2.0)

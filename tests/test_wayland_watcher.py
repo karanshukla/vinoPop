@@ -1,9 +1,14 @@
 """Which PRIMARY changes the Wayland watcher treats as real selections."""
 
+import subprocess
+import time
+
 import pytest
 
 pytest.importorskip("gi")
 
+from platform_backend import evdev_input as ev  # noqa: E402
+from platform_backend import wayland_kde  # noqa: E402
 from platform_backend.wayland_kde import WaylandSelectionWatcher  # noqa: E402
 
 
@@ -16,27 +21,140 @@ class _Backend:
         return self.clipboard
 
 
-def _watcher(clipboard):
+class _Gestures:
+    def __init__(self, selected=True):
+        self.selected = selected
+
+    def selected_since(self, t):
+        return self.selected
+
+
+def _watcher(clipboard, selected=True):
     backend = _Backend(clipboard)
-    w = WaylandSelectionWatcher(backend, lambda *_: None)
-    w._last_clipboard = clipboard
+    w = WaylandSelectionWatcher(backend, lambda *_: None, gestures=_Gestures(selected))
     return w, backend
 
 
 def test_copy_button_is_ignored():
     w, backend = _watcher("old")
     backend.clipboard = "curl … | bash"  # the button set both at once
-    assert w._is_copy_button("curl … | bash")
+    w._clip_changed_at = 100.1
+    assert not w._should_show("curl … | bash", burst_t0=100.0)
 
 
 def test_plain_selection_is_shown():
     w, _ = _watcher("old")
-    assert not w._is_copy_button("some highlighted text")
+    w._clip_changed_at = 100.1
+    assert w._should_show("some highlighted text", burst_t0=100.0)
 
 
 def test_reselecting_what_was_copied_is_shown():
-    w, _ = _watcher("copied earlier")
-    assert not w._is_copy_button("copied earlier")
+    # select "foo", Ctrl+C, later select "foo" again
+    w, _ = _watcher("foo")
+    w._clip_changed_at = 50.0
+    assert w._should_show("foo", burst_t0=100.0)
+
+
+def test_primary_change_without_gesture_is_ignored():
+    # Alt+Tab into a terminal that re-claims PRIMARY with an old selection
+    w, _ = _watcher("old", selected=False)
+    assert not w._should_show("ls -la ~/old", burst_t0=100.0)
+
+
+def test_ocr_text_is_shown_though_clipboard_matches_and_no_gesture():
+    w, _ = _watcher("recognised text", selected=False)
+    w._clip_changed_at = time.monotonic()
+    wayland_kde.expect_selection("recognised text")
+    assert w._should_show("recognised text", burst_t0=time.monotonic())
+    # only once
+    assert not w._should_show("recognised text", burst_t0=time.monotonic())
+
+
+class _DevHub:
+    def __init__(self, devices=("kbd",)):
+        self._devices = list(devices)
+        self.subs = {}
+
+    def devices(self):
+        return self._devices
+
+    def subscribe(self, cb):
+        self.subs[1] = cb
+        return 1
+
+    def unsubscribe(self, handle):
+        self.subs.pop(handle)
+
+
+def _gestures(devices=("kbd",)):
+    hub = _DevHub(devices)
+    g = wayland_kde._SelectionGestures(hub)
+    g.start()
+    return g, hub.subs[1]
+
+
+_KBD, _PTR = frozenset({ev.KEYBOARD}), frozenset({ev.POINTER})
+
+
+def test_drag_is_a_selecting_gesture():
+    g, send = _gestures()
+    t = time.monotonic()
+    send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, 10.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, 10.6))
+    assert g.selected_since(t)
+
+
+def test_click_to_focus_is_not():
+    g, send = _gestures()
+    t = time.monotonic()
+    send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, 10.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, 10.08))
+    assert not g.selected_since(t)
+
+
+def test_double_click_is():
+    g, send = _gestures()
+    t = time.monotonic()
+    for down, up in ((10.0, 10.05), (10.2, 10.25)):
+        send(ev.InputEvent(ev.BTN_LEFT, 1, _PTR, down))
+        send(ev.InputEvent(ev.BTN_LEFT, 0, _PTR, up))
+    assert g.selected_since(t)
+
+
+@pytest.mark.parametrize(
+    "mod,key", [(ev.KEY_LEFTSHIFT, 106), (ev.KEY_RIGHTSHIFT, 102), (ev.KEY_LEFTCTRL, 30)]
+)
+def test_keyboard_selection_is(mod, key):
+    g, send = _gestures()
+    t = time.monotonic()
+    send(ev.InputEvent(mod, 1, _KBD, 10.0))
+    send(ev.InputEvent(key, 1, _KBD, 10.1))
+    assert g.selected_since(t)
+
+
+def test_alt_tab_is_not():
+    g, send = _gestures()
+    t = time.monotonic()
+    send(ev.InputEvent(ev.KEY_LEFTALT, 1, _KBD, 10.0))
+    send(ev.InputEvent(15, 1, _KBD, 10.1))  # KEY_TAB
+    assert not g.selected_since(t)
+
+
+def test_without_input_devices_every_change_counts():
+    g, _ = _gestures(devices=())
+    assert g.selected_since(time.monotonic())
+
+
+def test_clipboard_read_asks_for_text(monkeypatch):
+    seen = []
+
+    def run(args, **kw):
+        seen.append(args)
+        return subprocess.CompletedProcess(args, 0, b"hi", b"")
+
+    monkeypatch.setattr(wayland_kde.subprocess, "run", run)
+    assert wayland_kde.WaylandKdeBackend.read_selection(object(), "clipboard") == "hi"
+    assert seen[0][-2:] == ["--type", "text"]
 
 
 # ---- modifier+double-click over the shared evdev hub (#27) --------------------

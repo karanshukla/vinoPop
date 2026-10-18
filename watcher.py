@@ -162,7 +162,11 @@ class SelectionWatcher:
                     continue
             # No fd activity in the timeout window. If we were debouncing,
             # the user has stopped extending the selection - fire now.
-            if pending and (time.monotonic() - last_event_at) >= self._debounce_s:
+            if (
+                pending
+                and not self._stop.is_set()
+                and (time.monotonic() - last_event_at) >= self._debounce_s
+            ):
                 pending = False
                 self._handle_selection_change(dpy)
 
