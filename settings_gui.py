@@ -1571,6 +1571,17 @@ class SettingsDialog:
         )
         prefetch_row.connect("notify::active", self._on_prefetch_switch)
         group.add(prefetch_row)
+        describe_row = self._switch_row(
+            "Describe images after OCR",
+            "The AI model writes alt text for the captured image, about 10 s each: "
+            "a button on the OCR notification, or straight away when there's no text.",
+            self._settings.get("ocr_describe_images", False),
+        )
+        describe_row.connect(
+            "notify::active",
+            lambda sw, _p: self._save_key("ocr_describe_images", bool(sw.get_active())),
+        )
+        group.add(describe_row)
         return group
 
     def _on_prefetch_switch(self, switch: Adw.SwitchRow, _param) -> None:
