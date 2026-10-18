@@ -89,6 +89,34 @@ def test_a_healthy_tray_connects_and_dispatches(fake_tray, tmp_path):
         t.shutdown()
 
 
+def test_no_tray_host_warns_once_and_opens_settings(fake_tray, tmp_path, monkeypatch):
+    # GNOME without AppIndicator: the icon never shows, so there's no other
+    # way into Settings
+    fake_tray(
+        "import socket, struct, json, time\n"
+        f"path = {str(tmp_path / 'tray.sock')!r}\n"
+        "s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1)\n"
+        "c, _ = s.accept()\n"
+        "for _ in range(2):\n"
+        "    raw = json.dumps({'event': 'no_tray_host'}).encode()\n"
+        "    c.sendall(struct.pack('!I', len(raw)) + raw)\n"
+        "time.sleep(2)\n"
+    )
+    notes, opened = [], []
+    monkeypatch.setattr(tray.Tray, "_notify_no_host", staticmethod(lambda: notes.append(1)))
+    cbs = [lambda *a: None] * 7
+    cbs[3] = lambda: opened.append("settings")
+    t = tray.Tray(*cbs)
+    try:
+        assert t._connected
+        for _ in range(20):
+            t.poll()
+            time.sleep(0.05)
+        assert notes == [1] and opened == ["settings"]
+    finally:
+        t.shutdown()
+
+
 # ---- the real Qt child (offscreen) -------------------------------------------
 
 
