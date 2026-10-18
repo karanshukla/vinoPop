@@ -49,7 +49,16 @@ def _kwin_subprocess_env() -> dict:
 
 # Kept apart from the imports above so this module's input pieces can change
 # without touching the GTK/layer-shell ones.
-from .evdev_input import InputEvent, get_input_hub
+from .evdev_input import (
+    BTN_LEFT,
+    KEY_LEFTCTRL,
+    KEY_LEFTSHIFT,
+    KEY_RIGHTCTRL,
+    KEY_RIGHTSHIFT,
+    MODIFIER_KEYS,
+    InputEvent,
+    get_input_hub,
+)
 from .kde_hotkey import WaylandKdeHotkey, _qt_keycode  # noqa: F401 - re-exported
 from .keyinject import KeyInjector
 from .xkb import detect_kbd_rmlvo as _detect_kbd_rmlvo
@@ -88,31 +97,152 @@ def _die_with_parent() -> None:
 # the primary selection and the cursor position, mirroring the X11 watcher's
 # event->read design.
 # ---------------------------------------------------------------------------
+
+# A selecting gesture this long before a PRIMARY burst still counts for it
+# (Shift+arrow lands a few ms before the ping it causes).
+_GESTURE_LEAD_S = 0.5
+# A CLIPBOARD change this close to a PRIMARY burst came from the same action.
+_COPY_BURST_S = 0.3
+_EXPECT_TTL_S = 3.0
+
+_expected: tuple[str, float] | None = None
+
+
+def expect_selection(text: str) -> None:
+    """vinoPop is about to put `text` on PRIMARY itself (OCR) and wants the
+    popup for it, though no gesture or copy-button rule would allow it."""
+    global _expected
+    _expected = (text, time.monotonic())
+
+
+def _take_expected(text: str) -> bool:
+    global _expected
+    if _expected is None or _expected[0] != text:
+        return False
+    fresh = time.monotonic() - _expected[1] < _EXPECT_TTL_S
+    _expected = None
+    return fresh
+
+
+class _SelectionGestures:
+    """Remembers when the user last did something that selects text: a drag,
+    a double/triple click, Shift+click, Shift+key or Ctrl+A. Apps also set
+    PRIMARY on their own (a terminal re-claims it on focus), and a plain
+    click to focus that window is not a selection.
+
+    evdev reports buttons without coordinates, so a drag is a press held
+    past _DRAG_S. With no readable /dev/input every change counts."""
+
+    _DRAG_S = 0.15
+    _MULTI_CLICK_S = 0.4
+    _SHIFT = {KEY_LEFTSHIFT, KEY_RIGHTSHIFT}
+    _CTRL = {KEY_LEFTCTRL, KEY_RIGHTCTRL}
+    _KEY_A = 30
+
+    def __init__(self, hub=None) -> None:
+        self._hub = hub
+        self._handle: int | None = None
+        self._held: set[int] = set()
+        self._press_t = 0.0
+        self._release_t = 0.0
+        self._multi = False
+        self.last = 0.0  # monotonic time of the last selecting gesture
+
+    def start(self) -> None:
+        if self._handle is not None:
+            return
+        if self._hub is None:
+            self._hub = get_input_hub()
+        self._handle = self._hub.subscribe(self._on_event)
+
+    def stop(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is not None and self._hub is not None:
+            self._hub.unsubscribe(handle)
+
+    def selected_since(self, t: float) -> bool:
+        if self._hub is None or not self._hub.devices():
+            return True
+        return self.last >= t
+
+    def _mark(self) -> None:
+        self.last = time.monotonic()
+
+    def _on_event(self, ev: InputEvent) -> None:
+        if ev.code == BTN_LEFT:
+            if ev.value == 1:
+                self._multi = ev.time - self._release_t < self._MULTI_CLICK_S
+                self._press_t = ev.time
+            elif ev.value == 0:
+                if (
+                    self._multi
+                    or self._held & self._SHIFT
+                    or ev.time - self._press_t >= self._DRAG_S
+                ):
+                    self._mark()
+                self._release_t = ev.time
+            return
+        if ev.code in MODIFIER_KEYS:
+            if ev.value == 1:
+                self._held.add(ev.code)
+            elif ev.value == 0:
+                self._held.discard(ev.code)
+            return
+        if ev.value in (1, 2) and (
+            self._held & self._SHIFT or (self._held & self._CTRL and ev.code == self._KEY_A)
+        ):
+            self._mark()
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    try:
+        proc.terminate()
+        proc.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    except OSError:
+        pass
+
+
 class WaylandSelectionWatcher:
+    _MAX_BACKOFF_S = 30.0
+
     def __init__(
         self,
         backend: WaylandKdeBackend,
         on_selection: Callable[[str, int, int], None],
         debounce_ms: int = 150,
+        gestures: _SelectionGestures | None = None,
     ) -> None:
         self._backend = backend
         self._on_selection = on_selection
         self._debounce_s = max(0.0, debounce_ms / 1000.0)
-        self._proc: subprocess.Popen | None = None
-        self._thread: threading.Thread | None = None
+        self._gestures = gestures or _SelectionGestures()
+        self._procs: list[subprocess.Popen] = []
+        self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
-        self._last_text = ""
-        self._last_clipboard: str | None = None
+        self._clip_changed_at: float | None = None
 
-    def _is_copy_button(self, text: str) -> bool:
+    def _is_copy_button(self, text: str, burst_t0: float) -> bool:
         """A page's Copy button selects a hidden field and copies it, so
-        PRIMARY and CLIPBOARD change together to the same text. A real
-        selection changes PRIMARY alone (copying it afterwards fires no
-        PRIMARY event)."""
-        clip = self._backend.read_selection("clipboard")
-        changed = self._last_clipboard is not None and clip != self._last_clipboard
-        self._last_clipboard = clip
-        return changed and clip == text
+        PRIMARY and CLIPBOARD change together to the same text. Copying a
+        real selection later changes CLIPBOARD alone, outside the burst."""
+        changed = self._clip_changed_at
+        if changed is None or changed < burst_t0 - _COPY_BURST_S:
+            return False
+        return self._backend.read_selection("clipboard") == text
+
+    def _should_show(self, text: str, burst_t0: float) -> bool:
+        if _take_expected(text):
+            return True
+        if self._is_copy_button(text, burst_t0):
+            print("[wayland] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")
+            return False
+        if not self._gestures.selected_since(burst_t0 - _GESTURE_LEAD_S):
+            print("[wayland] ignored a PRIMARY change with no selecting gesture")
+            return False
+        return True
 
     def set_debounce_ms(self, ms: int) -> None:
         self._debounce_s = max(0.0, ms / 1000.0)
@@ -122,50 +252,99 @@ class WaylandSelectionWatcher:
             print("[wayland] wl-paste missing - selection watch disabled")
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="vinopop-wl-watch")
-        self._thread.start()
+        self._gestures.start()
+        self._threads = [
+            threading.Thread(
+                target=self._supervise,
+                args=(["wl-paste", "--primary", "--watch", "echo"], self._consume_primary),
+                daemon=True,
+                name="vinopop-wl-watch",
+            ),
+            threading.Thread(
+                target=self._supervise,
+                args=(["wl-paste", "--watch", "echo"], self._consume_clipboard),
+                daemon=True,
+                name="vinopop-wl-clip",
+            ),
+        ]
+        for t in self._threads:
+            t.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._proc is not None:
+        self._gestures.stop()
+        for proc in list(self._procs):
             try:
-                self._proc.terminate()
+                proc.terminate()
             except Exception:
                 pass
 
-    def _run(self) -> None:
+    def _supervise(self, args: list[str], consume: Callable[[int], None]) -> None:
+        """Run `args` and feed its stdout to `consume` until stop(). wl-paste
+        exits when the compositor restarts; restart it with backoff rather
+        than leave auto-popup dead while the setting says on."""
+        delay = 1.0
+        while not self._stop.is_set():
+            try:
+                proc = subprocess.Popen(
+                    args, stdout=subprocess.PIPE, bufsize=0, preexec_fn=_die_with_parent
+                )
+            except OSError as exc:
+                print(f"[wayland] could not start {' '.join(args)}: {exc}")
+                return
+            self._procs.append(proc)
+            started = time.monotonic()
+            try:
+                if proc.stdout is not None and not self._stop.is_set():
+                    consume(proc.stdout.fileno())
+            finally:
+                self._procs.remove(proc)
+                _reap(proc)
+            if self._stop.is_set():
+                return
+            if time.monotonic() - started > self._MAX_BACKOFF_S:
+                delay = 1.0
+            print(f"[wayland] {' '.join(args)} exited; restarting in {delay:.0f}s")
+            self._stop.wait(delay)
+            delay = min(delay * 2, self._MAX_BACKOFF_S)
+
+    def _ping(self, fd: int, timeout: float) -> bool | None:
+        """True on a ping, False on timeout, None once the stream ends."""
+        readable, _, _ = _select.select([fd], [], [], timeout)
+        if not readable:
+            return False
+        try:
+            return True if os.read(fd, 4096) else None
+        except OSError:
+            return None
+
+    def _consume_clipboard(self, fd: int) -> None:
+        first = True  # --watch pings once for what's already there
+        while not self._stop.is_set():
+            got = self._ping(fd, 0.5)
+            if got is None:
+                return
+            if got and not first:
+                self._clip_changed_at = time.monotonic()
+            first = first and not got
+
+    def _consume_primary(self, fd: int) -> None:
         # `--watch echo` pings (a bare newline) on every primary-selection
         # change. A single drag emits a BURST of these as the selection grows,
         # so we treat the pipe as an event stream and DEBOUNCE: only after the
         # pings go quiet for debounce_s do we read the selection + cursor and
         # fire once. Without this the popup re-reads the (still moving) cursor
         # on every ping and visibly chases the mouse for a second or two.
-        try:
-            self._proc = subprocess.Popen(
-                ["wl-paste", "--primary", "--watch", "echo"],
-                stdout=subprocess.PIPE,
-                bufsize=0,
-                preexec_fn=_die_with_parent,
-            )
-        except OSError as exc:
-            print(f"[wayland] could not start wl-paste --watch: {exc}")
-            return
-        if self._proc.stdout is None:
-            return
-        fd = self._proc.stdout.fileno()
-        self._last_clipboard = self._backend.read_selection("clipboard")
         first = True
         while not self._stop.is_set():
             # Block until at least one ping arrives (0.5 s wake-ups so stop()
             # is honoured promptly).
-            readable, _, _ = _select.select([fd], [], [], 0.5)
-            if not readable:
+            got = self._ping(fd, 0.5)
+            if got is None:
+                return
+            if not got:
                 continue
-            try:
-                if not os.read(fd, 4096):
-                    break  # wl-paste exited
-            except OSError:
-                break
+            burst_t0 = time.monotonic()
             # Capture the cursor at the FIRST event of the burst, then re-
             # capture on every subsequent selection change. The last capture
             # therefore lands on the final change -- the drag release, right at
@@ -184,33 +363,28 @@ class WaylandSelectionWatcher:
             # Drain the rest of the burst: keep consuming until the stream is
             # quiet for one debounce window.
             settle = max(0.2, self._debounce_s)
+            ended = False
             while True:
-                more, _, _ = _select.select([fd], [], [], settle)
+                more = self._ping(fd, settle)
                 if not more:
-                    break
-                try:
-                    if not os.read(fd, 4096):
-                        break
-                except OSError:
+                    ended = more is None
                     break
                 try:
                     cap_x, cap_y = self._backend.pointer_position()
                 except Exception:  # noqa: BLE001
                     pass
-            if self._stop.is_set():
-                break
+            if self._stop.is_set() or ended:
+                return
             # The very first settled value is whatever was already selected
-            # when vinoPop started - don't pop up for it.
+            # when wl-paste started - don't pop up for it.
             if first:
                 first = False
                 continue
             text = self._backend.read_selection("primary")
             if not text or not text.strip():
                 continue
-            if self._is_copy_button(text):
-                print("[wayland] ignored a copy-button selection (PRIMARY == new CLIPBOARD)")
+            if not self._should_show(text, burst_t0):
                 continue
-            self._last_text = text
             if cap_x is None:
                 try:
                     cap_x, cap_y = self._backend.pointer_position()
@@ -485,7 +659,8 @@ class WaylandKdeBackend(PlatformBackend):
 
     # ---- selection / clipboard ------------------------------------------
     def read_selection(self, source: str) -> str:
-        args = ["wl-paste", "--no-newline"]
+        # --type text: an image-only clipboard would otherwise hand back PNG bytes.
+        args = ["wl-paste", "--no-newline", "--type", "text"]
         if source.lower() == "primary":
             args.append("--primary")
         try:
