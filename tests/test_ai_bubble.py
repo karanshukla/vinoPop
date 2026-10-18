@@ -111,6 +111,9 @@ class _Widget:
     def set_tooltip_text(self, v):
         self.tooltip = v
 
+    def set_spinning(self, v):
+        self.spinning = v
+
 
 def _headless_bubble(ai_bubble, monkeypatch):
     """A ResultBubble with stand-in widgets, so _finish and _sync_buttons run
@@ -120,6 +123,7 @@ def _headless_bubble(ai_bubble, monkeypatch):
     b._dismiss_id = None
     b._text_lbl, b._warn_lbl = _Widget(), _Widget()
     b._copy_btn, b._replace_btn = _Widget(), _Widget()
+    b._spinner = _Widget()
     monkeypatch.setattr(b, "_arm_timeout", lambda: None, raising=False)
     return b
 
@@ -144,3 +148,18 @@ def test_closed_bubble_reports_cancelled(ai_bubble, monkeypatch):
     assert not b.cancelled()
     b._dead = True
     assert b.cancelled()
+
+
+def test_spinner_runs_until_the_first_word(ai_bubble, monkeypatch):
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    b._set_status("Looking at the image…")
+    assert b._spinner.spinning and b._spinner.visible
+    b._append("A cartoon")
+    assert not b._spinner.spinning and not b._spinner.visible
+
+
+def test_spinner_stops_on_an_error(ai_bubble, monkeypatch):
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    b._set_status("Loading model on NPU…")
+    b._finish(None, "Couldn't run the local model: boom")
+    assert not b._spinner.spinning

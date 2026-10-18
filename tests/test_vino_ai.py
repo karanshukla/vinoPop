@@ -331,6 +331,64 @@ def test_worker_turns_errors_into_messages(monkeypatch):
     assert sink.done[0] is None and "NPU compile failed" in sink.done[1]
 
 
+# ---- describe image ----------------------------------------------------------
+
+
+class _FakeVLM(_FakePipe):
+    def generate(self, prompt, *, images=None, generation_config, streamer=None):
+        self.images = images
+        return super().generate(prompt, generation_config=generation_config, streamer=streamer)
+
+
+@pytest.fixture
+def fake_vlm(monkeypatch, tmp_path):
+    pytest.importorskip("numpy")
+    image = pytest.importorskip("PIL.Image")
+    genai = types.ModuleType("openvino_genai")
+    genai.VLMPipeline = _FakeVLM
+    ov = types.ModuleType("openvino")
+    ov.Tensor = lambda a: a
+    monkeypatch.setitem(sys.modules, "openvino_genai", genai)
+    monkeypatch.setitem(sys.modules, "openvino", ov)
+    pipe = _FakeVLM()
+    monkeypatch.setattr(llm, "_load", lambda _status: pipe)
+    path = tmp_path / "capture.png"
+    image.new("RGB", (30, 20), "white").save(path)
+    return pipe, str(path)
+
+
+def test_describe_sends_the_image_and_quotes_ocr_text(fake_vlm):
+    pipe, path = fake_vlm
+    tokens = []
+    out = llm.describe(path, "Pills that give you\nhamstring injuries", on_token=tokens.append)
+    assert out.text == "Hola mundo" and tokens == ["Hola", " mundo"]
+    assert pipe.images[0].shape == (1, 20, 30, 3)
+    assert '"Pills that give you hamstring injuries"' in pipe.prompts[0]
+    assert pipe.cfg.max_new_tokens == llm._DESCRIBE_MAX_NEW
+
+
+def test_describe_says_when_ocr_found_nothing(fake_vlm):
+    pipe, path = fake_vlm
+    llm.describe(path, "  ")
+    assert "OCR found no text" in pipe.prompts[0]
+
+
+def test_describe_needs_a_multimodal_model(fake_vlm, monkeypatch):
+    _pipe, path = fake_vlm
+    monkeypatch.setattr(llm, "_load", lambda _status: _FakePipe())  # text-only LLMPipeline
+    with pytest.raises(RuntimeError, match="can't look at images"):
+        llm.describe(path)
+
+
+def test_worker_describes_into_the_bubble(monkeypatch, fake_vlm):
+    _pipe, path = fake_vlm
+    monkeypatch.setattr(ai_worker, "available", lambda: (True, ""))
+    sink = _Sink()
+    ai_worker.describe_into(sink, path)
+    assert sink.tokens == ["Hola", " mundo"] and sink.done == ("Hola mundo", None)
+    assert sink.status[-1] == "Looking at the image…"
+
+
 # ---- doctor ------------------------------------------------------------------
 
 

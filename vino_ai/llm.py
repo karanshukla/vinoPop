@@ -62,6 +62,20 @@ _PROMPTS = {
 
 _MAX_NEW_TOKENS = {"summarize": 200, "rewrite": 600, "explain": 300, "translate": 800}
 
+# Alt text for a screen capture. The checklist is what got faces, art
+# style and mood in (a bare "write alt text" skipped them), and handing
+# over RapidOCR's text is what got captions quoted: the model alone
+# reads text only when it's asked to transcribe.
+_DESCRIBE_PROMPT = (
+    "Write alt text for this image for a screen reader user, in two or three sentences. "
+    "Cover: the main subject and what it is doing, any face and its expression, the setting, "
+    "the art style if it is a drawing, and anything that makes the image funny or notable. "
+    "If the image has text, quote it exactly.\n"
+    "{ocr}\n"
+    "Output only the alt text."
+)
+_DESCRIBE_MAX_NEW = 200
+
 _lock = threading.Lock()
 _pipe = None
 _pipe_key: tuple[str, str] | None = None  # (model key, device)
@@ -441,6 +455,32 @@ class Cancelled(Exception):
     """The caller gave up on the run (bubble closed or superseded)."""
 
 
+def _streamer(on_token, cancelled):
+    """GenAI streamer kwargs for on_token/cancelled, or {} for neither."""
+    # VLMPipeline (Gemma 4) takes these by name only, and rejects
+    # streamer=None.
+    if on_token is None and cancelled is None:
+        return {}
+    import openvino_genai as ov_genai
+
+    statuses = getattr(ov_genai, "StreamingStatus", None)
+    running = getattr(statuses, "RUNNING", False)
+    # CANCEL and STOP both end generate() at the next token; they differ only
+    # in the chat history, which a one-shot generate() doesn't keep. Older
+    # GenAI took a bool, where True meant stop.
+    cancel = getattr(statuses, "CANCEL", True)
+    is_cancelled = cancelled or (lambda: False)
+    sink = on_token or (lambda _c: None)
+
+    def _stream(chunk: str):
+        if is_cancelled():
+            return cancel
+        sink(chunk)
+        return running
+
+    return {"streamer": _stream}
+
+
 def _generate(
     pipe,
     task: str,
@@ -450,8 +490,6 @@ def _generate(
     cancelled: Callable[[], bool] | None = None,
 ) -> Answer:
     telemetry.prepare()
-    import openvino_genai as ov_genai
-
     tok = pipe.get_tokenizer()
     text = _strip_special(text, _special_pattern(tok, models.model_dir(models.llm_model())))
     before = len(text)
@@ -484,29 +522,8 @@ def _generate(
     if hasattr(cfg, "apply_chat_template"):
         cfg.apply_chat_template = False  # already applied above
 
-    statuses = getattr(ov_genai, "StreamingStatus", None)
-    running = getattr(statuses, "RUNNING", False)
-    # CANCEL and STOP both end generate() at the next token; they differ only
-    # in the chat history, which a one-shot generate() doesn't keep. Older
-    # GenAI took a bool, where True meant stop.
-    cancel = getattr(statuses, "CANCEL", True)
-    is_cancelled = cancelled or (lambda: False)
-
-    # VLMPipeline (Gemma 4) takes these by name only, and rejects
-    # streamer=None.
-    extra = {}
-    if on_token is not None or cancelled is not None:
-        sink = on_token or (lambda _c: None)
-
-        def _stream(chunk: str):
-            if is_cancelled():
-                return cancel
-            sink(chunk)
-            return running
-
-        extra["streamer"] = _stream
-    result = pipe.generate(prompt, generation_config=cfg, **extra)
-    if is_cancelled():
+    result = pipe.generate(prompt, generation_config=cfg, **_streamer(on_token, cancelled))
+    if cancelled is not None and cancelled():
         raise Cancelled()
     answer = str(result).strip()
     n_gen = _num_generated(result, tok, answer)
@@ -535,6 +552,91 @@ def run(
         raise ValueError(f"unknown task {task!r}")
     full = text.strip()
     text = full[:MAX_INPUT_CHARS]
+    result = _with_pipe(
+        lambda pipe, sink: _generate(pipe, task, text, lang, sink, cancelled),
+        on_token,
+        on_status,
+        cancelled,
+    )
+    if len(text) < len(full):
+        result.truncated_input = True
+    return result
+
+
+def describe(
+    image_path: str,
+    ocr_text: str = "",
+    *,
+    on_token: Callable[[str], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> Answer:
+    """Alt text for the image at `image_path`, from the multimodal model
+    (Gemma 4). `ocr_text` is what OCR read in it, passed along so the model
+    quotes it. Blocking and cancellable like run()."""
+    ocr = (
+        f'Text found in the image by OCR (may have small errors): "{" ".join(ocr_text.split())}"'
+        if ocr_text.strip()
+        else "OCR found no text in the image."
+    )
+    prompt = _DESCRIBE_PROMPT.format(ocr=ocr)
+
+    def _work(pipe, sink) -> Answer:
+        # After any "Loading model…" line, which would otherwise stay up
+        # through the ~5 s before the first word.
+        if on_status is not None:
+            on_status("Looking at the image…")
+        return _describe(pipe, image_path, prompt, sink, cancelled)
+
+    return _with_pipe(
+        _work,
+        on_token,
+        on_status,
+        cancelled,
+    )
+
+
+def _describe(pipe, image_path, prompt, on_token, cancelled) -> Answer:
+    telemetry.prepare()
+    import numpy as np
+    import openvino as ov
+    import openvino_genai as ov_genai
+    from PIL import Image
+
+    if not isinstance(pipe, ov_genai.VLMPipeline):
+        raise RuntimeError(f"{models.llm_model().label} can't look at images")
+    with Image.open(image_path) as img:
+        pixels = np.array(img.convert("RGB"))
+    cfg = pipe.get_generation_config()
+    cfg.max_new_tokens = _DESCRIBE_MAX_NEW
+    cfg.do_sample = False
+    if device() == "NPU":
+        cfg.min_new_tokens = 2  # see _generate
+    # The pipeline applies the chat template itself: it places the image
+    # tokens, which a hand-templated prompt would leave out.
+    result = pipe.generate(
+        prompt,
+        images=[ov.Tensor(pixels[None])],
+        generation_config=cfg,
+        **_streamer(on_token, cancelled),
+    )
+    if cancelled is not None and cancelled():
+        raise Cancelled()
+    answer = str(result).strip()
+    tok = pipe.get_tokenizer()
+    n_gen = _num_generated(result, tok, answer)
+    return Answer(answer, hit_max_new_tokens=n_gen is not None and n_gen >= _DESCRIBE_MAX_NEW)
+
+
+def _with_pipe(
+    work: Callable[[object, Callable[[str], None] | None], Answer],
+    on_token: Callable[[str], None] | None,
+    on_status: Callable[[str], None] | None,
+    cancelled: Callable[[], bool] | None,
+) -> Answer:
+    """Run `work(pipe, on_token)` under the model lock: load the model,
+    retry once if the NPU was reset before anything streamed, and arm the
+    idle unload afterwards."""
     status = on_status or (lambda _m: None)
     global _last_used
     streamed = False
@@ -552,9 +654,7 @@ def run(
             for attempt in range(2):
                 pipe = _load(status)
                 try:
-                    result = _generate(
-                        pipe, task, text, lang, _sink if on_token else None, cancelled
-                    )
+                    result = work(pipe, _sink if on_token else None)
                     break
                 except Exception as exc:
                     if not failures.is_device_lost(exc):
@@ -570,6 +670,4 @@ def run(
         finally:
             _last_used = time.monotonic()
     _schedule_unload()
-    if len(text) < len(full):
-        result.truncated_input = True
     return result

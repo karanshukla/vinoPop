@@ -224,32 +224,103 @@ def _recognize(image_path: Path) -> str | None:
         return None
 
 
-def capture_and_recognize() -> tuple[bool, str]:
-    """Run the full capture -> OCR pipeline.
+def _notify(title: str, body: str, *, icon: str = "dialog-information", ms: int = 3500) -> None:
+    subprocess.run(
+        ["notify-send", "--hint=byte:transient:1", "-t", str(ms), "-i", icon, title, body],
+        check=False,
+    )
 
-    Returns (ok, text_or_message). On success text_or_message is the
-    recognised text; on failure it's a short message suitable for a
-    notify-send body.
-    """
-    ok, reason = is_supported()
-    if not ok:
-        return False, reason
 
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _capture_image() -> tuple[Path | None, str | None]:
+    """Let the user drag a region and return (png, None); (None, None) when
+    they cancelled the overlay, or (None, message) when the fallback tool
+    captured nothing. The caller owns (and deletes) the png."""
+    # Prefer the frictionless overlay selector (drag -> done, no Accept step).
+    # Fall back to the desktop's region tool if it isn't available.
+    try:
+        import ocr_selector
+
+        if ocr_selector.available():
+            crop = _capture_via_overlay()
+            return (Path(crop) if crop else None), None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ocr] overlay selector failed, falling back: {exc}")
     with tempfile.NamedTemporaryFile(suffix=".png", prefix="vinopop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
+    if _capture_region(png_path):
+        return png_path, None
+    _unlink(png_path)
+    return None, "Region capture cancelled."
 
+
+def _describe_enabled() -> bool:
     try:
-        if not _capture_region(png_path):
-            return False, "Region capture cancelled."
-        text = _recognize(png_path)
-        if not text:
-            return False, "No text found in the selection."
-        return True, text
-    finally:
+        from settings import get_settings
+
+        return bool(get_settings().get("ocr_describe_images", False))
+    except Exception:
+        return False
+
+
+def _describe(image: Path, ocr_text: str) -> None:
+    """Stream the AI model's alt text for `image` into a result bubble at
+    the pointer, with Copy. Takes ownership of `image`."""
+    import ai_bubble
+    from vino_ai import ai_worker
+
+    def _work(bubble) -> None:
         try:
-            png_path.unlink()
-        except OSError:
-            pass
+            ai_worker.describe_into(bubble, str(image), ocr_text)
+        finally:
+            _unlink(image)
+
+    ai_bubble.show("Describe image", _work)
+
+
+def _offer_describe(title: str, body: str, image: Path, ocr_text: str) -> None:
+    """The capture notification with a Describe image button. Waits for
+    the click on its own thread, so the next capture isn't held up. Takes
+    ownership of `image`."""
+    import threading
+
+    def _wait() -> None:
+        clicked = False
+        try:
+            res = subprocess.run(
+                [
+                    "notify-send",
+                    "--hint=byte:transient:1",
+                    "-t",
+                    "10000",
+                    "-i",
+                    "edit-paste-symbolic",
+                    "-A",
+                    "describe=Describe image",
+                    "-w",
+                    title,
+                    body,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            clicked = res.stdout.strip() == "describe"
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("[ocr] describe notification failed: %s", exc)
+        if clicked:
+            _describe(image, ocr_text)
+        else:
+            _unlink(image)
+
+    threading.Thread(target=_wait, daemon=True, name="ocr-describe-offer").start()
 
 
 def _capture_via_overlay() -> str | None:
@@ -293,92 +364,44 @@ def run_ocr_to_clipboard() -> None:
     """User-facing entry point. Triggered by the OCR hotkey or by the
     tray menu. Captures a region, OCRs it, puts the result on the
     clipboard, and shows the result text in the popup (so it lands as
-    a selection the rest of vinoPop's actions can pick up)."""
+    a selection the rest of vinoPop's actions can pick up).
+
+    With `ocr_describe_images` on, the AI model can also describe the
+    capture: a button on the notification when there was text, and
+    straight away when there wasn't (otherwise a dead end)."""
     ok_sup, reason = is_supported()
     if not ok_sup:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "4000",
-                "-i",
-                "dialog-information",
-                "vinoPop OCR",
-                reason,
-            ],
-            check=False,
-        )
+        _notify("vinoPop OCR", reason, ms=4000)
         return
 
-    # Prefer the frictionless overlay selector (drag -> done, no Accept step).
-    # Fall back to spectacle's region capture if it isn't available.
-    payload = None
+    image, message = _capture_image()
+    if image is None:
+        if message:
+            _notify("vinoPop OCR", message, ms=4000)
+        return  # user cancelled (Esc / zero-size drag)
+    kept = False
     try:
-        import ocr_selector
-
-        if ocr_selector.available():
-            crop = _capture_via_overlay()
-            if crop is None:
-                return  # user cancelled (Esc / zero-size drag)
-            text = _recognize(Path(crop))
-            try:
-                os.unlink(crop)
-            except OSError:
-                pass
-            if not text:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "3500",
-                        "-i",
-                        "dialog-information",
-                        "vinoPop OCR",
-                        "No text found in the selection.",
-                    ],
-                    check=False,
-                )
-                return
-            payload = text
-    except Exception as exc:  # noqa: BLE001
-        print(f"[ocr] overlay selector failed, falling back: {exc}")
-        payload = None
-
-    if payload is None:
-        ok, payload = capture_and_recognize()
-        if not ok:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "4000",
-                    "-i",
-                    "dialog-information",
-                    "vinoPop OCR",
-                    payload,
-                ],
-                check=False,
-            )
+        text = _recognize(image)
+        describe = _describe_enabled()
+        if not text:
+            if describe:
+                _describe(image, "")
+                kept = True
+            else:
+                _notify("vinoPop OCR", "No text found in the selection.")
             return
-    # Park the text on the clipboard (and PRIMARY) so it's usable everywhere
-    # and the popup can act on it like a real selection.
-    _stage_text(payload)
-    # Friendly confirmation - tail the recognised text so the user knows
-    # OCR ran and roughly what came out.
-    preview = payload.replace("\n", " ")[:120]
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "3500",
-            "-i",
-            "edit-paste-symbolic",
-            "OCR captured",
-            f"{len(payload)} chars on clipboard - “{preview}”",
-        ],
-        check=False,
-    )
+        # Park the text on the clipboard (and PRIMARY) so it's usable everywhere
+        # and the popup can act on it like a real selection.
+        _stage_text(text)
+        # Friendly confirmation - tail the recognised text so the user knows
+        # OCR ran and roughly what came out.
+        preview = text.replace("\n", " ")[:120]
+        body = f"{len(text)} chars on clipboard - “{preview}”"
+        if describe:
+            _offer_describe("OCR captured", body, image, text)
+            kept = True
+        else:
+            _notify("OCR captured", body, icon="edit-paste-symbolic")
+    finally:
+        if not kept:
+            _unlink(image)

@@ -176,6 +176,10 @@ class ResultBubble:
         self._title_lbl = Gtk.Label(label=title, xalign=0)
         self._title_lbl.add_css_class("vinopop-ai-title")
         header.append(self._title_lbl)
+        # Spins until the first word arrives: a model can take seconds
+        # before it says anything (~5 s for an image on the NPU).
+        self._spinner = Gtk.Spinner()
+        header.append(self._spinner)
         if header_widget is not None:
             header.append(header_widget)
         spacer = Gtk.Label()
@@ -267,6 +271,7 @@ class ResultBubble:
         if not self._dead:
             self._text += chunk
             self._text_lbl.set_text(self._text.lstrip())
+            self._sync_spinner()
         return False
 
     def _finish(self, text: str | None, error: str | None, warning: str | None = None) -> bool:
@@ -286,7 +291,13 @@ class ResultBubble:
         self._arm_timeout()
         return False
 
+    def _sync_spinner(self) -> None:
+        waiting = self._busy and not self._text
+        self._spinner.set_spinning(waiting)
+        self._spinner.set_visible(waiting)
+
     def _sync_buttons(self) -> None:
+        self._sync_spinner()
         ready = not self._busy and bool(self._text)
         self._copy_btn.set_sensitive(ready)
         if self._replace_btn is not None:

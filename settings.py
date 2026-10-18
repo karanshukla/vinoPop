@@ -152,6 +152,10 @@ DEFAULTS: dict[str, Any] = {
     # default into settings.json, so a stored True without this isn't a
     # yes. See vino_ai.models.prefetch_consented.
     "ai_prefetch_asked": False,
+    # After an OCR capture, let the AI model (Gemma 4) describe the image:
+    # a Describe image button on the notification when OCR found text, and
+    # straight away when it found none. ~10 s per image on the NPU.
+    "ocr_describe_images": False,
     # Seconds to wait for a device to load the LLM before falling back to
     # the next (NPU -> GPU -> CPU). A slow first NPU compile keeps running
     # in the background and the model moves to the NPU once it's done.
