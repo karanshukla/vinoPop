@@ -222,7 +222,9 @@ def _on_system_dark_changed(sm, _pspec) -> None:
     brand layer and rebuild the popup bar's palette to match."""
     if _requested_mode != "system":
         return
-    _apply_brand("dark" if sm.get_dark() else "light")
+    effective = "dark" if sm.get_dark() else "light"
+    _sync_icon_theme(effective)
+    _apply_brand(effective)
     import sys
 
     popup = sys.modules.get("popup")
@@ -285,20 +287,33 @@ def install_premium_theme(mode: str = "dark") -> None:
     if _dark_handler is None:
         _dark_handler = sm.connect("notify::dark", _on_system_dark_changed)
 
-    # On KDE/Wayland the app's button/action icons are GNOME/Adwaita symbolic
-    # names; Breeze names many differently, so they'd render as
-    # "image-missing". Force the Adwaita icon theme so they resolve (dark
-    # mode only, as before). libadwaita ignores gtk-theme-name and owns
-    # light/dark itself, so neither is touched any more.
-    if mode == "dark":
-        try:
+    effective = "dark" if mode == "dark" else "light" if mode == "light" else _resolve_mode(mode)
+    _sync_icon_theme(effective)
+    _apply_brand(effective)
+
+
+def _sync_icon_theme(effective: str, settings=None, backend_name: str | None = None) -> None:
+    """On KDE/Wayland, use the Adwaita icon theme in dark mode and the
+    desktop's own (Breeze) otherwise. The app's icons are GNOME/Adwaita
+    symbolic names; names either theme lacks are swapped by
+    icon_style.available(). Follows the effective mode both ways, so
+    the icon set no longer depends on which modes were picked before.
+    libadwaita ignores gtk-theme-name and owns light/dark itself, so that
+    isn't touched."""
+    try:
+        if backend_name is None:
             from platform_backend import get_backend
 
-            if get_backend().name == "wayland_kde":
-                s = Gtk.Settings.get_default()
-                if s is not None:
-                    s.set_property("gtk-icon-theme-name", "Adwaita")
-        except Exception:
-            pass
-
-    _apply_brand("dark" if mode == "dark" else "light" if mode == "light" else _resolve_mode(mode))
+            backend_name = get_backend().name
+        if backend_name != "wayland_kde":
+            return
+        s = settings if settings is not None else Gtk.Settings.get_default()
+        if s is None:
+            return
+        if effective == "dark":
+            s.set_property("gtk-icon-theme-name", "Adwaita")
+        else:
+            # Back to the session-wide value (the portal / kdeglobals one)
+            s.reset_property("gtk-icon-theme-name")
+    except Exception:
+        pass

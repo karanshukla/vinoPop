@@ -42,6 +42,20 @@ _FALLBACK_SUGGESTIONS = [
 ]
 
 
+def _suggestions(theme) -> list[str]:
+    """_FALLBACK_SUGGESTIONS the theme can draw, with names it lacks
+    swapped for their icon_style fallback (Breeze has no
+    web-browser-symbolic) and anything still missing left out."""
+    import icon_style
+
+    out: list[str] = []
+    for name in _FALLBACK_SUGGESTIONS:
+        name = icon_style.available(name, theme)
+        if name not in out and (theme is None or theme.has_icon(name)):
+            out.append(name)
+    return out
+
+
 def _icon_theme() -> Gtk.IconTheme | None:
     display = Gdk.Display.get_default()
     if display is None:
@@ -234,7 +248,7 @@ class IconPicker:
                 f"~/.config/vinopop/icons/</a>.{symbolic_hint} "
                 f"Or pick a generic one:</small>"
             )
-            self._filtered = _FALLBACK_SUGGESTIONS
+            self._filtered = _suggestions(_icon_theme())
         else:
             self._count_label.set_markup(
                 f"{len(self._filtered)} matching icons "

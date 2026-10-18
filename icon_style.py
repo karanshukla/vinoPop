@@ -73,6 +73,10 @@ _FALLBACKS = {
     "preferences-system-time-symbolic": ("alarm-symbolic",),
     "system-software-install-symbolic": ("list-add-symbolic",),
     "text-html-symbolic": ("text-x-generic-symbolic",),
+    # Dropped from newer Adwaita (51 has none of these three)
+    "tag-symbolic": ("text-x-generic-symbolic",),
+    "emblem-default-symbolic": ("object-select-symbolic", "starred-symbolic"),
+    "emblem-favorite-symbolic": ("starred-symbolic",),
 }
 
 

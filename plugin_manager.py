@@ -167,9 +167,11 @@ class PluginManagerDialog:
         # rather than one undifferentiated flat list. _catalog_group is
         # tracked as a reference to the *first* group purely so the
         # parent-page lookup in _rebuild_catalog_buttons still works.
+        import icon_style
+
         catalog_page = Adw.PreferencesPage()
         catalog_page.set_title("Available")
-        catalog_page.set_icon_name("system-software-install-symbolic")
+        catalog_page.set_icon_name(icon_style.available("system-software-install-symbolic"))
         self._catalog_groups = []
         for group in self._build_catalog_groups():
             catalog_page.add(group)
@@ -181,7 +183,7 @@ class PluginManagerDialog:
         # Tab 2: installed
         installed_page = Adw.PreferencesPage()
         installed_page.set_title("Installed")
-        installed_page.set_icon_name("emblem-default-symbolic")
+        installed_page.set_icon_name(icon_style.available("emblem-default-symbolic"))
         self._installed_group = self._build_installed_group()
         installed_page.add(self._installed_group)
         win.add(installed_page)
