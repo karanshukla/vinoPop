@@ -148,7 +148,6 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
     # name collisions in the buffer's tag table.
     tag = buf.create_tag(
         f"lp-placeholder-{id(view)}",
-        foreground="#7a8090",
         style=Pango.Style.ITALIC,
     )
     view._placeholder_active = False
@@ -157,6 +156,11 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
         # Suppress the 'changed' signal during the placeholder swap so
         # debounced save handlers don't fire on what is really UI chrome.
         view._setting_placeholder = True
+        # The view's own text colour, dimmed like Adwaita's dim-label; a
+        # fixed grey can't hold contrast on both light and dark.
+        color = view.get_color()
+        color.alpha = 0.55
+        tag.set_property("foreground-rgba", color)
         buf.set_text(placeholder_text)
         s, e = buf.get_bounds()
         buf.apply_tag(tag, s, e)

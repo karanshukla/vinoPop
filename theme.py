@@ -200,6 +200,7 @@ _LIGHT_REMAP = {
     "#8a92a8": "#5a6378",
     "#9aa3b8": "#5a6378",
     "#9ba3b8": "#3a4258",
+    "#c4cad8": "#5a6378",  # popup overflow chip
     # White-tinted highlights used for the "inset top edge" lift on
     # cards and the header bar. Invisible on a light surface (white on
     # white) - swap to a subtle dark shadow so the dimension survives.
