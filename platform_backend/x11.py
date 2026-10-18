@@ -223,6 +223,15 @@ class X11Backend(PlatformBackend):
 
         return Hotkey(hotkey_str, on_trigger, use_polling=use_polling)
 
+    def can_bind_hotkey(self, hotkey_str):
+        from hotkey import _parse, _resolve_keysym
+
+        try:
+            _, keysym_name = _parse(hotkey_str)
+        except ValueError:
+            return False
+        return _resolve_keysym(keysym_name) != 0
+
     def make_double_click_watcher(self, on_double_click):
         from mouse_watcher import DoubleClickWatcher
 

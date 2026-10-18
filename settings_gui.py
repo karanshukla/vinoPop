@@ -285,6 +285,15 @@ def _force_all_supported() -> bool:
         return True
 
 
+def _hotkey_bindable(combo: str) -> bool:
+    try:
+        from platform_backend import get_backend
+
+        return get_backend().can_bind_hotkey(combo)
+    except Exception:
+        return True
+
+
 def _force_to_front(window: Gtk.Window) -> None:
     """Bring the window to the foreground. GTK 4 dropped keep_above and
     GdkWindow.raise_(), so present() (with an unminimize first) is the
@@ -334,6 +343,7 @@ class HotkeyRecorder(Gtk.Button):
         super().__init__()
         self._value = initial
         self._recording = False
+        self._rejected = ""
         self._on_changed = on_changed
         self.set_valign(Gtk.Align.CENTER)
         self._update_label()
@@ -359,7 +369,9 @@ class HotkeyRecorder(Gtk.Button):
             self._on_changed(value)
 
     def _update_label(self) -> None:
-        if self._recording:
+        if self._recording and self._rejected:
+            self.set_label(f"Can't bind {self._rejected} - try another  (Esc to cancel)")
+        elif self._recording:
             self.set_label("⏺  Press a hotkey  (Esc to cancel)")
         elif self._value:
             self.set_label(self._value)
@@ -368,6 +380,7 @@ class HotkeyRecorder(Gtk.Button):
 
     def _on_clicked(self, *_):
         self._recording = True
+        self._rejected = ""
         self._update_label()
         self.grab_focus()
 
@@ -388,7 +401,13 @@ class HotkeyRecorder(Gtk.Button):
             return True
         if keyval in _MODIFIER_KEYVALS:
             return True
-        self.set_value(_format_combo(keyval, state))
+        combo = _format_combo(keyval, state)
+        if not _hotkey_bindable(combo):
+            self._rejected = combo
+            self._update_label()
+            return True
+        self._rejected = ""
+        self.set_value(combo)
         return True
 
 
