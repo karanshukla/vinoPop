@@ -1,5 +1,6 @@
 {
   "name": "youtube-search",
+  "version": 1,
   "tooltip": "Search YouTube",
   "icon": "vinopop-youtube",
   "content_types": ["plain_text"],

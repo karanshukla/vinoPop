@@ -1,5 +1,6 @@
 {
   "name": "google-maps",
+  "version": 1,
   "tooltip": "Look up in Maps",
   "icon": "mark-location-symbolic",
   "content_types": ["plain_text"],

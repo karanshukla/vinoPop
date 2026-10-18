@@ -1,5 +1,6 @@
 {
   "name": "github-search",
+  "version": 1,
   "tooltip": "Search GitHub",
   "icon": "applications-development-symbolic",
   "content_types": ["plain_text"],

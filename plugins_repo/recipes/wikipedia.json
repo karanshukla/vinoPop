@@ -1,5 +1,6 @@
 {
   "name": "wikipedia-search",
+  "version": 1,
   "tooltip": "Search Wikipedia",
   "icon": "vinopop-wikipedia",
   "content_types": ["plain_text"],

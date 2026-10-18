@@ -1,5 +1,6 @@
 {
   "name": "pypi-lookup",
+  "version": 1,
   "tooltip": "PyPI package",
   "icon": "package-x-generic-symbolic",
   "content_types": ["plain_text"],

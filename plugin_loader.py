@@ -8,6 +8,8 @@ register one or more Plugin instances.
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import shutil
 import sys
 import traceback
@@ -358,6 +360,83 @@ def _seed_default_plugins() -> None:
     _PLUGIN_SEED_MARKER.touch()
 
 
+# ---- bundled file versions ---------------------------------------------------
+#
+# Installing from the catalogue copies a file out of plugins_repo/, so a later
+# fix there never reaches that copy by itself. Each bundled file carries a
+# version, the same number as its manifest entry: a "# vinopop-plugin-version: N"
+# first line in a .py, a "version" key in a recipe. Bump both when changing a
+# bundled file, and the Plugin Manager offers the newer copy as an Update.
+
+_PY_VERSION_RE = re.compile(r"\A# vinopop-plugin-version: (\d+)[ \t]*\n")
+RETIRED_FILE = REPO_PLUGIN_DIR / "retired.json"
+
+
+def _read_bundled(path: Path) -> tuple[int, object]:
+    """(version, content without the version) of a bundled or installed file.
+    Version 0 means none: a copy installed before files had one. A recipe's
+    "enabled" switch is the user's, not part of what's compared."""
+    text = path.read_text(encoding="utf-8")
+    if path.suffix != ".json":
+        m = _PY_VERSION_RE.match(text)
+        return (int(m.group(1)), text[m.end() :]) if m else (0, text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return 0, text
+    if not isinstance(data, dict):
+        return 0, data
+    version = data.pop("version", 0)
+    data.pop("enabled", None)
+    return (version if isinstance(version, int) else 0), data
+
+
+def bundled_status(src: Path, dst: Path, version: int) -> str:
+    """How the installed copy `dst` of bundled file `src` (at `version`)
+    compares: "missing", "current", "outdated" (an older copy: offer the
+    update) or "changed" (edited by hand, or newer: leave it alone)."""
+    if not dst.is_file():
+        return "missing"
+    try:
+        dst_version, dst_body = _read_bundled(dst)
+        _, src_body = _read_bundled(src)
+    except (OSError, UnicodeDecodeError):
+        return "changed"
+    if dst_body == src_body:
+        return "current"
+    return "outdated" if dst_version < version else "changed"
+
+
+def update_bundled(src: Path, dst: Path) -> None:
+    """Replace `dst` with the bundled `src`, keeping a recipe's on/off switch."""
+    if src.suffix == ".json":
+        enabled = None
+        try:
+            old = json.loads(dst.read_text(encoding="utf-8"))
+            if isinstance(old, dict):
+                enabled = old.get("enabled")
+        except (OSError, json.JSONDecodeError):
+            pass
+        if enabled is not None:
+            import recipe_loader
+
+            recipe = json.loads(src.read_text(encoding="utf-8"))
+            recipe_loader.save_recipe({**recipe, "enabled": enabled}, target_path=dst)
+            return
+    shutil.copy2(src, dst)
+
+
+def retired_bundled() -> dict[str, str]:
+    """{filename: why} for files vinoPop used to bundle and no longer does,
+    so an install that still has one can say so instead of calling it
+    "installed by hand"."""
+    try:
+        data = json.loads(RETIRED_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
 def _load_user_plugins() -> None:
     _ensure_on_path()
     _seed_default_plugins()
@@ -377,19 +456,24 @@ def _load_user_plugins() -> None:
             sys.modules[mod_name] = module
             spec.loader.exec_module(module)
             if hasattr(module, "register"):
-                # Wrap register so we can track which source file each
-                # plugin came from - the Plugin Manager uses this to
-                # show a bundle as expandable with its sub-plugins
-                # underneath, and per-action enable/disable.
-                source_basename = path.name
-
-                def tracked_register(p, src=source_basename):
-                    _SOURCE_BY_NAME[p.name] = src
-                    return register(p)
-
-                module.register(tracked_register)
+                # Buffer what the file registers and commit it only once
+                # its register() returns: one that registers a button and
+                # then raises must not leave that button behind.
+                pending: list[Plugin] = []
+                module.register(pending.append)
+                for plugin in pending:
+                    # Track which source file each plugin came from - the
+                    # Plugin Manager uses this to show a bundle as
+                    # expandable with its sub-plugins underneath, and
+                    # per-action enable/disable.
+                    _SOURCE_BY_NAME[plugin.name] = path.name
+                    register(plugin)
                 print(f"[plugin_loader] loaded user plugin: {path.name}")
-        except Exception:
+        except KeyboardInterrupt:
+            raise
+        except BaseException:
+            # BaseException: a plugin calling sys.exit() at import or in
+            # register() must not take the daemon down with it.
             # Roll back the half-initialised module so main.py's
             # sys.modules.get("vinopop_user_clipboard_history") doesn't
             # find a broken stub and silently behave as if the plugin
@@ -413,7 +497,9 @@ def _shutdown_user_plugins() -> None:
         if callable(hook):
             try:
                 hook()
-            except Exception:
+            except KeyboardInterrupt:
+                raise
+            except BaseException:  # a sys.exit() in shutdown() too
                 print(f"[plugin_loader] shutdown of {name} failed:")
                 traceback.print_exc()
         sys.modules.pop(name, None)

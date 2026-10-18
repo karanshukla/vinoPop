@@ -892,9 +892,6 @@ class App:
             self._plugin_dialog = PluginManagerDialog(on_changed=on_changed)
         try:
             self._plugin_dialog.show(tab=tab)
-        except TypeError:
-            # Older PluginManagerDialog signature without the tab arg.
-            self._plugin_dialog.show()
         except Exception:
             log.exception("plugin manager dialog crashed")
 

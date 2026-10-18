@@ -80,12 +80,42 @@ def _load_manifest() -> list[dict]:
         return []
 
 
+def _status(entry: dict) -> str:
+    """The installed copy of a catalogue entry against the bundled one:
+    "missing", "current", "outdated" or "changed" (see plugin_loader)."""
+    import plugin_loader
+
+    return plugin_loader.bundled_status(
+        _source_path(entry), _target_dir(entry) / entry["file"], int(entry.get("version") or 0)
+    )
+
+
 def _is_installed(entry_or_filename) -> bool:
     """Check whether a catalogue entry (dict) or filename (str) is installed."""
     if isinstance(entry_or_filename, dict):
         return (_target_dir(entry_or_filename) / entry_or_filename["file"]).is_file()
     # Backwards-compat: string means a plugin .py file
     return (USER_PLUGIN_DIR / entry_or_filename).is_file()
+
+
+def _recipe_row_text(
+    path: Path, recipe: dict, atype_labels: dict[str, str], retired: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """Title and subtitle for a recipe's row in the Custom tab. The JSON is
+    hand-editable and may not validate (that recipe just doesn't load), so
+    every field is coerced to a string here rather than trusted."""
+    action = recipe.get("action")
+    if not isinstance(action, dict):
+        action = {}
+    title = str(recipe.get("tooltip") or recipe.get("name") or path.stem)
+    atype = str(action.get("type") or "")
+    template = str(action.get("template") or "")
+    short = template if len(template) <= 70 else template[:67] + "…"
+    action_label = atype_labels.get(atype, atype or "Custom action")
+    subtitle = f"{action_label}  ·  {short}"
+    if retired and path.name in retired:
+        subtitle += f"\nNo longer bundled with vinoPop. {retired[path.name]}"
+    return title, subtitle
 
 
 class PluginManagerDialog:
@@ -328,14 +358,49 @@ class PluginManagerDialog:
             desc = f"{desc}\n{' · '.join(tags)}"
         row.set_subtitle(desc)
 
+        update_btn = self._make_update_button(entry)
+        row.add_suffix(update_btn)
         btn = Gtk.Button()
         btn.set_valign(Gtk.Align.CENTER)
-        self._update_install_button(btn, entry)
-        btn.connect("clicked", self._on_install_clicked, entry, row)
+        self._update_install_button(btn, entry, update_btn)
+        btn.connect("clicked", self._on_install_clicked, entry, update_btn)
         row.add_suffix(btn)
         return row
 
-    def _update_install_button(self, btn: Gtk.Button, entry: dict) -> None:
+    def _make_update_button(self, entry: dict) -> Gtk.Button:
+        """An Update button, shown only while the installed copy is an older
+        version of the bundled file."""
+        btn = Gtk.Button(label="Update")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.add_css_class("suggested-action")
+        btn.set_tooltip_text(
+            "Replace your copy with the newer one bundled with vinoPop. "
+            "Changes you made to the file are lost."
+        )
+        btn.set_visible(_status(entry) == "outdated")
+        btn.connect("clicked", self._on_update_clicked, entry)
+        return btn
+
+    def _on_update_clicked(self, _btn: Gtk.Button, entry: dict) -> None:
+        import plugin_loader
+
+        try:
+            plugin_loader.update_bundled(_source_path(entry), _target_dir(entry) / entry["file"])
+            print(f"[plugin_manager] updated {entry['file']}")
+        except (OSError, ValueError) as exc:
+            print(f"[plugin_manager] could not update {entry['file']}: {exc}")
+            return
+        self._refresh_installed_group()
+        self._refresh_custom_group()
+        self._rebuild_catalog_buttons()
+        if self._on_changed:
+            self._on_changed()
+
+    def _update_install_button(
+        self, btn: Gtk.Button, entry: dict, update_btn: Gtk.Button | None = None
+    ) -> None:
+        if update_btn is not None:
+            update_btn.set_visible(_status(entry) == "outdated")
         btn.remove_css_class("suggested-action")
         btn.remove_css_class("destructive-action")
         if _is_installed(entry):
@@ -345,7 +410,7 @@ class PluginManagerDialog:
             btn.set_label("Install")
             btn.add_css_class("suggested-action")
 
-    def _on_install_clicked(self, btn: Gtk.Button, entry: dict, row: Adw.ActionRow) -> None:
+    def _on_install_clicked(self, btn: Gtk.Button, entry: dict, update_btn: Gtk.Button) -> None:
         filename = entry["file"]
         src = _source_path(entry)
         dst_dir = _target_dir(entry)
@@ -361,7 +426,7 @@ class PluginManagerDialog:
         except OSError as exc:
             print(f"[plugin_manager] error: {exc}")
             return
-        self._update_install_button(btn, entry)
+        self._update_install_button(btn, entry, update_btn)
         # Refresh installed-tab content if the window is still up
         self._refresh_installed_group()
         if self._on_changed:
@@ -389,6 +454,9 @@ class PluginManagerDialog:
             self._add_row(group, empty)
             return
         manifest_by_file = {e["file"]: e for e in _load_manifest()}
+        import plugin_loader as _pl
+
+        retired = _pl.retired_bundled()
 
         # Map source-file -> list of plugin names that file registered.
         # When a bundle exposes more than one action (editing_actions
@@ -396,8 +464,6 @@ class PluginManagerDialog:
         # render the file as an expander with one switch per sub-plugin
         # so the user can keep what they want and silence the rest.
         try:
-            import plugin_loader as _pl
-
             by_source = _pl.plugins_by_source()
             all_plugins = {p.name: p for p in _pl.all_plugins()}
         except Exception:
@@ -429,13 +495,18 @@ class PluginManagerDialog:
                 row.set_subtitle(entry.get("description", ""))
             else:
                 row.set_title(path.stem.replace("_", " ").title())
-                row.set_subtitle("Installed by hand (not in the catalogue)")
+                if path.name in retired:
+                    row.set_subtitle(f"No longer bundled with vinoPop. {retired[path.name]}")
+                else:
+                    row.set_subtitle("Installed by hand (not in the catalogue)")
             _icon = entry.get("icon") if entry else None
             if not _icon and sub_names:
                 _p0 = all_plugins.get(sub_names[0])
                 _icon = getattr(_p0, "icon", None) if _p0 else None
             row.add_prefix(self._badge(_icon, row.get_title()))
 
+            if entry is not None:
+                row.add_suffix(self._make_update_button(entry))
             remove_btn = Gtk.Button(label="Remove")
             remove_btn.set_valign(Gtk.Align.CENTER)
             remove_btn.add_css_class("destructive-action")
@@ -523,14 +594,14 @@ class PluginManagerDialog:
             "notify": "Shows a notification",
             "copy_transformed": "Transforms text and copies it",
         }
+        import plugin_loader
+
+        retired = plugin_loader.retired_bundled()
         for path, recipe in recipe_loader.list_recipes():
             row = _plain(Adw.ActionRow())
-            row.set_title(recipe.get("tooltip") or recipe.get("name", path.stem))
-            atype = (recipe.get("action") or {}).get("type", "")
-            template = (recipe.get("action") or {}).get("template", "")
-            short = template if len(template) <= 70 else template[:67] + "…"
-            action_label = atype_labels.get(atype, atype or "Custom action")
-            row.set_subtitle(f"{action_label}  ·  {short}")
+            title, subtitle = _recipe_row_text(path, recipe, atype_labels, retired)
+            row.set_title(title)
+            row.set_subtitle(subtitle)
 
             # On/off toggle. Lets the user disable a custom button without
             # deleting it. Default-True for recipes that don't carry the

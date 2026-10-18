@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Show word, character and line counts of the selected text via notification."""
 
 from __future__ import annotations

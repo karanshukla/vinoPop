@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """UPPERCASE / lowercase / Title Case / slugify text transformations."""
 
 from __future__ import annotations

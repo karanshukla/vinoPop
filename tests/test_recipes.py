@@ -462,3 +462,94 @@ def test_validate_accepts_normal_templates():
     for template in ("https://x/?q={text_url}", "{{literal}} {text}", "no placeholders"):
         recipe = {"name": "x", "action": {"type": "open_url", "template": template}}
         assert recipe_loader.validate(recipe) == [], template
+
+
+# ---- loading robustness (#33) ------------------------------------------------
+
+
+def _write_recipes(directory, recipes):
+    import json
+
+    directory.mkdir(parents=True, exist_ok=True)
+    for filename, recipe in recipes.items():
+        (directory / filename).write_text(json.dumps(recipe))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"name": "a", "action": {"type": "notify", "template": 5}},
+        {"name": 5, "action": {"type": "notify", "template": "x"}},
+        {"name": "a", "tooltip": ["x"], "action": {"type": "notify", "template": "x"}},
+        {"name": "a", "content_types": [["url"]], "action": {"type": "notify", "template": "x"}},
+        {"name": "a", "action": {"type": ["notify"], "template": "x"}},
+        {"name": "a", "action": {"type": "chain", "steps": [{"template": 5}]}},
+        {"name": "a", "action": {"type": "chain", "steps": [{"type": {}, "template": "x"}]}},
+    ],
+)
+def test_a_malformed_recipe_is_an_error_not_an_exception(bad):
+    assert recipe_loader.validate(bad)
+
+
+def test_a_malformed_recipe_does_not_stop_the_ones_after_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(recipe_loader, "RECIPES_DIR", tmp_path / "recipes")
+    monkeypatch.setattr(recipe_loader, "_SEED_MARKER", tmp_path / "seeded")
+    (tmp_path / "seeded").touch()
+    _write_recipes(
+        tmp_path / "recipes",
+        {
+            "a.json": {"name": "a", "action": {"type": "notify", "template": 5}},
+            "b.json": {"name": "b", "action": {"type": "notify", "template": "{text}"}},
+        },
+    )
+    registered = []
+    assert recipe_loader.load_recipes(registered.append) == 1
+    assert [p.name for p in registered] == ["b"]
+
+
+def test_list_recipes_skips_files_that_are_not_objects(tmp_path, monkeypatch):
+    monkeypatch.setattr(recipe_loader, "RECIPES_DIR", tmp_path)
+    _write_recipes(tmp_path, {"a.json": [], "b.json": {"name": "b", "action": "x"}})
+    assert [p.name for p, _ in recipe_loader.list_recipes()] == ["b.json"]
+
+
+@pytest.fixture
+def date_engine(monkeypatch):
+    """A stand-in clipboard_history that expands date/shell/var tokens."""
+    tokens = {
+        "{date:+7d}": "2026-01-09",
+        "{date:%A}": "Friday",
+        "{shell:hostname}": "box",
+        "{var:x}": "X",
+    }
+
+    def render_placeholders(text, ask):
+        return tokens.get(text, text), 0, False
+
+    module = types.SimpleNamespace(render_placeholders=render_placeholders)
+    monkeypatch.setitem(sys.modules, "clipboard_history", module)
+
+
+@pytest.mark.parametrize(
+    "template,expected",
+    [
+        ("{date:+7d} {text_url}", "2026-01-09 a%20b"),
+        ("{date:%A}: {text_url}", "Friday: a%20b"),
+        ("{shell:hostname}/{text_url}", "box/a%20b"),
+        ("{var:x}={text_upper}", "X=A B"),
+    ],
+)
+def test_snippet_tokens_with_a_colon_dont_break_the_template(date_engine, template, expected):
+    # format_map used to read {date:+7d} as a format spec, fail, and leave
+    # {text_url} unsubstituted too
+    assert recipe_loader._render(template, "a b") == expected
+
+
+@pytest.mark.parametrize("word", ["test", "AAAA", "cafe", "Information"])
+def test_b64_decode_leaves_words_that_only_look_like_base64(word):
+    assert recipe_loader._render("{text_b64_decode}", word) == word
+
+
+def test_b64_decode_still_decodes_real_base64():
+    assert recipe_loader._render("{text_b64_decode}", "aHR0cHM6Ly94Lnk=") == "https://x.y"
+    assert recipe_loader._render("{text_b64_decode}", "aHR0cHM6\nLy94Lnk") == "https://x.y"

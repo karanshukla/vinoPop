@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """A bundle of small text-transform actions: reverse, sort lines, dedupe,
 trim per line, strip HTML, remove diacritics, ASCII-only, swap case.
 Each transforms the selection and copies the result to the clipboard.
@@ -38,13 +39,69 @@ def _copy(text: str, label: str) -> None:
     )
 
 
+# Code points that attach to the character before them. A stand-in for the
+# `regex` module's \X, which isn't a dependency: combining marks (category M),
+# zero-width joiner sequences, variation selectors, skin-tone modifiers and
+# the tag characters of subdivision flags.
+_ZWJ = "\u200d"
+
+
+def _extends(c: str) -> bool:
+    cp = ord(c)
+    return (
+        unicodedata.category(c).startswith("M")
+        or 0xFE00 <= cp <= 0xFE0F
+        or 0xE0100 <= cp <= 0xE01EF
+        or 0x1F3FB <= cp <= 0x1F3FF
+        or 0xE0020 <= cp <= 0xE007F
+    )
+
+
+def _is_regional_indicator(c: str) -> bool:
+    return 0x1F1E6 <= ord(c) <= 0x1F1FF
+
+
+def _graphemes(text: str) -> list[str]:
+    """Split text into user-perceived characters, so reversing keeps an
+    accent on its letter and a flag or family emoji in one piece."""
+    clusters: list[str] = []
+    for c in text:
+        if clusters:
+            last = clusters[-1]
+            if (
+                _extends(c)
+                or c == _ZWJ
+                or last.endswith(_ZWJ)
+                or (last == "\r" and c == "\n")
+                or (_is_regional_indicator(c) and len(last) == 1 and _is_regional_indicator(last))
+            ):
+                clusters[-1] += c
+                continue
+        clusters.append(c)
+    return clusters
+
+
+def _reversed_text(text: str) -> str:
+    return "".join(reversed(_graphemes(text)))
+
+
 def _reverse(text: str) -> None:
-    _copy(text[::-1], "Reversed")
+    _copy(_reversed_text(text), "Reversed")
+
+
+def _relines(text: str, lines: list[str]) -> str:
+    """Join transformed lines back the way `text` had them: its line ending
+    (CRLF stays CRLF) and its trailing newline, so the line after the
+    selection doesn't end up joined onto the last one."""
+    eol = "\r\n" if "\r\n" in text else "\n"
+    joined = eol.join(lines)
+    if lines and text.endswith(("\n", "\r")):
+        joined += eol
+    return joined
 
 
 def _sort_lines(text: str) -> None:
-    lines = text.splitlines()
-    _copy("\n".join(sorted(lines)), "Sorted lines")
+    _copy(_relines(text, sorted(text.splitlines())), "Sorted lines")
 
 
 def _dedupe_lines(text: str) -> None:
@@ -53,11 +110,11 @@ def _dedupe_lines(text: str) -> None:
         if line not in seen:
             seen.add(line)
             out.append(line)
-    _copy("\n".join(out), f"Deduplicated ({len(out)} unique lines)")
+    _copy(_relines(text, out), f"Deduplicated ({len(out)} unique lines)")
 
 
 def _trim_lines(text: str) -> None:
-    _copy("\n".join(line.strip() for line in text.splitlines()), "Trimmed lines")
+    _copy(_relines(text, [line.strip() for line in text.splitlines()]), "Trimmed lines")
 
 
 # Recognises real tag-shaped HTML (open or close), not stray '<' chars

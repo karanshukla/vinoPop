@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Bold / Italic / Underline - rich-text formatting.
 
 Standard Ctrl-key shortcuts that work in almost every modern rich-text
