@@ -644,6 +644,8 @@ class _KWinHelper:
     query cost ~61 ms, ~55 of it Python startup. Respawned after a timeout
     or crash."""
 
+    _ARGV = [sys.executable, "-m", "platform_backend._kwin_query"]
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
@@ -657,12 +659,11 @@ class _KWinHelper:
             return self._proc
         try:
             self._proc = subprocess.Popen(
-                [sys.executable, "-m", "platform_backend._kwin_query"],
+                self._ARGV,
+                # Binary: bytes readline() ends an answer only at "\n", never
+                # at a "\r" in a page title as text mode would.
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                text=True,
-                newline="\n",  # only "\n" ends an answer, not "\r" in a title
-                bufsize=1,
                 env=_kwin_subprocess_env(),
                 preexec_fn=_die_with_parent,
             )
@@ -679,11 +680,11 @@ class _KWinHelper:
                 return ""
             line = ""
             try:
-                proc.stdin.write(kind + "\n")
+                proc.stdin.write(kind.encode() + b"\n")
                 proc.stdin.flush()
                 readable, _, _ = _select.select([proc.stdout], [], [], timeout)
                 if readable:
-                    line = proc.stdout.readline()
+                    line = proc.stdout.readline().decode("utf-8", "replace")
             except (OSError, ValueError):
                 pass
             if not line.endswith("\n"):
