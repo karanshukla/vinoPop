@@ -11,6 +11,7 @@ alongside the rest of the user's desktop application files.
 from __future__ import annotations
 
 import os
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import IO, Any
 
@@ -103,3 +104,14 @@ def open_private(path: Path, mode: str = "w") -> IO[Any]:
     if "b" in mode:
         return os.fdopen(fd, mode)
     return os.fdopen(fd, mode, encoding="utf-8")
+
+
+class PrivateRotatingFileHandler(RotatingFileHandler):
+    """A RotatingFileHandler whose file, and every file rotation creates, is
+    0600: the log names what was selected at --debug, which can be a
+    password or a token."""
+
+    def _open(self):  # type: ignore[override]
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        os.fchmod(fd, 0o600)  # an existing file keeps its old mode otherwise
+        return os.fdopen(fd, "a", encoding=self.encoding, errors=self.errors)
