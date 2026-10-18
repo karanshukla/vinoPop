@@ -30,21 +30,22 @@ window.vinopop-ai {
     background-color: transparent;
 }
 box.vinopop-ai-bubble {
-    background-color: #1f2330;
+    background-color: @popover_bg_color;
+    color: @popover_fg_color;
     border-radius: 14px;
-    border: 1px solid rgba(255,255,255,0.08);
+    border: 1px solid alpha(currentColor, 0.12);
     padding: 12px 14px;
 }
 label.vinopop-ai-text {
-    color: #f4f6fb;
+    color: @popover_fg_color;
     font-size: 13pt;
 }
 label.vinopop-ai-warning {
-    color: #f0b45a;
+    color: @warning_color;
     font-size: 9pt;
 }
 label.vinopop-ai-title {
-    color: #8a92a8;
+    color: alpha(@popover_fg_color, 0.6);
     font-size: 9pt;
 }
 button.vinopop-ai-chip {
