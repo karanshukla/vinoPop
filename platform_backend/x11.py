@@ -173,43 +173,47 @@ class X11Backend(PlatformBackend):
 
     # ---- active window ---------------------------------------------------
     def active_window_haystacks(self) -> list[str]:
-        """Window title (xdotool) + WM_CLASS (xprop). xprop is used for the
-        class because xdotool getwindowclassname is missing in several distro
-        builds."""
-        haystacks: list[str] = []
-        try:
-            wid = subprocess.run(
-                ["xdotool", "getactivewindow"],
-                capture_output=True,
-                text=True,
-                timeout=0.3,
-            ).stdout.strip()
-            if not wid:
+        """Window title + the WM_CLASS line in xprop's shape
+        (`wm_class(string) = "instance", "class"`, which
+        editable_detect._window_class matches on). Read over the shared Xlib
+        connection: it runs on every popup, and xdotool + xprop were three
+        process spawns."""
+        global _pointer_dpy
+        from Xlib import X, display
+        from Xlib.error import XError
+
+        with _pointer_lock:
+            if _pointer_dpy is None:
+                _pointer_dpy = display.Display()
+            dpy = _pointer_dpy
+            try:
+                prop = dpy.screen().root.get_full_property(
+                    dpy.intern_atom("_NET_ACTIVE_WINDOW"), X.AnyPropertyType
+                )
+                wid = prop.value[0] if prop is not None and len(prop.value) else 0
+                if not wid:
+                    return []
+                win = dpy.create_resource_object("window", wid)
+                name = win.get_full_property(
+                    dpy.intern_atom("_NET_WM_NAME"), dpy.intern_atom("UTF8_STRING")
+                )
+                title = name.value if name is not None else win.get_wm_name()
+                if isinstance(title, bytes):
+                    title = title.decode("utf-8", errors="replace")
+                cls = win.get_wm_class()
+            except XError:
+                return []  # the window went away between the two reads
+            except Exception as exc:  # noqa: BLE001 - connection gone
+                print(f"[x11] active-window query failed: {exc}")
+                try:
+                    dpy.close()
+                except Exception:
+                    pass
+                _pointer_dpy = None
                 return []
-            try:
-                out = subprocess.run(
-                    ["xdotool", "getwindowname", wid],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.3,
-                ).stdout.strip()
-                if out:
-                    haystacks.append(out.lower())
-            except (OSError, subprocess.SubprocessError):
-                pass
-            try:
-                out = subprocess.run(
-                    ["xprop", "-id", wid, "WM_CLASS"],
-                    capture_output=True,
-                    text=True,
-                    timeout=0.3,
-                ).stdout.strip()
-                if out:
-                    haystacks.append(out.lower())
-            except (OSError, subprocess.SubprocessError):
-                pass
-        except (OSError, subprocess.SubprocessError):
-            return []
+        haystacks = [title.lower()] if title else []
+        if cls:
+            haystacks.append(f'wm_class(string) = "{cls[0]}", "{cls[1]}"'.lower())
         return haystacks
 
     # ---- component factories --------------------------------------------

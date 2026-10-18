@@ -24,8 +24,45 @@ from __future__ import annotations
 
 import abc
 import subprocess
+import time
 from collections.abc import Callable
 from typing import Protocol
+
+# ---- selection-watcher rules shared by both backends ------------------------
+
+# A CLIPBOARD change this close to a PRIMARY burst came from the same action.
+COPY_BURST_S = 0.3
+_EXPECT_TTL_S = 3.0
+
+_expected: tuple[str, float] | None = None
+
+
+def expect_selection(text: str) -> None:
+    """vinoPop is about to put `text` on PRIMARY itself (OCR) and wants the
+    popup for it, though no gesture or copy-button rule would allow it."""
+    global _expected
+    _expected = (text, time.monotonic())
+
+
+def take_expected(text: str) -> bool:
+    global _expected
+    if _expected is None or _expected[0] != text:
+        return False
+    fresh = time.monotonic() - _expected[1] < _EXPECT_TTL_S
+    _expected = None
+    return fresh
+
+
+def is_copy_button(
+    text: str, burst_t0: float, clip_changed_at: float | None, read_clipboard: Callable[[], str]
+) -> bool:
+    """A page's Copy button selects a hidden field and copies it, so
+    PRIMARY and CLIPBOARD change together to the same text. Copying a real
+    selection later changes CLIPBOARD alone, outside the burst."""
+    if clip_changed_at is None or clip_changed_at < burst_t0 - COPY_BURST_S:
+        return False
+    return read_clipboard() == text
+
 
 # One-time notification per session when a key-injection backend is missing.
 # Keeps Cut/Paste/Backspace from failing completely silently.
