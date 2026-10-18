@@ -179,8 +179,8 @@ _SAMPLE_SELECTION = "hello world"
 # per process.
 _MOCK_CSS = """
 .lp-mock-popup {
-    background-image: linear-gradient(to bottom, #1d2230, #161a24);
-    border: 1px solid #2c3346;
+    background-color: #0e0e10;
+    border: 1px solid #2a2c30;
     border-radius: 9px;
     padding: 6px 8px;
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
@@ -192,12 +192,12 @@ _MOCK_CSS = """
     padding: 5px 7px;
     min-width: 28px;
     min-height: 28px;
-    color: #e8ecf4;
+    color: #fafafa;
 }
 .lp-mock-popup button.lp-mock-new {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
+    background-color: #1f7d42;
     color: #ffffff;
-    box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35);
+    box-shadow: 0 0 0 2px rgba(86, 204, 120, 0.35);
 }
 .lp-step-tile {
     padding: 16px;
@@ -210,8 +210,8 @@ button.card.lp-action-tile:checked {
     box-shadow: inset 0 0 0 2px @accent_bg_color;
 }
 .lp-step-number {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
     border-radius: 50%;
     min-width: 28px;
     min-height: 28px;

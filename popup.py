@@ -43,9 +43,8 @@ window.vinopop-popup {
 }
 
 box.vinopop-bar {
-    background-image: linear-gradient(to bottom, #262d3f, #1c2231);
-    background-color: #1c2231;
-    border: 1px solid #3a4258;
+    background-color: #0e0e10;
+    border: 1px solid #2a2c30;
     border-radius: __WIN_RADIUS__px;
     padding: __WIN_PAD__px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55),
@@ -61,37 +60,37 @@ button.vinopop-action {
     margin: 0;
     min-width: __BTN_SIZE__px;
     min-height: __BTN_SIZE__px;
-    color: #f0f3fa;
+    color: #fafafa;
     transition: background-color 100ms ease, color 100ms ease;
 }
 
 button.vinopop-action:hover {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
+    background-color: #1f7d42;
     color: #ffffff;
 }
 
 button.vinopop-action:active {
-    background-image: linear-gradient(to bottom right, #4A6CE3, #6929DB);
+    background-color: #1a7040;
     color: #ffffff;
 }
 
 button.vinopop-action image {
-    color: #f0f3fa;
+    color: #fafafa;
 }
 
 /* Overflow chip - shown when more plugins matched than the popup
  * limit allows. Renders as a "+N" pill with a softer tone so it
  * reads as informational rather than a normal action. */
 button.vinopop-overflow {
-    color: #c4cad8;
+    color: #a0a4ac;
     font-weight: 600;
     font-size: 0.85em;
     padding-left: __PAD_H_OVERFLOW__px;
     padding-right: __PAD_H_OVERFLOW__px;
 }
 button.vinopop-overflow:hover {
-    background-image: linear-gradient(to bottom right, #3a4258, #2c3146);
-    color: #ffffff;
+    background-color: rgba(128, 128, 128, 0.25);
+    color: #fafafa;
 }
 """
 
@@ -597,13 +596,13 @@ class PopupWindow:
         """Foreground + background hex for our custom mono glyphs, following
         the popup's resolved light/dark theme. Dark-theme defaults: a light
         glyph on the dark bar."""
-        fg, bg = "#f0f3fa", "#1c2231"
+        fg, bg = "#fafafa", "#0e0e10"
         try:
             import theme as _theme
 
             mode = _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark"))
             if mode == "light":
-                fg, bg = "#1c2231", "#ffffff"
+                fg, bg = "#1c1d20", "#ffffff"
         except Exception:
             pass
         return fg, bg
