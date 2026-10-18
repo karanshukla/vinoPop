@@ -137,7 +137,7 @@ DEFAULTS: dict[str, Any] = {
     # "de"). Changeable from the dropdown in the translation bubble itself.
     "translate_target_lang": "en",
     # OpenVINO device for the offline AI actions: "auto" (LLM on the NPU,
-    # OCR on the iGPU, CPU as the fallback), or force "NPU", "GPU" or "CPU".
+    # OCR on the CPU, the rest as fallback), or force "NPU", "GPU" or "CPU".
     "ai_device": "auto",
     # Local LLM for summarize / rewrite / explain / translate. Keys are in
     # vino_ai/models.py: "gemma-4-e2b" (default) or "gemma-4-e4b".

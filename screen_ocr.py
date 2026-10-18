@@ -4,7 +4,7 @@ User holds a hotkey, drags a rectangle, the rectangle's contents land
 on the clipboard as text. Capture uses the overlay selector or the
 desktop's own region tool (spectacle, grim+slurp, maim, or
 gnome-screenshot); recognition is PP-OCR running
-offline on OpenVINO (vino_ai.ocr), on the iGPU when there is one.
+offline on OpenVINO (vino_ai.ocr), on the CPU.
 
 Why this matters beyond a one-off screenshot tool: the vinoPop popup
 runs on X11 PRIMARY selection. Anywhere the user can't make a real

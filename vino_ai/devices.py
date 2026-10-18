@@ -3,10 +3,13 @@
 The `ai_device` setting is "auto" (default), "NPU", "GPU" or "CPU". In
 auto mode the LLM prefers the NPU, since OpenVINO GenAI handles the NPU's
 static-shape requirement itself and the NPU is the efficient choice for a
-model that sits idle between clicks. OCR prefers the iGPU instead: PP-OCR
+model that sits idle between clicks. OCR prefers the CPU: PP-OCR
 detection and recognition take a different input shape for every capture,
 which the NPU can't compile for without padding every image to a fixed
-size.
+size, and which the GPU recompiles for. Measured on a Core Ultra: CPU
+0.12-0.53 s per capture, GPU 0.3-1.06 s for each new size (0.08 s only
+for a size it has seen). The GPU plugin has also segfaulted in that
+compile, taking vinoPop down with it.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from . import telemetry
 log = logging.getLogger("vinopop")
 
 LLM_ORDER = ("NPU", "GPU", "CPU")
-OCR_ORDER = ("GPU", "CPU")
+OCR_ORDER = ("CPU", "GPU")
 
 
 @functools.lru_cache(maxsize=1)

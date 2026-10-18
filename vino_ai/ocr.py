@@ -2,7 +2,8 @@
 
 RapidOCR's wheel bundles the PP-OCR ONNX models, so OCR needs no download.
 Its OpenVINO engine always compiles for "CPU"; `_DeviceCore` swaps in our
-device choice (the iGPU when there is one, see devices.OCR_ORDER) and
+device choice (the CPU unless `ai_device` says otherwise, see
+devices.OCR_ORDER) and
 points the compiled-blob cache at our cache dir.
 """
 

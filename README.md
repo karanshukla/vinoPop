@@ -71,8 +71,8 @@ back to XWayland otherwise.
 ### Offline AI (OCR, summarize, rewrite, explain, translate)
 
 These run on your own machine through OpenVINO: the LLM on an Intel NPU when
-there is one, OCR on the iGPU, and the CPU otherwise. Install the Python side
-for the same Python that runs vinoPop:
+there is one (the iGPU or CPU otherwise), and OCR on the CPU. Install the
+Python side for the same Python that runs vinoPop:
 
 ```sh
 pip install --user -r requirements-ai.txt
