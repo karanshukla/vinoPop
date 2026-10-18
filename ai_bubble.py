@@ -13,6 +13,7 @@ compositor has it (KDE, wlroots) and X11 window moves under X11/XWayland.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 
 import gi
@@ -59,6 +60,11 @@ _css_installed = False
 # A slow first load (download + compile) can take a while; only an idle
 # bubble times out, never one that is still streaming.
 _IDLE_TIMEOUT_S = 45
+# ...but a run that goes quiet this long while busy is hung: give up on it,
+# so the bubble can't stay up forever if it never reports done.
+_STALL_TIMEOUT_S = 300
+# Share of the monitor height the answer may take before it scrolls.
+_MAX_HEIGHT_FRACTION = 0.6
 
 
 def _install_css() -> None:
@@ -146,6 +152,11 @@ class ResultBubble:
         self._pointer_in_bubble = False
         self.keep_open = False  # set while a header dropdown is open
         self._click_watcher = None
+        self._x_poll = None
+        self._stall_id: int | None = None
+        self._last_activity = time.monotonic()
+        self._replace_id: int | None = None
+        self._placed_h = 0
         # Set once destroyed, so late idle callbacks from a worker don't
         # touch dead widgets and a timeout + outside click can't race.
         self._dead = False
@@ -167,6 +178,11 @@ class ResultBubble:
         # Same stale-crossing problem as the popup: motion still fires.
         motion.connect("motion", lambda _c, x, y: self._on_enter(_c, x, y))
         self.win.add_controller(motion)
+        # Only reaches us if the compositor focused the bubble anyway; the
+        # usual unfocused case is covered by the X11 poll (_start_watchers).
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.win.add_controller(keys)
 
         bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         bubble.add_css_class("vinopop-ai-bubble")
@@ -193,7 +209,10 @@ class ResultBubble:
         if on_replace is not None:
             self._replace_btn = self._chip("Replace", lambda *_: on_replace(self._text))
             header.append(self._replace_btn)
-        header.append(self._chip("✕", lambda *_: self.dismiss()))
+        close = self._chip("✕", lambda *_: self.dismiss())
+        close.set_tooltip_text("Close")
+        close.update_property([Gtk.AccessibleProperty.LABEL], ["Close"])
+        header.append(close)
         bubble.append(header)
 
         self._text_lbl = Gtk.Label(xalign=0, yalign=0)
@@ -204,7 +223,15 @@ class ResultBubble:
         self._text_lbl.set_focusable(False)
         self._text_lbl.add_css_class("vinopop-ai-text")
         self._text_lbl.set_vexpand(True)
-        bubble.append(self._text_lbl)
+        # A long answer (an 800-token translation is ~60 lines) scrolls
+        # instead of running off the screen; _place caps the height.
+        self._scroll = Gtk.ScrolledWindow()
+        self._scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._scroll.set_propagate_natural_width(True)
+        self._scroll.set_propagate_natural_height(True)
+        self._scroll.set_max_content_height(400)
+        self._scroll.set_child(self._text_lbl)
+        bubble.append(self._scroll)
 
         self._warn_lbl = Gtk.Label(xalign=0)
         self._warn_lbl.set_wrap(True)
@@ -231,24 +258,57 @@ class ResultBubble:
         self._place(backend)
         self.win.present()
         self._pointer_in_bubble = False
-        self._start_click_watcher()
+        self._start_watchers()
+        self._stall_id = GLib.timeout_add_seconds(30, self._check_stall)
 
     def _place(self, backend) -> None:
-        _, nat = self.win.get_preferred_size()
-        w, h = max(nat.width, 1), max(nat.height, 1)
         is_logical = bool(getattr(backend, "pointer_is_logical", True))
         lx, ly, geom = _logical_anchor(self._x, self._y, is_logical)
+        if geom is not None:
+            self._scroll.set_max_content_height(int(geom.height * _MAX_HEIGHT_FRACTION))
+        _, nat = self.win.get_preferred_size()
+        w, h = max(nat.width, 1), max(nat.height, 1)
+        self._placed_h = h
         tx, ty = _bubble_target(lx, ly, w, h, geom)
         if backend is not None:
             backend.move_popup_window(self.win, tx, ty)
 
-    def _start_click_watcher(self) -> None:
+    def _queue_replace(self) -> None:
+        """Re-place once the streamed text has grown the bubble, so it stays
+        on screen and, when it sits above the pointer, grows up rather than
+        down over the selection. Coalesced: tokens arrive many per frame."""
+        if self._replace_id is None and not self._dead:
+            self._replace_id = GLib.idle_add(self._replace_now)
+
+    def _replace_now(self) -> bool:
+        self._replace_id = None
+        if self._dead:
+            return False
+        _, nat = self.win.get_preferred_size()
+        if nat.height != self._placed_h:
+            self._place(_backend())
+        return False
+
+    def _start_watchers(self) -> None:
+        """Close on a click outside or Esc. X11: the popup's Xlib poll, which
+        needs no permissions. Wayland: the /dev/input watcher (needs the
+        'input' group); without it the ✕ chip and the timeouts still close."""
         try:
-            from popup import _ClickWatcher
+            from popup import _ClickWatcher, _XInputPoll
         except Exception:
-            return  # the ✕ chip and the idle timeout still close it
+            return
+        poll = _XInputPoll(self._on_global_click, self.dismiss)
+        if poll.start():
+            self._x_poll = poll
+            return
         self._click_watcher = _ClickWatcher(self._on_global_click)
         self._click_watcher.start()
+
+    def _on_key(self, _ctrl, keyval, _code, _state) -> bool:
+        if keyval == Gdk.KEY_Escape:
+            self.dismiss()
+            return True
+        return False
 
     def _on_enter(self, _ctrl, _x, _y) -> None:
         self._pointer_in_bubble = True
@@ -264,15 +324,19 @@ class ResultBubble:
     # ---- content (main thread) ------------------------------------------
     def _set_status(self, msg: str) -> bool:
         if not self._dead:
+            self._last_activity = time.monotonic()
             self._text_lbl.set_text(msg)
             self._sync_buttons()
+            self._queue_replace()
         return False
 
     def _append(self, chunk: str) -> bool:
         if not self._dead:
+            self._last_activity = time.monotonic()
             self._text += chunk
             self._text_lbl.set_text(self._text.lstrip())
             self._sync_spinner()
+            self._queue_replace()
         return False
 
     def _finish(self, text: str | None, error: str | None, warning: str | None = None) -> bool:
@@ -289,8 +353,21 @@ class ResultBubble:
             self._text = (text if text is not None else self._text).strip()
             self._text_lbl.set_text(self._text or "(no answer)")
         self._sync_buttons()
+        self._queue_replace()
         self._arm_timeout()
         return False
+
+    def _check_stall(self) -> bool:
+        """Give up on a run that has said nothing for _STALL_TIMEOUT_S: drop
+        whatever it sends later (as restart() does) and show why, which arms
+        the normal idle timeout."""
+        if self._dead:
+            self._stall_id = None
+            return False
+        if self._busy and time.monotonic() - self._last_activity > _STALL_TIMEOUT_S:
+            self._gen += 1
+            self._finish(None, "No answer from the model, so this was stopped.")
+        return True
 
     def _sync_spinner(self) -> None:
         waiting = self._busy and not self._text
@@ -368,9 +445,14 @@ class ResultBubble:
         if self._dead:
             return
         self._dead = True
-        if self._dismiss_id is not None:
-            GLib.source_remove(self._dismiss_id)
-            self._dismiss_id = None
+        for attr in ("_dismiss_id", "_stall_id", "_replace_id"):
+            source = getattr(self, attr)
+            if source is not None:
+                GLib.source_remove(source)
+                setattr(self, attr, None)
+        if self._x_poll is not None:
+            self._x_poll.stop()
+            self._x_poll = None
         if self._click_watcher is not None:
             self._click_watcher.stop()
             self._click_watcher = None
