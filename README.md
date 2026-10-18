@@ -89,7 +89,7 @@ downloads it. Settings → Advanced → *Download the AI model in the background
 changes that answer later. After that nothing goes online. `"ai_device"`
 forces `"NPU"`, `"GPU"` or `"CPU"`.
 
-`python3 main.py --doctor` (add `--json` for a bug report) checks the AI
+`vinopop --doctor` (add `--json` for a bug report) checks the AI
 packages, which devices OpenVINO sees and the order each model will try them
 in, and whether the model is downloaded. With
 [ovfetch](https://github.com/karanshukla/ovfetch) installed it also reports
@@ -105,11 +105,13 @@ cd ~/vinopop
 bash install.sh
 ```
 
-`install.sh` sets up autostart and checks your dependencies. To start it right away without logging out:
+`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. To start it right away without logging out:
 
 ```sh
-python3 ~/vinopop/main.py
+vinopop
 ```
+
+From a checkout without installing, run `./vinopop`. It shows up as `vinopop` in `ps` and `top`, so `pkill -x vinopop` stops it.
 
 To uninstall:
 

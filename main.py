@@ -159,7 +159,7 @@ def _acquire_single_instance_lock() -> None:
         message = (
             f"vinoPop is already running (PID {existing_pid}). "
             "Open the tray icon to use it. To force-restart, kill the "
-            "existing process first: pkill -f 'python3.*vinopop/main.py'"
+            "existing process first: pkill -x vinopop"
         )
         print(f"[vinopop] {message}", file=sys.stderr)
         try:
@@ -1035,6 +1035,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Captured before anything can chdir; the restart below re-runs it.
+    entry_point = os.path.abspath(sys.argv[0])
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.reset_first_run:
         # Wipe every first-run marker so the welcome flow AND the
@@ -1057,6 +1059,10 @@ def main(argv: list[str] | None = None) -> int:
     # any GTK init or hotkey grabs so the second copy exits before
     # interfering with the existing instance.
     _acquire_single_instance_lock()
+    import autostart
+
+    if autostart.migrate_from_main_py():
+        log.info("[autostart] now starts the vinopop launcher instead of main.py")
 
     # NOTE: previously we set SIGCHLD = SIG_IGN here as a cheap way to
     # auto-reap subprocess zombies. Reverted because it has been observed
@@ -1111,7 +1117,9 @@ def main(argv: list[str] | None = None) -> int:
         logging.shutdown()
         # The single-instance lock fd is close-on-exec, so the new
         # process can take it.
-        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+        # Re-run whichever entry point started us: the vinopop launcher, or
+        # main.py from an old autostart entry.
+        os.execv(sys.executable, [sys.executable, entry_point, *sys.argv[1:]])
     return 0
 
 

@@ -79,7 +79,7 @@ settings, so a second layout you switch to at runtime isn't covered.
 `zwp_virtual_keyboard_v1` protocol wtype uses. vinoPop only tries it on
 other compositors (Sway, Hyprland).
 
-Check what vinoPop found with `python3 main.py --doctor` (the
+Check what vinoPop found with `vinopop --doctor` (the
 `key injection` row).
 
 ### Modifier+double-click
@@ -102,7 +102,7 @@ shows how many vinoPop can read.
 ```sh
 git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
 cd ~/vinopop
-python3 main.py            # auto-detects the Wayland/KDE backend
+./vinopop                  # auto-detects the Wayland/KDE backend
 ```
 
 Logs: `~/.cache/vinopop/vinopop.log`.

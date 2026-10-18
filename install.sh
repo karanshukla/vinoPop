@@ -25,6 +25,7 @@ LEGACY_FILES=(
     "$ICON_DIR/io.github.GaimsDevSoftware.LinuxPop.svg"
 )
 PLUGIN_DIR="$CONFIG_HOME/vinopop/plugins"
+BIN_FILE="$HOME/.local/bin/vinopop"
 # The interpreter the launchers run. The offline-AI packages usually live
 # in a venv, and /usr/bin/python3 can't see them, so prefer one.
 if [[ -n "${VINOPOP_PYTHON:-}" ]]; then
@@ -49,6 +50,10 @@ uninstall() {
     if [[ -f "$ICON_FILE" ]]; then
         rm -v "$ICON_FILE"
     fi
+    if [[ -f "$BIN_FILE" ]] && grep -q "vinoPop launcher" "$BIN_FILE"; then
+        rm -v "$BIN_FILE"
+    fi
+    pkill -x vinopop 2>/dev/null || true
     pkill -i -f "python[0-9.]* .*(vinopop|linuxpop)/main\.py" 2>/dev/null || true
     pkill -f -- "${REPO_DIR}/main\.py" 2>/dev/null || true
     echo "[install] any running instances stopped"
@@ -88,8 +93,9 @@ if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
     fi
 fi
 
-# Write the autostart .desktop with the absolute path to main.py
-mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$PLUGIN_DIR"
+# Launchers run the vinopop script, not main.py, so the process is named
+# vinopop.
+mkdir -p "$AUTOSTART_DIR" "$APPS_DIR" "$ICON_DIR" "$PLUGIN_DIR" "$(dirname "$BIN_FILE")"
 
 # Clean up old launchers so we don't end up with duplicate entries in
 # the menu (or two autostart entries) after upgrading.
@@ -99,7 +105,7 @@ cat > "$AUTOSTART_FILE" <<EOF
 Type=Application
 Name=vinoPop
 Comment=PopClip-inspired floating action popup
-Exec="${PYTHON}" "${REPO_DIR}/main.py"
+Exec="${PYTHON}" "${REPO_DIR}/vinopop"
 Icon=vinopop
 Terminal=false
 Categories=Utility;
@@ -116,7 +122,7 @@ Type=Application
 Name=vinoPop
 GenericName=Text action popup
 Comment=PopClip-inspired floating popup of context-aware actions on selected text
-Exec="${PYTHON}" "${REPO_DIR}/main.py"
+Exec="${PYTHON}" "${REPO_DIR}/vinopop"
 Icon=${APP_ID}
 Terminal=false
 Categories=Utility;TextTools;
@@ -127,6 +133,14 @@ X-GNOME-UsesNotifications=true
 EOF
 chmod +x "$APP_FILE"
 update-desktop-database "$APPS_DIR" 2>/dev/null || true
+
+# `vinopop` on PATH, with the same interpreter the launchers use.
+cat > "$BIN_FILE" <<EOF
+#!/bin/sh
+# vinoPop launcher, written by install.sh; --uninstall removes it.
+exec "${PYTHON}" "${REPO_DIR}/vinopop" "\$@"
+EOF
+chmod 755 "$BIN_FILE"
 
 # Mirror the icon under the app ID so desktop environments can resolve it.
 if [[ -f "$REPO_DIR/icons/vinopop.svg" ]]; then
@@ -139,5 +153,9 @@ echo "[install] launcher entry written to $APP_FILE"
 echo "[install] vinoPop will start automatically next login,"
 echo "[install]   and shows up in Synapse / Mint menu / GNOME Activities."
 echo "[install] launchers run: ${PYTHON}"
-echo "[install] to start now: ${PYTHON} ${REPO_DIR}/main.py"
+echo "[install] command written to $BIN_FILE"
+case ":$PATH:" in
+    *":$(dirname "$BIN_FILE"):"*) echo "[install] to start now: vinopop" ;;
+    *) echo "[install] to start now: $BIN_FILE ($(dirname "$BIN_FILE") is not on your PATH)" ;;
+esac
 echo "[install] uninstall: bash $0 --uninstall"
