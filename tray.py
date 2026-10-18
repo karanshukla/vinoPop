@@ -138,6 +138,7 @@ class Tray:
         self._restarts = 0
         self._next_restart_at = 0.0
         self._gave_up = False
+        self._warned_no_host = False
 
         if not os.path.isfile(TRAY_SCRIPT):
             print("[tray] tray_qt.py not found - tray disabled")
@@ -265,6 +266,32 @@ class Tray:
         except OSError:
             pass
 
+    def _on_no_tray_host(self) -> None:
+        """The desktop has no tray to show our icon in, so Settings and
+        Plugins are unreachable: say so once and open Settings."""
+        if self._warned_no_host:
+            return
+        self._warned_no_host = True
+        self._notify_no_host()
+        self._on_open_settings()
+
+    @staticmethod
+    def _notify_no_host() -> None:
+        try:
+            subprocess.run(
+                [
+                    "notify-send",
+                    "-i",
+                    "vinopop",
+                    "vinoPop has no tray icon",
+                    "This desktop has no system tray, so vinoPop opened Settings "
+                    "instead. On GNOME, the AppIndicator extension adds one.",
+                ],
+                check=False,
+            )
+        except OSError:
+            pass
+
     def _dispatch(self, event: str, value: object) -> None:
         """Route an event from the tray subprocess to the right callback."""
         if event == "toggle_watcher":
@@ -279,6 +306,8 @@ class Tray:
             self._on_open_about()
         elif event == "quit":
             self._on_quit()
+        elif event == "no_tray_host":
+            self._on_no_tray_host()
         elif event == "pong":
             pass  # keepalive
 

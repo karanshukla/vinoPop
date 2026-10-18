@@ -28,6 +28,9 @@ from xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
 from xdg_paths import CONFIG_DIR, HICOLOR_APPS
 
 ICON_DIR = str(Path(__file__).resolve().parent / "icons")
+# How long after startup a missing tray host counts as missing: at login the
+# panel can come up after us.
+_TRAY_HOST_GRACE_MS = 15000
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 
@@ -99,6 +102,19 @@ class TrayQt:
 
         avail = QSystemTrayIcon.isSystemTrayAvailable()
         print(f"[tray-qt] Started (QSystemTrayIcon, tray_available={avail})", flush=True)
+        # No tray host (e.g. GNOME without the AppIndicator extension) means
+        # no way into Settings. Check again once the session has had time to
+        # start its panel, then tell the daemon so it can say so.
+        QTimer.singleShot(_TRAY_HOST_GRACE_MS, self._report_missing_host)
+
+    def _report_missing_host(self) -> None:
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        if self._client is None:  # the daemon isn't connected yet; ask again later
+            QTimer.singleShot(1000, self._report_missing_host)
+            return
+        print("[tray-qt] no system tray host: the icon won't show", flush=True)
+        self._emit("no_tray_host", None)
 
     # ─── icon ───
     def _load_icon(self) -> QIcon:

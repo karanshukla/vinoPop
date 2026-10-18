@@ -1,5 +1,6 @@
 """Icon names stay renderable on both Adwaita (GNOME) and Breeze (KDE)."""
 
+import configparser
 import json
 import re
 from pathlib import Path
@@ -13,7 +14,8 @@ ICONS = ROOT / "icons"
 
 # System icons confirmed present in BOTH Adwaita and Breeze. Using anything
 # else means a blank button on one desktop: add it to icon_style._FALLBACKS
-# (runtime swap) or pick a name from this list.
+# (runtime swap) or pick a name from this list. Checked against whichever of
+# the two is installed by test_shipped_by_both_matches_installed_themes.
 SHIPPED_BY_BOTH = {
     "accessories-dictionary-symbolic",
     "alarm-symbolic",
@@ -32,8 +34,6 @@ SHIPPED_BY_BOTH = {
     "edit-find-symbolic",
     "edit-paste-symbolic",
     "edit-select-all-symbolic",
-    "emblem-default-symbolic",
-    "emblem-favorite-symbolic",
     "emblem-system-symbolic",
     "emoji-people-symbolic",
     "face-smile-big-symbolic",
@@ -68,7 +68,6 @@ SHIPPED_BY_BOTH = {
     "starred-symbolic",
     "system-run-symbolic",
     "system-search-symbolic",
-    "tag-symbolic",
     "text-x-generic-symbolic",
     "user-trash-symbolic",
     "view-fullscreen-symbolic",
@@ -148,3 +147,100 @@ def test_available_leaves_present_and_unknown_names_alone():
     assert icon_style.available("some-custom-icon", theme) == "some-custom-icon"
     assert icon_style.available("vinopop-maps", theme) == "vinopop-maps"
     assert icon_style.available("", theme) == ""
+
+
+# Adwaita 51 dropped these; it's the icon theme on KDE in dark mode (theme.py)
+_ADWAITA_51_GAPS = {
+    "tag-symbolic": "text-x-generic-symbolic",
+    "emblem-default-symbolic": "starred-symbolic",
+    "emblem-favorite-symbolic": "starred-symbolic",
+}
+
+
+@pytest.mark.parametrize("name,expected", _ADWAITA_51_GAPS.items())
+def test_icons_newer_adwaita_lacks_fall_back(name, expected):
+    adwaita_51 = _Theme(*SHIPPED_BY_BOTH)
+    assert icon_style.available(name, adwaita_51) == expected
+
+
+def test_emblem_default_prefers_a_check_mark_when_there_is_one():
+    theme = _Theme("object-select-symbolic", "starred-symbolic")
+    assert icon_style.available("emblem-default-symbolic", theme) == "object-select-symbolic"
+
+
+def _theme_icon_names(theme: str, seen: set[str] | None = None) -> set[str] | None:
+    """Every icon name `theme` (and the themes it inherits) ships, read from
+    /usr/share/icons; None when it isn't installed."""
+    seen = seen if seen is not None else set()
+    base = Path("/usr/share/icons") / theme
+    index = base / "index.theme"
+    if theme in seen or not index.is_file():
+        return None
+    seen.add(theme)
+    names = {p.name.rsplit(".", 1)[0] for p in base.rglob("*") if p.suffix in (".svg", ".png")}
+    cfg = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cfg.read(index, encoding="utf-8")
+        parents = cfg.get("Icon Theme", "Inherits", fallback="")
+    except configparser.Error:
+        parents = ""
+    for parent in filter(None, (p.strip() for p in parents.split(","))):
+        names |= _theme_icon_names(parent, seen) or set()
+    return names
+
+
+@pytest.mark.parametrize("theme", ["Adwaita", "breeze"])
+def test_shipped_by_both_matches_installed_themes(theme):
+    names = _theme_icon_names(theme)
+    if names is None:
+        pytest.skip(f"{theme} icon theme not installed")
+    # GTK falls back from foo-symbolic to foo, so either name draws
+    missing = sorted(
+        n for n in SHIPPED_BY_BOTH if n not in names and n.removesuffix("-symbolic") not in names
+    )
+    assert not missing, f"{theme} lacks {missing}: drop them from SHIPPED_BY_BOTH"
+
+
+def test_picker_suggestions_only_offer_icons_the_theme_draws():
+    pytest.importorskip("gi")
+    try:
+        import icon_picker
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"GTK 4 unavailable: {exc}")
+    breeze_like = _Theme("network-workgroup-symbolic", "system-search-symbolic", "starred-symbolic")
+    got = icon_picker._suggestions(breeze_like)
+    assert "web-browser-symbolic" not in got  # would show image-missing
+    assert got[0] == "network-workgroup-symbolic"
+    assert all(breeze_like.has_icon(n) for n in got)
+    assert len(got) == len(set(got))
+
+
+class _Settings:
+    def __init__(self):
+        self.icon_theme = "breeze"
+        self.calls = []
+
+    def set_property(self, name, value):
+        self.calls.append(("set", name, value))
+        self.icon_theme = value
+
+    def reset_property(self, name):
+        self.calls.append(("reset", name))
+        self.icon_theme = "breeze"  # back to the session's own theme
+
+
+def test_kde_icon_theme_follows_the_mode_both_ways():
+    pytest.importorskip("gi")
+    try:
+        import theme
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"GTK 4 unavailable: {exc}")
+    s = _Settings()
+    theme._sync_icon_theme("dark", s, "wayland_kde")
+    assert s.icon_theme == "Adwaita"
+    # switching to light used to leave Adwaita forced until a restart
+    theme._sync_icon_theme("light", s, "wayland_kde")
+    assert s.icon_theme == "breeze"
+    other = _Settings()
+    theme._sync_icon_theme("dark", other, "x11")
+    assert other.calls == []

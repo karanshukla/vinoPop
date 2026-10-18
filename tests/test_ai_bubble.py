@@ -121,10 +121,12 @@ def _headless_bubble(ai_bubble, monkeypatch):
     b = ai_bubble.ResultBubble.__new__(ai_bubble.ResultBubble)
     b._dead, b._busy, b._text, b._incomplete = False, True, "", False
     b._dismiss_id = None
+    b._gen, b._last_activity = 0, 0.0
     b._text_lbl, b._warn_lbl = _Widget(), _Widget()
     b._copy_btn, b._replace_btn = _Widget(), _Widget()
     b._spinner = _Widget()
     monkeypatch.setattr(b, "_arm_timeout", lambda: None, raising=False)
+    monkeypatch.setattr(b, "_queue_replace", lambda: None, raising=False)  # no window to measure
     return b
 
 
@@ -163,3 +165,35 @@ def test_spinner_stops_on_an_error(ai_bubble, monkeypatch):
     b._set_status("Loading model on NPU…")
     b._finish(None, "Couldn't run the local model: boom")
     assert not b._spinner.spinning
+
+
+# ---- #34: stalls ----------------------------------------------------------
+def test_a_silent_run_is_given_up(ai_bubble, monkeypatch):
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(ai_bubble.time, "monotonic", lambda: now[0])
+    b._last_activity = now[0]
+    assert b._check_stall() is True and b._busy  # quiet for 0 s: fine
+    now[0] += ai_bubble._STALL_TIMEOUT_S + 1
+    assert b._check_stall() is True
+    assert not b._busy and b._gen == 1  # late output from the hung run is dropped
+    assert "No answer" in b._text_lbl.text
+
+
+def test_a_streaming_run_is_not_given_up(ai_bubble, monkeypatch):
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    now = [1000.0]
+    monkeypatch.setattr(ai_bubble.time, "monotonic", lambda: now[0])
+    b._last_activity = now[0]
+    now[0] += ai_bubble._STALL_TIMEOUT_S - 10
+    b._append("still going")
+    now[0] += 20
+    b._check_stall()
+    assert b._busy and b._gen == 0
+
+
+def test_dead_bubble_stops_the_stall_check(ai_bubble, monkeypatch):
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    b._dead = True
+    b._stall_id = 7
+    assert b._check_stall() is False and b._stall_id is None

@@ -76,13 +76,15 @@ def show_welcome_dialog(
         (
             3,
             "Open the tray icon for more",
-            "Top panel, right side -- find Settings, Plugin Manager, and your custom buttons.",
+            "It sits in your panel's system tray -- find Settings, Plugin Manager, "
+            "and your custom buttons there.",
         ),
         (
             4,
             "Starter plugins are pre-installed",
-            "Clipboard history, translate, word count, large type, transforms, and search shortcuts. "
-            "Open Plugin Manager to add more (developer tools, code formatters, QR, etc.).",
+            "Clipboard history, translate, word count, transforms, offline AI actions, and "
+            "search shortcuts. Open Plugin Manager to add more (developer tools, code "
+            "formatters, QR, large type, etc.).",
         ),
     ]:
         row = Adw.ActionRow(title=head, subtitle=body)
