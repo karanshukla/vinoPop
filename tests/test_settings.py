@@ -155,7 +155,6 @@ def test_migration_keeps_consent_and_privacy_switches(tmp_path, monkeypatch):
     # PR #47: a stored ai_prefetch_model True from the old default isn't
     # consent. It stays in the file, so prefetch_consented still sees it
     # without ai_prefetch_asked, and the migration never adds that flag.
-    monkeypatch.setitem(DEFAULTS, "openvino_telemetry", False)  # PR #46
     path = tmp_path / "settings.json"
     _old_file(path, ai_prefetch_model=True)
     s = Settings(path)
@@ -163,7 +162,6 @@ def test_migration_keeps_consent_and_privacy_switches(tmp_path, monkeypatch):
     on_disk = json.loads(path.read_text())
     assert on_disk["ai_prefetch_model"] is True
     assert not on_disk.get("ai_prefetch_asked")  # never turned into a yes
-    assert on_disk["openvino_telemetry"] is False
     for key in ("snippet_shell_enabled", "snippet_triggers_enabled", "clipboard_history_enabled"):
         assert on_disk[key] == DEFAULTS[key]
 

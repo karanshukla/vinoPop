@@ -28,6 +28,9 @@ from xdg_paths import DATA_DIR
 # huggingface_hub is imported.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+# The download itself sends nothing extra, but keep any library that calls
+# huggingface_hub.send_telemetry quiet too.
+os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 log = logging.getLogger("vinopop")
 

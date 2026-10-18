@@ -1,44 +1,53 @@
-"""OpenVINO telemetry opt-out (#19). A stand-in `openvino` package does
-what the real one does at import: no consent file, or "1", means it posts
-to Google Analytics. So these run without OpenVINO installed."""
+"""OpenVINO telemetry is blocked, not opted out of (#19, #55). Stand-in
+`openvino` and `openvino_telemetry` packages do what the real ones do at
+import: openvino loads openvino_telemetry if it can, and that posts to
+Google Analytics. So these run without OpenVINO installed."""
 
 import importlib
+import os
+import subprocess
 import sys
 import urllib.request
+from pathlib import Path
 
 import pytest
 
-import settings
-from settings import Settings
 from vino_ai import doctor, telemetry
 
 FAKE_OPENVINO = """
-from pathlib import Path
-import urllib.request
-
-_consent = Path.home() / "intel" / "openvino_telemetry"
-if not _consent.exists() or _consent.read_text().strip() == "1":
-    urllib.request.urlopen("https://www.google-analytics.com/mp/collect")
+try:
+    import openvino_telemetry
+except ImportError:
+    pass  # ovc's telemetry_stub
+else:
+    openvino_telemetry.send()
 __version__ = "0.0-fake"
 """
+
+FAKE_TELEMETRY = """
+import urllib.request
+
+def send():
+    urllib.request.urlopen("https://www.google-analytics.com/mp/collect")
+"""
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
-    """Temp HOME and settings.json, a fake openvino on sys.path, urlopen
-    recorded, and prepare() not yet run in this process."""
+    """Temp HOME, fake packages on sys.path, urlopen recorded, and neither
+    package loaded or blocked in this process yet."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(settings, "_singleton", Settings(tmp_path / "settings.json"))
-    monkeypatch.setattr(settings, "write_defaults", True)
-    monkeypatch.setattr(telemetry, "_prepared", False)
-
-    pkg = tmp_path / "site" / "openvino"
-    pkg.mkdir(parents=True)
-    (pkg / "__init__.py").write_text(FAKE_OPENVINO)
-    monkeypatch.syspath_prepend(str(tmp_path / "site"))
-    monkeypatch.delitem(sys.modules, "openvino", raising=False)
+    site = tmp_path / "site"
+    for name, source in (("openvino", FAKE_OPENVINO), ("openvino_telemetry", FAKE_TELEMETRY)):
+        (site / name).mkdir(parents=True)
+        (site / name / "__init__.py").write_text(source)
+    monkeypatch.syspath_prepend(str(site))
+    for name in ("openvino", "openvino_telemetry"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
     importlib.invalidate_caches()
 
     calls = []
@@ -49,14 +58,11 @@ def env(monkeypatch, tmp_path):
 
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
     yield home, calls
-    sys.modules.pop("openvino", None)
+    for name in ("openvino", "openvino_telemetry"):
+        sys.modules.pop(name, None)
 
 
-def _consent(home):
-    return (home / "intel" / "openvino_telemetry").read_text()
-
-
-def test_fake_openvino_phones_home_without_opt_out(env):
+def test_fake_openvino_phones_home_unless_blocked(env):
     # Guards the stand-in: without prepare() the import does call out.
     _home, calls = env
     with pytest.raises(OSError):
@@ -64,81 +70,39 @@ def test_fake_openvino_phones_home_without_opt_out(env):
     assert calls
 
 
-def test_prepare_opts_out_before_import(env):
+def test_prepare_blocks_it_before_import(env):
     home, calls = env
     telemetry.prepare()
-    importlib.import_module("openvino")
-    assert _consent(home) == "0"
+    telemetry.prepare()  # repeat calls are fine
+    assert telemetry.blocked()
+    assert importlib.import_module("openvino").__version__ == "0.0-fake"
     assert calls == []
-    s = settings.get_settings()
-    assert s.get("openvino_telemetry") is False
-    assert s.get("openvino_telemetry_file_owned") is True
-
-
-def test_prepare_writes_opt_in_from_setting(env):
-    home, _calls = env
-    settings.get_settings().set("openvino_telemetry", True)
-    telemetry.prepare()
-    assert _consent(home) == "1"
-
-
-def test_prepare_leaves_foreign_consent_file(env):
-    # The user ran Intel's opt_in_out --opt_in themselves.
-    home, _calls = env
-    (home / "intel").mkdir()
-    (home / "intel" / "openvino_telemetry").write_text("1")
-    telemetry.prepare()
-    assert _consent(home) == "1"
-    assert telemetry.enabled() is True
-    assert settings.get_settings().get("openvino_telemetry_file_owned") is False
-
-
-def test_toggle_writes_consent_file(env):
-    home, _calls = env
-    (home / "intel").mkdir()
-    (home / "intel" / "openvino_telemetry").write_text("1")
-    assert telemetry.set_enabled(False)
-    assert _consent(home) == "0"
-    assert telemetry.set_enabled(True)
-    assert _consent(home) == "1"
-    s = Settings(settings.get_settings().path)  # what was saved to disk
-    assert s.get("openvino_telemetry") is True
-    assert s.get("openvino_telemetry_file_owned") is True
-
-
-def test_prepare_skips_without_openvino(env, monkeypatch):
-    home, _calls = env
-    monkeypatch.setattr(telemetry.importlib.util, "find_spec", lambda _name: None)
-    telemetry.prepare()
     assert not (home / "intel").exists()
 
 
-def test_doctor_version_opts_out_first(env, monkeypatch):
+def test_users_consent_file_is_left_alone(env):
     home, calls = env
-    monkeypatch.setattr(settings, "write_defaults", False)  # as doctor.main() does
-    assert doctor._version("openvino") == "0.0-fake"
-    assert _consent(home) == "0"
-    assert calls == []
-    # --doctor reads only: settings.json is not written.
-    assert not settings.get_settings().path.exists()
-
-
-def test_doctor_telemetry_row(env):
-    home, _calls = env
     (home / "intel").mkdir()
-    path = home / "intel" / "openvino_telemetry"
-    path.write_text("0")
-    assert doctor._telemetry()[0].status == doctor.OK
-    path.write_text("1")
-    row = doctor._telemetry()[0]
-    assert row.status == doctor.WARN and "ENABLED" in row.detail
-
-
-def test_real_openvino_telemetry_reads_our_file(env):
-    """Our "0" is what Intel's checker treats as declined."""
-    checker_mod = pytest.importorskip("openvino_telemetry.utils.opt_in_checker")
-    home, _calls = env
+    consent = home / "intel" / "openvino_telemetry"
+    consent.write_text("1")  # opted in for their other OpenVINO tools
     telemetry.prepare()
-    checker = checker_mod.OptInChecker()
-    assert checker.consent_file() == str(home / "intel" / "openvino_telemetry")
-    assert checker.check(enable_opt_in_dialog=False) == checker_mod.ConsentCheckResult.DECLINED
+    importlib.import_module("openvino")
+    assert calls == []
+    assert consent.read_text() == "1"
+
+
+def test_doctor_reports_the_block(env):
+    _home, calls = env
+    assert doctor._version("openvino") == "0.0-fake"
+    assert calls == []
+    row = doctor._telemetry()[0]
+    assert row.status == doctor.OK and "blocked" in row.detail
+
+
+def test_real_openvino_writes_nothing_to_intel(tmp_path):
+    """The real package, in a fresh process: no GA client id, no stats."""
+    pytest.importorskip("openvino_telemetry")
+    env = {**os.environ, "HOME": str(tmp_path), "https_proxy": "http://127.0.0.1:9"}
+    code = "from vino_ai import telemetry; telemetry.prepare(); import openvino; openvino.Core()"
+    subprocess.run([sys.executable, "-c", code], cwd=REPO, env=env, check=True, timeout=120)
+    assert not (tmp_path / "intel").exists()
