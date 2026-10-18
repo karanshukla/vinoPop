@@ -45,8 +45,13 @@ def test_llm_prefers_npu(fake_devices):
     assert devices.candidates(devices.LLM_ORDER) == ["NPU", "GPU", "CPU"]
 
 
-def test_ocr_skips_npu(fake_devices):
+def test_ocr_prefers_cpu_and_skips_npu(fake_devices):
     fake_devices(["CPU", "GPU", "NPU"])
+    assert devices.candidates(devices.OCR_ORDER) == ["CPU", "GPU"]
+
+
+def test_ocr_on_gpu_when_forced(fake_devices):
+    fake_devices(["CPU", "GPU", "NPU"], setting="gpu")
     assert devices.candidates(devices.OCR_ORDER) == ["GPU", "CPU"]
 
 
