@@ -2,7 +2,6 @@
 layer-shell margins, HiDPI conversion for the AI bubble, per-monitor OCR
 capture. All with fake monitors; no compositor needed."""
 
-import subprocess
 import threading
 import time
 from types import SimpleNamespace
@@ -68,13 +67,17 @@ def wayland_backend(monkeypatch):
 
     calls = []
 
-    def fake_run(argv, **_kw):
-        calls.append(argv)
-        time.sleep(0.2)  # a real round-trip takes about this long
-        return subprocess.CompletedProcess(argv, 0, stdout="2100 640\n", stderr="")
+    class FakeKWin:
+        answers: list[str] = []
 
-    monkeypatch.setattr(wayland_kde.subprocess, "run", fake_run)
-    return wayland_kde.WaylandKdeBackend(), calls
+        def query(self, kind):
+            calls.append(kind)
+            time.sleep(0.05)  # a real round-trip takes a few ms
+            return self.answers.pop(0) if self.answers else "2100 640"
+
+    backend = wayland_kde.WaylandKdeBackend()
+    backend._kwin = FakeKWin()
+    return backend, calls
 
 
 def test_concurrent_pointer_queries_share_one_result(wayland_backend):
@@ -104,16 +107,9 @@ def test_pointer_cache_expires(wayland_backend):
     assert len(calls) == 2
 
 
-def test_failed_pointer_query_is_not_cached(wayland_backend, monkeypatch):
+def test_failed_pointer_query_is_not_cached(wayland_backend):
     backend, _ = wayland_backend
-    from platform_backend import wayland_kde
-
-    outputs = iter(["", "5 6\n"])
-    monkeypatch.setattr(
-        wayland_kde.subprocess,
-        "run",
-        lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, stdout=next(outputs), stderr=""),
-    )
+    backend._kwin.answers = ["", "5 6"]
     assert backend.pointer_position() == (0, 0)
     assert backend.pointer_position() == (5, 6)
 

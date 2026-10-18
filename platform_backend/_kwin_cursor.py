@@ -5,8 +5,9 @@ KWin scripting API does (`workspace.cursorPos`), reachable over DBus. We load a
 one-line KWin script that pushes the position back to us via callDBus - far
 faster than the journalctl route - then print and exit.
 
-Run as a short-lived subprocess from wayland_kde.WaylandKdeBackend.pointer_position
-so the round-trip's GLib main loop never tangles with the main app's loop.
+The app asks through the long-lived _kwin_query.py process (kept out of the
+main app so its GLib main loop never tangles with ours); this one-shot form
+is for debugging.
 """
 
 from __future__ import annotations
