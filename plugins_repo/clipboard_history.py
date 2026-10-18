@@ -2634,17 +2634,20 @@ class _PickerDialog:
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         vbox.set_hexpand(True)
         title = Gtk.Label(xalign=0)
-        title_markup = f"<b>{GLib.markup_escape_text(entry.preview())}</b>"
-        if is_snippet and entry.trigger:
-            triggers_display = ", ".join(entry.trigger_list())
-            title_markup += (
-                f"  <small><span foreground='#5B7DF5'>"
-                f"⇥ {GLib.markup_escape_text(triggers_display)}</span></small>"
-            )
-        title.set_markup(title_markup)
+        title.set_markup(f"<b>{GLib.markup_escape_text(entry.preview())}</b>")
         title.set_ellipsize(Pango.EllipsizeMode.END)
         title.set_max_width_chars(60)
-        vbox.append(title)
+        if is_snippet and entry.trigger:
+            title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            title_row.append(title)
+            triggers_display = ", ".join(entry.trigger_list())
+            trigger_lbl = Gtk.Label(xalign=0)
+            trigger_lbl.set_markup(f"<small>⇥ {GLib.markup_escape_text(triggers_display)}</small>")
+            trigger_lbl.add_css_class("lp-accent")
+            title_row.append(trigger_lbl)
+            vbox.append(title_row)
+        else:
+            vbox.append(title)
 
         if is_snippet and entry.name:
             # Show a preview of contents under the name, plus a usage
@@ -3116,7 +3119,8 @@ class _PickerDialog:
             ]:
                 row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
                 num = Gtk.Label(xalign=0, yalign=0)
-                num.set_markup(f"<span foreground='#5B7DF5' weight='bold' size='large'>{n}</span>")
+                num.set_markup(f"<span weight='bold' size='large'>{n}</span>")
+                num.add_css_class("lp-accent")
                 row.append(num)
                 text = Gtk.Label(xalign=0, yalign=0)
                 text.set_markup(f"<b>{head}</b>\n<span fgalpha='55%'>{body}</span>")
@@ -3188,9 +3192,8 @@ class _PickerDialog:
             ]
             for i, (tag, desc) in enumerate(ph_rows):
                 tag_lbl = Gtk.Label(xalign=0, yalign=0)
-                tag_lbl.set_markup(
-                    f"<tt><span foreground='#7C3AED'>{GLib.markup_escape_text(tag)}</span></tt>"
-                )
+                tag_lbl.set_markup(f"<tt>{GLib.markup_escape_text(tag)}</tt>")
+                tag_lbl.add_css_class("lp-accent")
                 tag_lbl.set_selectable(True)
                 grid.attach(tag_lbl, 0, i, 1, 1)
                 desc_lbl = Gtk.Label(xalign=0, yalign=0)
@@ -3246,10 +3249,8 @@ class _PickerDialog:
                 code_frame = Gtk.Frame()
                 code_frame.add_css_class("lp-card")
                 code = Gtk.Label(xalign=0, selectable=True)
-                code.set_markup(
-                    f"<tt><span foreground='#5B7DF5'>"
-                    f"{GLib.markup_escape_text(body_text)}</span></tt>"
-                )
+                code.set_markup(f"<tt>{GLib.markup_escape_text(body_text)}</tt>")
+                code.add_css_class("lp-accent")
                 code.set_wrap(True)
                 code.set_margin_top(4)
                 code.set_margin_bottom(4)

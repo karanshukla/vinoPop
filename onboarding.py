@@ -23,19 +23,19 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-# ── brand palette (matches theme.py / the app icon) ──────────────────────────
-BLUE = (0.357, 0.490, 0.961)  # #5B7DF5
-VIOLET = (0.486, 0.227, 0.929)  # #7C3AED
-PINK = (0.925, 0.282, 0.600)  # #EC4899
-GREEN = (0.204, 0.780, 0.349)  # #34C759
+# ── brand palette (the vino family's, as in theme.py / the app icon) ─────────
+GREEN = (0.157, 0.588, 0.314)  # #289650
+OCHRE = (0.722, 0.451, 0.0)  # #b87300
+MINT = (0.337, 0.800, 0.471)  # #56cc78
+FOREST = (0.102, 0.439, 0.251)  # #1a7040 - reads as text on the light stage
 AMBER = (0.97, 0.70, 0.30)
-INK = (0.105, 0.130, 0.184)  # #1c2231 - dark text on the light stage
-MUTE = (0.62, 0.66, 0.74)
-STAGE = (0.985, 0.990, 1.0)  # near-white card the scenes sit on
-STAGE_BORDER = (0.86, 0.88, 0.93)
-PANEL = (0.95, 0.96, 0.985)
+INK = (0.110, 0.114, 0.125)  # #1c1d20 - dark text on the light stage
+MUTE = (0.627, 0.643, 0.675)  # #a0a4ac
+STAGE = (0.980, 0.980, 0.980)  # #fafafa - card the scenes sit on
+STAGE_BORDER = (0.886, 0.890, 0.902)  # #e2e3e6
+PANEL = (0.949, 0.953, 0.961)  # #f2f3f5
 
-_ACCENTS = [BLUE, VIOLET, PINK, GREEN]
+_ACCENTS = [GREEN, OCHRE, MINT, FOREST]
 
 
 # ── easing / drawing helpers ─────────────────────────────────────────────────
@@ -146,8 +146,8 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
     cr.close_path()
     _rrect(cr, -bw, -bh, 2 * bw, 2 * bh, 19)
     g = cairo.LinearGradient(-bw, -bh, bw, bh)
-    g.add_color_stop_rgb(0, *BLUE)
-    g.add_color_stop_rgb(1, *VIOLET)
+    g.add_color_stop_rgb(0, *GREEN)
+    g.add_color_stop_rgb(1, *OCHRE)
     cr.set_source(g)
     cr.fill()
     # glossy highlight
@@ -185,7 +185,7 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
     # cheeks
     for sgn in (-1, 1):
         cr.arc(sgn * 19, 6, 3.4, 0, 2 * math.pi)
-        cr.set_source_rgba(*PINK, 0.35)
+        cr.set_source_rgba(*MINT, 0.35)
         cr.fill()
     # mouth
     cr.set_source_rgb(1, 1, 1)
@@ -215,7 +215,7 @@ def _speech(cr, x, y, text, a=1.0, tail_x=18):
     _rrect(cr, x, y, w, h, 12)
     cr.set_source_rgba(1, 1, 1, a)
     cr.fill_preserve()
-    cr.set_source_rgba(*BLUE, 0.30 * a)
+    cr.set_source_rgba(*GREEN, 0.30 * a)
     cr.set_line_width(1.0)
     cr.stroke()
     # tail
@@ -232,7 +232,7 @@ def _speech(cr, x, y, text, a=1.0, tail_x=18):
 def _pointer(cr, x, y, scale=1.0, click=0.0):
     if click > 0:
         cr.arc(x, y, 7 + 12 * click, 0, 2 * math.pi)
-        cr.set_source_rgba(*BLUE, 0.30 * (1 - click))
+        cr.set_source_rgba(*GREEN, 0.30 * (1 - click))
         cr.fill()
     cr.save()
     cr.translate(x, y)
@@ -282,7 +282,7 @@ def _popupbar(cr, x, y, n, a, icons=None):
     _rrect(cr, x, y, w, h, 11)
     cr.set_source_rgba(1, 1, 1, a)
     cr.fill_preserve()
-    cr.set_source_rgba(*BLUE, 0.18 * a)
+    cr.set_source_rgba(*GREEN, 0.18 * a)
     cr.set_line_width(1.0)
     cr.stroke()
     for i in range(n):
@@ -298,7 +298,7 @@ def _popupbar(cr, x, y, n, a, icons=None):
     return w
 
 
-def _keycap(cr, x, y, label, press, accent=BLUE):
+def _keycap(cr, x, y, label, press, accent=GREEN):
     kw = 26 + 15 * len(label)
     dy = 4 * press
     _rrect(cr, x, y + dy, kw, 40, 9)
@@ -343,7 +343,7 @@ def _plugcard(cr, x, y, w, h, accent, name, a=1.0, lift=0.0, check=0.0):
     _bar(cr, x + 42, y + h / 2 + 6, w - 64, 5, (0.84, 0.86, 0.92), a)
     if check > 0:
         cr.arc(x + w - 15, y + 14, 8 * _eob(check), 0, 2 * math.pi)
-        cr.set_source_rgba(*GREEN, a)
+        cr.set_source_rgba(*FOREST, a)
         cr.fill()
         if check > 0.55:
             cr.set_source_rgb(1, 1, 1)
@@ -415,9 +415,9 @@ def _draw_how(cr, w, h, t):
     selw = wid[1] * sel
     if sel > 0:
         _rrect(cr, lx - 4, ys[1] - 5, selw + 8, 19, 4)
-        cr.set_source_rgba(*BLUE, 0.28 * fade)
+        cr.set_source_rgba(*GREEN, 0.28 * fade)
         cr.fill()
-        _bar(cr, lx, ys[1], selw, 9, BLUE, fade)
+        _bar(cr, lx, ys[1], selw, 9, GREEN, fade)
     # popup springs up under the selection
     pa = _seg(lt, 2.0, 2.5)
     if pa > 0:
@@ -441,16 +441,16 @@ def _draw_how(cr, w, h, t):
         if rr > 0:
             ry = py - 8 - 16 * _eo(rr)
             _rrect(cr, px + 6, ry, 78, 22, 8)
-            cr.set_source_rgba(*GREEN, 0.16 * fade * (1 - _seg(lt, T - 1.0, T)))
+            cr.set_source_rgba(*FOREST, 0.16 * fade * (1 - _seg(lt, T - 1.0, T)))
             cr.fill()
-            cr.set_source_rgba(*GREEN, fade)
+            cr.set_source_rgba(*FOREST, fade)
             cr.set_line_width(2)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
             cr.move_to(px + 16, ry + 11)
             cr.line_to(px + 21, ry + 16)
             cr.line_to(px + 30, ry + 6)
             cr.stroke()
-            _text(cr, px + 38, ry + 15, "done", 11, GREEN, fade, bold=True)
+            _text(cr, px + 38, ry + 15, "done", 11, FOREST, fade, bold=True)
     # the guide enters from the right and points at the popup
     mx = sx + sw - 70
     my = sy + sh / 2 - 6
@@ -488,7 +488,7 @@ def _draw_summon(cr, w, h, t):
     if seg < 2:
         keys = keys2 if seg == 1 else keys1
         label = "Clipboard history" if seg == 1 else "Popup hotkey"
-        accent = VIOLET if seg == 1 else BLUE
+        accent = OCHRE if seg == 1 else GREEN
         # keycaps press in sequence
         widths = [26 + 15 * len(k) for k in keys]
         total = sum(widths) + 26 * (len(keys) - 1)
@@ -526,7 +526,7 @@ def _draw_summon(cr, w, h, t):
     else:
         # seg 2: snippets / text expansion - type a short trigger, it
         # expands into the whole text. Lives inside clipboard history.
-        accent = PINK
+        accent = MINT
         _text(cr, cx, cy - 18, "Snippets & text expansion", 13, accent, bold=True, center=True)
         fw, fh = 224, 46
         fx = cx - fw / 2
@@ -562,7 +562,7 @@ def _draw_summon(cr, w, h, t):
             for k in range(4):
                 ang = k * (math.pi / 2) + 0.4
                 rr = 6 + 10 * spark
-                cr.set_source_rgba(*PINK, spark)
+                cr.set_source_rgba(*MINT, spark)
                 cr.move_to(scx + 3 * math.cos(ang), scy + 3 * math.sin(ang))
                 cr.line_to(scx + rr * math.cos(ang), scy + rr * math.sin(ang))
                 cr.stroke()
@@ -591,12 +591,12 @@ def _draw_summon(cr, w, h, t):
 
 # ── scene 3: add ready-made plugins (a little store) ─────────────────────────
 _PLUGINS = [
-    ("Translate", BLUE),
-    ("Clipboard", VIOLET),
-    ("Transforms", PINK),
-    ("Word count", GREEN),
+    ("Translate", GREEN),
+    ("Clipboard", OCHRE),
+    ("Transforms", MINT),
+    ("Word count", FOREST),
     ("QR code", AMBER),
-    ("Search", BLUE),
+    ("Search", GREEN),
 ]
 
 
@@ -650,10 +650,10 @@ def _draw_plugins(cr, w, h, t):
     _rrect(cr, tx, ty, tw, th, 12)
     cr.set_source_rgba(*PANEL, 1)
     cr.fill_preserve()
-    cr.set_source_rgba(*GREEN, 0.35)
+    cr.set_source_rgba(*FOREST, 0.35)
     cr.set_line_width(1.2)
     cr.stroke()
-    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, GREEN, bold=True, center=True)
+    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, FOREST, bold=True, center=True)
     for i in range(installed_count):
         iy = ty + 30 + i * 26
         acc = _PLUGINS[picks[i]][1]
@@ -690,9 +690,9 @@ def _draw_recipe(cr, w, h, t):
     T = 7.4
     lt = t % T
     blocks = [
-        ("When", "text is a URL", BLUE),
-        ("Then", "open in browser", VIOLET),
-        ("Run", "your action", GREEN),
+        ("When", "text is a URL", GREEN),
+        ("Then", "open in browser", OCHRE),
+        ("Run", "your action", FOREST),
     ]
     bw, bh = 132, 56
     gap = 18
@@ -743,7 +743,7 @@ def _draw_recipe(cr, w, h, t):
         # the new custom button glows
         glow = _bump(_seg(lt, 4.0, 5.4))
         cr.arc(sx + sw / 2 - 40, py + 20, 12 + 8 * glow, 0, 2 * math.pi)
-        cr.set_source_rgba(*GREEN, 0.30 * glow)
+        cr.set_source_rgba(*FOREST, 0.30 * glow)
         cr.fill()
     _mascot(
         cr,
@@ -777,11 +777,11 @@ def _draw_ai(cr, w, h, t):
     _rrect(cr, cx, cy, cw, ch, 14)
     cr.set_source_rgba(1, 1, 1, a)
     cr.fill_preserve()
-    cr.set_source_rgba(*VIOLET, 0.30 * a)
+    cr.set_source_rgba(*OCHRE, 0.30 * a)
     cr.set_line_width(1.2)
     cr.stroke()
     _rrect(cr, cx + 16, cy + 18, 34, 34, 9)
-    cr.set_source_rgba(*VIOLET, a)
+    cr.set_source_rgba(*OCHRE, a)
     cr.fill()
     # down arrow on the chip
     cr.set_source_rgba(1, 1, 1, a)
@@ -799,7 +799,7 @@ def _draw_ai(cr, w, h, t):
     fill = _eio(_seg(lt, 0.6, 4.6))
     _bar(cr, cx + 16, cy + 66, cw - 32, 8, (0.88, 0.90, 0.95), a)
     if fill > 0.01:
-        _bar(cr, cx + 16, cy + 66, (cw - 32) * fill, 8, GREEN if fill >= 1 else VIOLET, a)
+        _bar(cr, cx + 16, cy + 66, (cw - 32) * fill, 8, FOREST if fill >= 1 else OCHRE, a)
     _mascot(
         cr,
         sx + 70,
@@ -842,12 +842,12 @@ def _draw_done(cr, w, h, t):
     _rrect(cr, tagx, tagy, 134, 26, 8)
     cr.set_source_rgba(*PANEL, 1)
     cr.fill_preserve()
-    cr.set_source_rgba(*BLUE, 0.30)
+    cr.set_source_rgba(*GREEN, 0.30)
     cr.set_line_width(1)
     cr.stroke()
     _text(cr, tagx + 12, tagy + 17, "Settings & Plugins", 11.5, INK, bold=True)
     ap = _bump((t % 2.0) / 2.0)
-    cr.set_source_rgba(*BLUE, 0.8)
+    cr.set_source_rgba(*GREEN, 0.8)
     cr.set_line_width(2.4)
     cr.set_line_cap(cairo.LINE_CAP_ROUND)
     axx = tagx + 30
@@ -950,7 +950,7 @@ def _build_pages(settings):
 # drawing), and the page titles take the brand blue as a soft accent.
 _CSS = """
 .lp-onboarding-title {
-    color: #5B7DF5;
+    color: @accent_color;
 }
 """
 _css_installed = False

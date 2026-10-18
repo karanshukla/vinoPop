@@ -4,12 +4,11 @@ libadwaita's own stylesheet is the base, so windows look native on GNOME and
 follow its light/dark handling everywhere else. install_premium_theme() maps
 the user's "dark" / "light" / "system" choice onto Adw.StyleManager's colour
 scheme (FORCE_DARK / FORCE_LIGHT / DEFAULT) and layers a small brand layer on
-top: the accent colour (cobalt blue -> royal violet -> magenta pink, from the
-app icon), the gradient on suggested-action buttons, and vinoPop's own helper
-classes (.lp-*). Everything else - header bars, rows, entries, switches,
+top: the vino family's green accent (shared with vinoWhisper, vinoAuthFace,
+vinoOpenEffects and vinoWatch) and vinoPop's own helper classes (.lp-*). Everything else - header bars, rows, entries, switches,
 popovers - is left to Adwaita.
 
-The floating popup bar is styled by popup.py. It keeps its fixed dark brand
+The floating popup bar is styled by popup.py. It keeps its fixed dark
 palette and uses _LIGHT_REMAP / _apply_remap() below to swap it to a light
 variant when the resolved mode is light.
 
@@ -30,43 +29,19 @@ from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 # @accent_bg_color, ...) so one stylesheet serves light and dark.
 _BRAND_CSS = """
 /* ============================================================
-   vinoPop brand layer over libadwaita
-     accent-1   #5B7DF5  (cobalt blue)
-     accent-2   #7C3AED  (royal violet)
-     accent-3   #EC4899  (magenta pink)
+   vinoPop brand layer over libadwaita: the vino family palette
+   (vinoWhisper, vinoAuthFace, vinoOpenEffects, vinoWatch).
+     green      #289650  (fills; #1f7d42 under white text)
+     green-ink  #1a7040 on light / #56cc78 on dark
+     amber      #b87300
+     tile       #0e0e10  with a 18% white rim
+   Flat fills, no gradients.
    ============================================================ */
 
-@define-color accent_bg_color #5B7DF5;
+@define-color accent_bg_color #1f7d42;
 @define-color accent_fg_color #ffffff;
-/* Accent used as text/foreground: a shade darker in light mode so it keeps
-   AA contrast on white (overridden for dark below). */
-@define-color accent_color #3f5fd8;
-
-/* Suggested action: the headline blue->violet gradient */
-button.suggested-action,
-button.suggested-action.pill {
-    background-image: linear-gradient(to bottom right, #5B7DF5, #7C3AED);
-    color: #ffffff;
-    box-shadow: 0 2px 6px rgba(91, 125, 245, 0.25);
-}
-
-button.suggested-action:hover {
-    background-image: linear-gradient(to bottom right, #6B8AF7, #8B4CF0);
-    box-shadow: 0 4px 12px rgba(91, 125, 245, 0.35);
-}
-
-button.suggested-action:active {
-    background-image: linear-gradient(to bottom right, #4A6CE3, #6929DB);
-}
-
-button.suggested-action:disabled {
-    background-image: none;
-    box-shadow: none;
-}
-
-progressbar progress {
-    background-image: linear-gradient(to right, #5B7DF5, #7C3AED);
-}
+/* Accent used as text/foreground (overridden for dark below). */
+@define-color accent_color #1a7040;
 
 /* ----- colored plugin badges (the onboarding-store look) ----- */
 .lp-badge {
@@ -74,10 +49,14 @@ progressbar progress {
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22),
                 0 1px 0 rgba(255, 255, 255, 0.20) inset;
 }
-.lp-badge-0 { background-image: linear-gradient(135deg, #5B7DF5, #4A6CE3); }
-.lp-badge-1 { background-image: linear-gradient(135deg, #7C3AED, #6929DB); }
-.lp-badge-2 { background-image: linear-gradient(135deg, #EC4899, #DB2777); }
-.lp-badge-3 { background-image: linear-gradient(135deg, #34C759, #16A34A); }
+.lp-badge-0 { background-color: #1f7d42; }
+.lp-badge-1 { background-color: #9a6100; }
+.lp-badge-2 { background-color: #5d6068; }
+.lp-badge-3 {
+    background-color: #0e0e10;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22),
+                inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
 .lp-badge-plain {
     background-color: #ffffff;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18),
@@ -124,9 +103,7 @@ textview.lp-cmd-edit {
 }
 
 .lp-picker list > row:selected {
-    background-image: linear-gradient(to right,
-        alpha(#5B7DF5, 0.22),
-        alpha(#7C3AED, 0.22));
+    background-color: alpha(@accent_bg_color, 0.22);
 }
 
 /* ----- vinoPop-specific helper classes -----
@@ -144,8 +121,9 @@ textview.lp-cmd-edit {
 }
 
 .lp-hero {
-    background-image: linear-gradient(135deg, #5B7DF5 0%, #7C3AED 55%, #EC4899 100%);
-    color: #ffffff;
+    background-color: #0e0e10;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    color: #fafafa;
     border-radius: 12px;
     padding: 14px 18px;
 }
@@ -163,47 +141,18 @@ textview.lp-cmd-edit {
 
 # Dark-mode overrides appended after the brand layer.
 _BRAND_DARK_CSS = """
-@define-color accent_color #8ea6ff;
+@define-color accent_color #56cc78;
 """
 
 
-# Dark -> light hex remap. Keeps the accent gradient (cobalt blue ->
-# royal violet -> magenta pink) and the destructive reds untouched -
-# those read well on either background. Only swaps the surfaces, text,
-# borders, and the muted button/sidebar tints.
+# Dark -> light hex remap for the popup bar's CSS (popup.py). The green
+# accent reads on either background, so only surfaces, text and borders swap.
 _LIGHT_REMAP = {
-    # core palette
-    "#0e1118": "#f6f7fb",  # window bg
-    "#1c2231": "#ffffff",  # surface (cards / list rows)
-    "#262d3f": "#eef0f6",  # elevated (hover / selected)
-    "#3a4258": "#d4d8e2",  # border
-    "#f0f3fa": "#1c2231",  # primary text
-    "#b8c0d4": "#5a6378",  # muted / dim labels
-    # secondary tints (buttons, sidebar, inputs)
-    "#181d2a": "#ffffff",  # entry / textview body
-    "#1a1f2c": "#e8ecf3",  # button gradient bottom
-    "#1f2433": "#f4f6fa",  # button gradient top
-    "#262c3e": "#dde1ea",  # button hover top
-    "#232a3c": "#eef0f6",  # header gradient top
-    "#1a1f2e": "#f4f6fa",  # header gradient bottom
-    "#2c3346": "#e0e4ee",  # subtle border / row bottom
-    "#161a24": "#f0f2f7",  # sidebar bg
-    "#141823": "#e0e4ee",  # notebook header
-    "#14171f": "#ebeef4",  # check/radio bg
-    "#3d4456": "#d4d8e2",  # switch track (off) - light grey in light mode
-    "#4a5266": "#a8b0c0",  # disabled text
-    "#5a6378": "#7a8090",  # placeholder text
-    # Pango-markup greys that several dialogs hard-code for dim/muted
-    # secondary text. Inverted into a darker grey for light mode so the
-    # contrast ratio stays readable (the original tones were tuned
-    # against a dark surface).
-    "#8a92a8": "#5a6378",
-    "#9aa3b8": "#5a6378",
-    "#9ba3b8": "#3a4258",
-    "#c4cad8": "#5a6378",  # popup overflow chip
-    # White-tinted highlights used for the "inset top edge" lift on
-    # cards and the header bar. Invisible on a light surface (white on
-    # white) - swap to a subtle dark shadow so the dimension survives.
+    "#0e0e10": "#ffffff",  # bar surface
+    "#2a2c30": "#e2e3e6",  # bar border
+    "#fafafa": "#1c1d20",  # primary text / icons
+    "#a0a4ac": "#5d6068",  # muted text (overflow chip)
+    # The inset top-edge lift is invisible white-on-white; swap to a shadow.
     "rgba(255, 255, 255, 0.06)": "rgba(0, 0, 0, 0.06)",
 }
 
