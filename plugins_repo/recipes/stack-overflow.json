@@ -1,5 +1,6 @@
 {
   "name": "stack-overflow",
+  "version": 1,
   "tooltip": "Search Stack Overflow",
   "icon": "help-faq-symbolic",
   "content_types": ["plain_text", "command"],

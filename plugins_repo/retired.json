@@ -1,0 +1,10 @@
+{
+  "speak.py": "Dropped in favour of vinoWhisper: it read text aloud with spd-say/espeak.",
+  "rot13.py": "Dropped from the catalogue.",
+  "ollama_ai.py": "Replaced by the offline AI plugin (Summarize, rewrite, explain).",
+  "send_to_ai.py": "Replaced by the offline AI plugin (Summarize, rewrite, explain).",
+  "send_to_mentor.py": "Replaced by the offline AI plugin (Summarize, rewrite, explain).",
+  "define.json": "Sent the selection to Google; the offline Explain button does this now.",
+  "google-translate.json": "Sent the selection to Google; the offline Translate plugin does this now.",
+  "chain-json-minify-curl.json": "Dropped as too niche for a bundled example."
+}

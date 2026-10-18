@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Clipboard history + snippets picker.
 
 Two backing stores:

@@ -85,11 +85,20 @@ Open a PR adding:
    ```json
    {
      "file": "your_plugin.py",
+     "version": 1,
      "title": "Human-readable title",
      "description": "One-sentence summary shown in the manager",
      "tags": ["category", "more-tags"]
    }
    ```
+3. The same version as the file's first line, `# vinopop-plugin-version: 1`
+   (a recipe carries it as a `"version": 1` key instead).
+
+Installing copies the file into `~/.config/vinopop/plugins/`, so a later fix
+only reaches people who installed it if you bump the version in both places:
+the Plugin Manager then offers their copy an Update. If you drop a bundled
+file, add it to `plugins_repo/retired.json` with the reason, so installs that
+still have it say so.
 
 External system dependencies (e.g. your plugin needs `imagemagick` installed)
 should fail gracefully - `shutil.which("convert")` check and a `notify-send`

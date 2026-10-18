@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """URL-encode and decode selected text."""
 
 from __future__ import annotations
@@ -62,12 +63,50 @@ def _copy_and_notify(label: str, text: str) -> None:
     )
 
 
+_HAS_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+# Delimiters that mean something inside a URL's path, query and fragment
+_URL_RESERVED = "/?#[]@!$&'()*+,;=:"
+_STRAY_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
+
+
+def _quote_component(part: str) -> str:
+    """Escape what can't appear in a URL component (spaces, quotes, non-ASCII)
+    and keep its delimiters and any %XX escapes it already has."""
+    return urllib.parse.quote(_STRAY_PERCENT.sub("%25", part), safe=_URL_RESERVED + "%")
+
+
+def _url_encoded(text: str) -> str:
+    """A whole URL keeps its scheme, host and delimiters and only gets its
+    components escaped, so it still opens. Anything else is encoded in full,
+    '/' included, ready to be slotted into a query string."""
+    if not _HAS_SCHEME.match(text):
+        return urllib.parse.quote(text, safe="")
+    parts = urllib.parse.urlsplit(text)
+    return urllib.parse.urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            _quote_component(parts.path),
+            _quote_component(parts.query),
+            _quote_component(parts.fragment),
+        )
+    )
+
+
+def _url_decoded(text: str) -> str:
+    # Form-encoded text (hello+world) writes spaces as '+'. Real spaces in
+    # the selection mean the '+' signs are literal.
+    if _PLUS_AS_SPACE.search(text) and not any(c.isspace() for c in text):
+        return urllib.parse.unquote_plus(text)
+    return urllib.parse.unquote(text)
+
+
 def _encode(text: str) -> None:
-    _copy_and_notify("URL-encoded", urllib.parse.quote(text))
+    _copy_and_notify("URL-encoded", _url_encoded(text))
 
 
 def _decode(text: str) -> None:
-    _copy_and_notify("URL-decoded", urllib.parse.unquote(text))
+    _copy_and_notify("URL-decoded", _url_decoded(text))
 
 
 def register(register_plugin) -> None:

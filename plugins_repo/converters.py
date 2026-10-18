@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Two practical converters: Unix timestamp ↔ ISO date, and color formats."""
 
 from __future__ import annotations
@@ -107,8 +108,12 @@ def _looks_like_timestamp(text: str) -> bool:
     if not s:
         return False
     # Numeric epoch (seconds or millis). Cap at 16 chars so we don't trip
-    # on huge phone-number-like strings.
+    # on huge phone-number-like strings, and require 9+ digits before the
+    # point (from 1973 on in seconds) so a plain number like 42 isn't
+    # offered as a date in 1970.
     if len(s) <= 16 and s.replace(".", "", 1).lstrip("-").isdigit():
+        if len(s.split(".")[0].lstrip("-")) < 9:
+            return False
         try:
             v = float(s)
         except ValueError:

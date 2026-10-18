@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Translate the selection in place, offline.
 
 Clicking Translate runs the selection through the local OpenVINO model and

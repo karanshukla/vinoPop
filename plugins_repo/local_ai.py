@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Summarize, rewrite and explain the selection with a local model.
 
 Everything runs on this machine through OpenVINO (NPU first, then iGPU,

@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Developer hashing and decoding utilities: SHA-256, MD5, JWT payload decode.
 SHA and MD5 copy the digest to the clipboard. JWT decode pretty-prints the
 payload and copies it.

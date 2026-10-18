@@ -113,17 +113,21 @@ def _apply_snippet_placeholders(text: str) -> str:
 
 
 def _safe_b64_decode(text: str) -> str:
-    """Best-effort base64 decode. Returns the original text on any
-    parse failure, so a chain step that hands it non-b64 still produces
-    a usable value."""
+    """Best-effort base64 decode. Returns the original text unless it is
+    strict base64 of printable UTF-8 text, so a chain step that hands it
+    an ordinary word ("test" is valid base64 of junk bytes) passes it
+    through instead of opening or pasting garbage."""
     import base64 as _b64
 
     try:
-        cleaned = text.strip()
+        cleaned = "".join(text.split())
         padded = cleaned + "=" * (-len(cleaned) % 4)
-        return _b64.b64decode(padded, validate=False).decode("utf-8", "replace")
+        decoded = _b64.b64decode(padded, validate=True).decode("utf-8")
     except Exception:
         return text
+    if not decoded or any(not c.isprintable() and c not in "\t\r\n" for c in decoded):
+        return text
+    return decoded
 
 
 def _try_json_format(text: str) -> str:
@@ -789,16 +793,25 @@ def validate(recipe: dict) -> list[str]:
     if not isinstance(recipe, dict):
         return ["recipe must be a JSON object"]
     errors = []
-    name = (recipe.get("name") or "").strip()
-    if not name:
+    # Every value comes from a hand-editable file: check types before using
+    # them, so a bad field is an error message rather than a TypeError
+    name = recipe.get("name") or ""
+    if not isinstance(name, str):
+        errors.append("'name' must be a string")
+    elif not name.strip():
         errors.append("'name' is required")
-    elif not all(c.isalnum() or c in "-_" for c in name):
+    elif not all(c.isalnum() or c in "-_" for c in name.strip()):
         errors.append("'name' must be alphanumeric / '-' / '_'")
+    for key in ("icon", "tooltip"):
+        if recipe.get(key) is not None and not isinstance(recipe[key], str):
+            errors.append(f"'{key}' must be a string")
     action = recipe.get("action") or {}
     if not isinstance(action, dict):
         return [*errors, "'action' must be an object"]
+    if action.get("title") is not None and not isinstance(action["title"], str):
+        errors.append("action.title must be a string")
     atype = action.get("type")
-    if atype not in VALID_ACTION_TYPES:
+    if not isinstance(atype, str) or atype not in VALID_ACTION_TYPES:
         errors.append(f"action.type must be one of {VALID_ACTION_TYPES}")
     # Chain actions use `steps` instead of `template`; every other
     # action type still needs a top-level template to render.
@@ -820,18 +833,24 @@ def validate(recipe: dict) -> list[str]:
                     errors.append(f"chain.steps[{i}] must be an object")
                     continue
                 stype = step.get("type", "transform")
-                if stype not in valid_step_types:
+                if not isinstance(stype, str) or stype not in valid_step_types:
                     errors.append(
                         f"chain.steps[{i}].type {stype!r} not in {sorted(valid_step_types)}"
                     )
-                if stype == "transform" and not step.get("template"):
+                stemplate = step.get("template") or ""
+                if not isinstance(stemplate, str):
+                    errors.append(f"chain.steps[{i}].template must be a string")
+                    continue
+                if stype == "transform" and not stemplate:
                     errors.append(f"chain.steps[{i}] (transform) needs a template")
-                problem = _template_problem(step.get("template") or "")
+                problem = _template_problem(stemplate)
                 if problem:
                     errors.append(f"chain.steps[{i}].template: {problem}")
     else:
         if not action.get("template", ""):
             errors.append("action.template is required")
+        elif not isinstance(action["template"], str):
+            errors.append("action.template must be a string")
         else:
             problem = _template_problem(action["template"])
             if problem:
@@ -842,7 +861,7 @@ def validate(recipe: dict) -> list[str]:
     if not isinstance(names, list):
         errors.append("'content_types' must be a list")
     else:
-        unknown = [n for n in names if n not in _CTYPE_BY_NAME]
+        unknown = [n for n in names if not isinstance(n, str) or n not in _CTYPE_BY_NAME]
         if unknown:
             errors.append(f"unknown content_types {unknown}; use {sorted(_CTYPE_BY_NAME)}")
     return errors
@@ -904,7 +923,12 @@ def load_recipes(register) -> int:
         except (OSError, json.JSONDecodeError) as exc:
             print(f"[recipe] could not read {path.name}: {exc}")
             continue
-        errors = validate(recipe)
+        try:
+            errors = validate(recipe)
+        except Exception as exc:  # noqa: BLE001
+            # validate() type-checks what it reads, but one recipe must never
+            # stop the ones after it from loading
+            errors = [f"could not validate: {exc!r}"]
         if errors:
             print(f"[recipe] {path.name} has errors: {', '.join(errors)}")
             continue
@@ -933,16 +957,19 @@ def load_recipes(register) -> int:
 
 
 def list_recipes() -> list[tuple[Path, dict]]:
-    """Return [(path, recipe_dict), ...] for the UI."""
+    """Return [(path, recipe_dict), ...] for the UI. Files that don't hold a
+    JSON object are skipped: the UI reads fields off each one."""
     out = []
     if not RECIPES_DIR.is_dir():
         return out
     for path in sorted(RECIPES_DIR.glob("*.json")):
         try:
             with path.open("r", encoding="utf-8") as f:
-                out.append((path, json.load(f)))
+                recipe = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
+        if isinstance(recipe, dict):
+            out.append((path, recipe))
     return out
 
 

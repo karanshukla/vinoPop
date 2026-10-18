@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Display the selection in giant text on screen.
 
 Lifted straight from PopClip - useful for reading something to a

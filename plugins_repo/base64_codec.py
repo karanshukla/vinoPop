@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Base64 encode/decode: writes result to clipboard and shows a notification."""
 
 from __future__ import annotations
@@ -15,10 +16,12 @@ _BASE64URL_CHARS = re.compile(r"^[A-Za-z0-9_\-=\s]+$")
 
 def _looks_like_base64(text: str) -> bool:
     """True if the text plausibly is base64 (or base64url): right alphabet,
-    length divisible by 4 after stripping whitespace, at least 8 chars
-    (shorter strings collide too easily with plain words like 'cafe')."""
+    a length that padding can complete (unpadded base64 is common, and the
+    decoder pads it), at least 8 chars (shorter strings collide too easily
+    with plain words like 'cafe')."""
     stripped = "".join(text.split())
-    if len(stripped) < 8 or len(stripped) % 4 != 0:
+    # A remainder of 1 can't be completed: no byte count encodes to it
+    if len(stripped) < 8 or len(stripped.rstrip("=")) % 4 == 1:
         return False
     if not (_BASE64_CHARS.match(stripped) or _BASE64URL_CHARS.match(stripped)):
         return False
@@ -26,7 +29,16 @@ def _looks_like_base64(text: str) -> bool:
     # A real base64 string usually mixes upper + lower OR contains digits/+//=.
     has_mixed_case = any(c.isupper() for c in stripped) and any(c.islower() for c in stripped)
     has_digit_or_sym = any(c.isdigit() or c in "+/=_-" for c in stripped)
-    return has_mixed_case or has_digit_or_sym
+    if not (has_mixed_case or has_digit_or_sym):
+        return False
+    # Without the length-divisible-by-4 rule a capitalised word like
+    # "Information" fits too. Decoding is cheap: offer it only when the
+    # result is text, which is all _decode will paste anyway.
+    try:
+        _decode_base64(text)
+    except ValueError:
+        return False
+    return True
 
 
 def _notify(title: str, body: str) -> None:

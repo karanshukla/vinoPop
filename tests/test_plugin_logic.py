@@ -204,3 +204,201 @@ def test_wordcount_counts_all_whitespace_and_lines(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda argv, **kw: bodies.append(argv[-1]))
     wordcount._count("a b\r\nc d\n")
     assert bodies == ["4 words, 9 chars (4 without whitespace), 2 lines"]
+
+
+# ---- #33: per-plugin fixes ------------------------------------------------------
+
+
+def test_json_format_refuses_duplicate_keys(replaced):
+    import json_format
+
+    json_format._format('{"a":1,"a":2}')
+    assert replaced == []  # notified the error, pasted nothing
+
+
+def test_json_format_keeps_numbers_exactly_as_written(replaced):
+    import json_format
+
+    json_format._format("[1.00000000000000000001, 12345678901234567890.5, 1e400]")
+    assert replaced[0] == "[\n  1.00000000000000000001,\n  12345678901234567890.5,\n  1e400\n]"
+
+
+def test_json_format_handles_huge_ints_and_refuses_nan(replaced):
+    import json_format
+
+    json_format._format("[" + "9" * 5000 + "]")
+    assert replaced[0] == "[\n  " + "9" * 5000 + "\n]"
+    json_format._format("[NaN, Infinity]")
+    assert replaced[1:] == []
+
+
+def test_json_format_matches_json_dumps_for_ordinary_json():
+    import json_format
+
+    text = '{"a": [1, 2.5, {"b": null, "c": "é\\n"}], "d": {}, "e": [], "f": true}'
+    assert json_format._pretty(text) == json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "func,text,expected",
+    [
+        ("_sort_lines", "b\na\n", "a\nb\n"),
+        ("_sort_lines", "y\r\nx\r\n", "x\r\ny\r\n"),
+        ("_sort_lines", "b\na", "a\nb"),
+        ("_dedupe_lines", "x\r\ny\r\nx\r\n", "x\r\ny\r\n"),
+        ("_trim_lines", " a \n b \n", "a\nb\n"),
+    ],
+)
+def test_line_transforms_keep_line_endings(replaced, func, text, expected):
+    import text_transformations as tt
+
+    getattr(tt, func)(text)
+    assert replaced[0] == expected
+
+
+@pytest.mark.parametrize("text", ["2024-10-17", "555-1234", "(555) 123-4567", "17/10/2024"])
+def test_calculator_isnt_offered_on_dates_and_phone_numbers(text):
+    import calculator
+
+    assert not calculator._looks_like_math(text)
+
+
+@pytest.mark.parametrize("text", ["10-4", "2024-10", "100 - 25", "3/4"])
+def test_calculator_still_offered_on_plain_subtraction(text):
+    import calculator
+
+    assert calculator._looks_like_math(text)
+
+
+@pytest.mark.parametrize("expr", ["999999**1000", "1e308*10", "(-1)**0.5"])
+def test_calculator_reports_unpasteable_results_instead_of_raising(replaced, expr):
+    import calculator
+
+    calculator._calc(expr)
+    assert replaced == []
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("a/b c?d", "a%2Fb%20c%3Fd"),
+        ("https://example.com/a b?q=x y&r=é", "https://example.com/a%20b?q=x%20y&r=%C3%A9"),
+        ("https://example.com/a%20b?q=100%", "https://example.com/a%20b?q=100%25"),
+    ],
+)
+def test_url_encode(text, expected):
+    import url_encode
+
+    assert url_encode._url_encoded(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("hello+world", "hello world"),
+        ("hello+world%21", "hello world!"),
+        ("c%2B%2B+tips", "c++ tips"),
+        ("1+1 = 2%25", "1+1 = 2%"),  # real spaces: the '+' is literal
+    ],
+)
+def test_url_decode_reads_plus_as_space_in_form_encoded_text(text, expected):
+    import url_encode
+
+    assert url_encode._url_decoded(text) == expected
+
+
+@pytest.fixture
+def qr_env(tmp_path, monkeypatch):
+    """qrencode 'installed', every subprocess call recorded, nothing run."""
+    import shutil
+    import subprocess
+
+    import qr_code
+
+    calls: list[tuple[list, dict]] = []
+    monkeypatch.setattr(qr_code, "QR_CACHE", tmp_path)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kw: calls.append((argv, kw)))
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
+    return calls
+
+
+def test_qr_passes_the_text_on_stdin(qr_env):
+    import qr_code
+
+    qr_code._qr("hello -o /etc/x")
+    argv, kw = qr_env[0]
+    assert argv[0] == "qrencode" and "hello -o /etc/x" not in argv
+    assert kw["input"] == b"hello -o /etc/x"
+
+
+def test_qr_refuses_text_too_long_for_a_qr_code(qr_env):
+    import qr_code
+
+    qr_code._qr("x" * 200_000)  # used to raise OSError E2BIG from argv
+    assert [argv[0] for argv, _ in qr_env] == ["notify-send"]
+    assert "Too long" in qr_env[0][0][-2]
+
+
+def test_qr_reports_an_oserror(qr_env, monkeypatch):
+    import subprocess
+
+    import qr_code
+
+    def fail(argv, **kw):
+        if argv[0] == "qrencode":
+            raise OSError(7, "Argument list too long")
+        qr_env.append((argv, kw))
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    qr_code._qr("hello")
+    assert qr_env[0][0][-2] == "QR error"
+
+
+def test_qr_install_hint_names_the_package_manager(monkeypatch):
+    import shutil
+
+    import qr_code
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/dnf" if name == "dnf" else None)
+    assert qr_code._install_hint() == "Install with: sudo dnf install qrencode"
+
+
+def test_base64_decode_offered_on_unpadded_input():
+    import base64_codec
+
+    assert base64_codec._looks_like_base64("SGVsbG8gd29ybGQ")
+    assert base64_codec._decode_base64("SGVsbG8gd29ybGQ") == "Hello world"
+    # Still not on ordinary words, now that the length needn't divide by 4
+    assert not base64_codec._looks_like_base64("Information")
+    assert not base64_codec._looks_like_base64("HelloThere")
+
+
+@pytest.mark.parametrize("text", ["42", "2024", "12345678"])
+def test_timestamp_not_offered_on_small_numbers(text):
+    import converters
+
+    assert not converters._looks_like_timestamp(text)
+
+
+@pytest.mark.parametrize("text", ["1704164645", "1704164645123", "123456789"])
+def test_timestamp_still_offered_on_epochs(text):
+    import converters
+
+    assert converters._looks_like_timestamp(text)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("éa 🇳🇴", "🇳🇴 aé"),
+        ("éa 🇳🇴", "🇳🇴 aé"),
+        ("ab 👍🏽 👨‍👩‍👧", "👨‍👩‍👧 👍🏽 ba"),
+        ("🇳🇴🇸🇪", "🇸🇪🇳🇴"),
+        ("a\r\nb", "b\r\na"),
+    ],
+)
+def test_reverse_keeps_graphemes_whole(text, expected):
+    import text_transformations as tt
+
+    assert tt._reversed_text(text) == expected

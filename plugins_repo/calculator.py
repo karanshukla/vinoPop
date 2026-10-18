@@ -1,3 +1,4 @@
+# vinopop-plugin-version: 1
 """Evaluate a math expression in the selection and show the result."""
 
 from __future__ import annotations
@@ -26,10 +27,20 @@ _ALLOWED_WORD_RE = re.compile(
     r"asin|acos|atan|floor|ceil|round|abs)$"
 )
 
+# Hyphenated numbers that are data, not a subtraction: 2024-10-17 (an ISO date,
+# "= 1997"), 17/10/2024, and phone numbers like 555-1234 or (555) 123-4567.
+_NOT_MATH_RE = re.compile(
+    r"^\d{4}-\d{1,2}-\d{1,2}$"
+    r"|^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$"
+    r"|^(?:\+\d{1,3}[\s-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])?\d{3}[\s.-]\d{4}$"
+)
+
 
 def _looks_like_math(text: str) -> bool:
     s = text.strip()
     if not s or len(s) > 200:
+        return False
+    if _NOT_MATH_RE.match(s):
         return False
     if not _HAS_DIGIT.search(s):
         return False
@@ -117,6 +128,13 @@ def _calc(text: str) -> None:
         # People write 2^8 meaning a power; in Python ^ is XOR
         tree = ast.parse(expr.replace("^", "**"), mode="eval")
         result = _eval(tree.body)
+        if isinstance(result, complex):
+            raise ValueError("the result is a complex number")
+        if isinstance(result, float) and not math.isfinite(result):
+            # 1e308*10: pasting "inf" over the selection helps nobody
+            raise ValueError("the result is too large")
+        # Inside the try: str() of an int with over 4300 digits raises
+        result_str = _format_result(result)
     except Exception as exc:  # noqa: BLE001
         subprocess.run(
             [
@@ -132,7 +150,6 @@ def _calc(text: str) -> None:
             check=False,
         )
         return
-    result_str = _format_result(result)
     # Replace "2+2" with "4" in place, fallback to clipboard-only.
     import actions
 

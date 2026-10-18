@@ -1,5 +1,6 @@
 {
   "name": "npm-lookup",
+  "version": 1,
   "tooltip": "npm package",
   "icon": "package-x-generic-symbolic",
   "content_types": ["plain_text"],
