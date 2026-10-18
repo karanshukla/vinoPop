@@ -38,3 +38,35 @@ def test_autostart_dir_follows_xdg_config_home():
     import xdg_paths
 
     assert autostart.AUTOSTART_DIR == xdg_paths.CONFIG_HOME / "autostart"
+
+
+def _point_at(tmp_path, monkeypatch):
+    monkeypatch.setattr(autostart, "AUTOSTART_DIR", tmp_path)
+    monkeypatch.setattr(autostart, "AUTOSTART_FILE", tmp_path / "vinopop.desktop")
+    monkeypatch.setattr(autostart, "LEGACY_AUTOSTART_FILE", tmp_path / "linuxpop.desktop")
+
+
+def test_set_enabled_defaults_to_the_launcher(tmp_path, monkeypatch):
+    _point_at(tmp_path, monkeypatch)
+    assert autostart.set_enabled(True)
+    exec_line = next(
+        ln for ln in autostart.AUTOSTART_FILE.read_text().splitlines() if ln.startswith("Exec=")
+    )
+    assert exec_line.endswith("/vinopop") or exec_line.endswith('/vinopop"')
+    assert autostart.LAUNCHER.is_file()
+
+
+def test_main_py_entries_are_migrated_once(tmp_path, monkeypatch):
+    _point_at(tmp_path, monkeypatch)
+    autostart.AUTOSTART_FILE.write_text(
+        '[Desktop Entry]\nExec=/usr/bin/python3 "/home/me/My Code/vinoPop/main.py"\n'
+    )
+    assert autostart.migrate_from_main_py()
+    assert "main.py" not in autostart.AUTOSTART_FILE.read_text()
+    assert not autostart.migrate_from_main_py()
+
+
+def test_no_entry_means_nothing_to_migrate(tmp_path, monkeypatch):
+    _point_at(tmp_path, monkeypatch)
+    assert not autostart.migrate_from_main_py()
+    assert not autostart.AUTOSTART_FILE.exists()

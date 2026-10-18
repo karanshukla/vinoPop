@@ -204,15 +204,15 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
 
 
 def _doctor_checks() -> list[dict]:
-    """Run `main.py --doctor --json` and return its checks."""
+    """Run `vinopop --doctor --json` and return its checks."""
     import json
     import sys
     from pathlib import Path
 
-    main_py = Path(__file__).resolve().parent / "main.py"
+    launcher = Path(__file__).resolve().parent / "vinopop"
     try:
         res = subprocess.run(
-            [sys.executable, str(main_py), "--doctor", "--json"],
+            [sys.executable, str(launcher), "--doctor", "--json"],
             capture_output=True,
             text=True,
             timeout=120,

@@ -50,7 +50,7 @@ security.cmd = "uvx --from bandit[toml]==1.9.4 bandit -c pyproject.toml -r ."
 security.help = "the same Bandit scan the Bandit workflow runs"
 check.sequence = ["lint", "fmt", "types", "test"]
 check.help = "everything CI runs, locally"
-doctor = "python main.py --doctor"
+doctor = "python vinopop --doctor"
 hooks.cmd = "git config core.hooksPath .githooks"
 hooks.help = "run the CI lint checks before every commit"
 
@@ -60,6 +60,7 @@ hooks.help = "run the CI lint checks before every commit"
 line-length = 100
 target-version = "py311"
 extend-exclude = ["docs/design"]
+extend-include = ["vinopop"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

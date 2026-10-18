@@ -19,6 +19,7 @@ AUTOSTART_DIR = CONFIG_HOME / "autostart"
 AUTOSTART_FILE = AUTOSTART_DIR / "vinopop.desktop"
 # Written by releases from before the rename to vinoPop.
 LEGACY_AUTOSTART_FILE = AUTOSTART_DIR / "linuxpop.desktop"
+LAUNCHER = Path(__file__).resolve().parent / "vinopop"
 
 
 def _exec_quote(arg: str) -> str:
@@ -59,17 +60,14 @@ def is_enabled() -> bool:
 
 def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
     """Create or remove the autostart .desktop file. Returns True on
-    success. `main_py` defaults to the currently-running main.py path
-    so a user who runs vinoPop from a non-standard checkout still gets
-    their copy on autostart, not /usr/bin/vinopop."""
+    success. `main_py` (the script to run) defaults to the `vinopop`
+    launcher in this checkout, so a user who runs vinoPop from a
+    non-standard checkout still gets their copy on autostart."""
     try:
         if enabled:
             AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
             if main_py is None:
-                # Resolve to the actual main.py we were invoked from
-                main_py = Path(sys.argv[0]).resolve()
-                if main_py.name != "main.py":
-                    main_py = Path(__file__).resolve().parent / "main.py"
+                main_py = LAUNCHER
             # Quote the path so checkouts in directories with spaces
             # (e.g. ~/My Code/vinopop/) don't produce a broken Exec line
             # that the DE silently fails to launch.
@@ -91,3 +89,19 @@ def set_enabled(enabled: bool, main_py: Path | None = None) -> bool:
         return True
     except OSError:
         return False
+
+
+def migrate_from_main_py() -> bool:
+    """Point an autostart entry from before the `vinopop` launcher at it.
+
+    Old entries run `python3 .../main.py`, which still works but shows up
+    as `python3` in ps and top. Returns True if the file was rewritten.
+    """
+    try:
+        text = AUTOSTART_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    exec_line = next((ln for ln in text.splitlines() if ln.startswith("Exec=")), "")
+    if not exec_line.rstrip('"').endswith("/main.py"):
+        return False
+    return set_enabled(True)

@@ -99,7 +99,7 @@ explaining what's missing.
 
 Please file an issue. Include:
 - Distro + desktop environment (`echo $XDG_CURRENT_DESKTOP`)
-- Output of `python3 main.py --debug`
+- Output of `vinopop --debug` (or `./vinopop --debug` from a checkout)
 - Steps to reproduce
 
 ## Development setup

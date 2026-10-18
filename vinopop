@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""vinoPop: `vinopop [--no-tray] [--debug] [--doctor [--json]]`.
+
+The app is main.py; this is what launchers, autostart and the docs run, so
+the process is called `vinopop` in ps, top and pgrep/pkill rather than
+`python3 main.py`.
+"""
+
+import sys
+
+
+def _set_process_name(name: bytes) -> None:
+    # PR_SET_NAME sets `comm`; threads started afterwards inherit it.
+    try:
+        import ctypes
+
+        ctypes.CDLL(None).prctl(15, name, 0, 0, 0)
+    except (OSError, AttributeError):
+        pass
+
+
+_set_process_name(b"vinopop")
+
+# Before GTK is imported, as in main.py, so it works over SSH too.
+if "--doctor" in sys.argv[1:]:
+    from vino_ai import doctor
+
+    sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
+
+import main  # noqa: E402
+
+sys.exit(main.main())
