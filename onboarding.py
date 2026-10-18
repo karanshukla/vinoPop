@@ -479,15 +479,17 @@ def _draw_summon(cr, w, h, t):
     sx, sy, sw, sh = _stage(cr, w, h)
     keys1 = getattr(_draw_summon, "keys", ["Super", "Shift", "Y"])
     keys2 = getattr(_draw_summon, "clip_keys", ["Ctrl", "Super", "V"])
-    T = 12.0
-    lt = t % T
-    seg = int(lt // 4.0)  # 0 popup hotkey, 1 clipboard, 2 snippets
-    base = lt - seg * 4.0  # 0..4 within the beat
+    # 0 popup hotkey, 1 clipboard, 2 snippets; only those that are switched on
+    segs = getattr(_draw_summon, "segs", (0, 1, 2)) or (0,)
+    lt = t % (4.0 * len(segs))
+    beat = int(lt // 4.0)
+    seg = segs[beat]
+    base = lt - beat * 4.0  # 0..4 within the beat
     cx = sx + sw / 2 + 18
     cy = sy + 50
     if seg < 2:
         keys = keys2 if seg == 1 else keys1
-        label = "Clipboard history" if seg == 1 else "Popup hotkey"
+        label = "Clipboard history" if seg == 1 else "Popup hotkey" if keys else "Select text"
         accent = OCHRE if seg == 1 else GREEN
         # keycaps press in sequence
         widths = [26 + 15 * len(k) for k in keys]
@@ -837,7 +839,8 @@ def _model_to_offer():
 def _draw_done(cr, w, h, t):
     sx, sy, sw, sh = _stage(cr, w, h)
     cx, cy = sx + sw / 2, sy + sh / 2 + 6
-    # tray hint: an arrow points up to a little "Settings & Plugins" tag top-right
+    # tray hint: a little "Settings & Plugins" tag. No arrow: the panel can be
+    # at any edge (top on GNOME, bottom on Plasma).
     tagx, tagy = sx + sw - 150, sy + 16
     _rrect(cr, tagx, tagy, 134, 26, 8)
     cr.set_source_rgba(*PANEL, 1)
@@ -846,17 +849,6 @@ def _draw_done(cr, w, h, t):
     cr.set_line_width(1)
     cr.stroke()
     _text(cr, tagx + 12, tagy + 17, "Settings & Plugins", 11.5, INK, bold=True)
-    ap = _bump((t % 2.0) / 2.0)
-    cr.set_source_rgba(*GREEN, 0.8)
-    cr.set_line_width(2.4)
-    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-    axx = tagx + 30
-    cr.move_to(axx, tagy + 40 + ap * 4)
-    cr.line_to(axx, tagy + 30)
-    cr.move_to(axx - 5, tagy + 35)
-    cr.line_to(axx, tagy + 30)
-    cr.line_to(axx + 5, tagy + 35)
-    cr.stroke()
     # confetti + the guide waving
     if t > 0.3:
         _confetti(cr, cx, cy - 6, t)
@@ -875,22 +867,45 @@ def _draw_done(cr, w, h, t):
     _text(cr, cx, cy + 68, "Now select some text and try it!", 14, INK, bold=True, center=True)
 
 
+def _keys(combo: str) -> list[str]:
+    return [p.strip().capitalize() for p in combo.split("+") if p.strip()]
+
+
+def _summon_copy(popup_key: str, clip_key: str, history: bool) -> tuple[str, tuple[int, ...]]:
+    """Body text and _draw_summon segments for the hotkeys really bound.
+    An empty hotkey is switched off (main.py binds nothing), and the
+    clipboard hotkey and snippets need clipboard history."""
+    if not history:
+        clip_key = ""
+    body = "It appears automatically when you select text."
+    if popup_key:
+        body += f" Or press <b>{'+'.join(_keys(popup_key))}</b> anywhere."
+    if clip_key:
+        body += (
+            f" Press <b>{'+'.join(_keys(clip_key))}</b> for clipboard history - which "
+            "also keeps your snippets, so a short trigger expands into the whole "
+            "text as you type."
+        )
+    elif history:
+        body += " Snippets expand a short trigger into the whole text as you type."
+    segs = tuple(seg for seg, on in ((0, bool(popup_key)), (1, bool(clip_key)), (2, history)) if on)
+    return body, segs
+
+
 def _build_pages(settings):
     def _g(k, d):
         try:
             v = settings.get(k)
-            return v if v else d
+            return d if v is None else v
         except Exception:
             return d
 
-    popup_key = _g("hotkey", "super+shift+y")
-    clip_key = _g("clipboard_hotkey", "super+shift+v")
-
-    def _fmt(combo):
-        return "+".join(p.strip().capitalize() for p in combo.split("+") if p.strip())
-
-    _draw_summon.keys = [p.strip().capitalize() for p in popup_key.split("+") if p.strip()]
-    _draw_summon.clip_keys = [p.strip().capitalize() for p in clip_key.split("+") if p.strip()]
+    popup_key = (_g("hotkey", "super+shift+y") or "").strip()
+    clip_key = (_g("clipboard_hotkey", "super+shift+v") or "").strip()
+    history = bool(_g("clipboard_history_enabled", True))
+    summon_body, _draw_summon.segs = _summon_copy(popup_key, clip_key, history)
+    _draw_summon.keys = _keys(popup_key)
+    _draw_summon.clip_keys = _keys(clip_key)
     model = _model_to_offer()
     ai_pages = []
     if model is not None:
@@ -915,11 +930,7 @@ def _build_pages(settings):
         ),
         dict(
             title="Summon it your way",
-            body=f"It appears automatically when you select text. Or press "
-            f"<b>{_fmt(popup_key)}</b> anywhere, and "
-            f"<b>{_fmt(clip_key)}</b> for clipboard history - which "
-            f"also keeps your snippets, so a short trigger expands "
-            f"into the whole text as you type.",
+            body=summon_body,
             draw=_draw_summon,
         ),
         dict(
@@ -928,6 +939,7 @@ def _build_pages(settings):
             "one-click install extras: transforms, QR codes, "
             "word count, search shortcuts and more.",
             draw=_draw_plugins,
+            open_plugins=True,
         ),
         dict(
             title="Build your own - no code needed",
@@ -972,6 +984,22 @@ def _install_css() -> None:
         display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
     )
     _css_installed = True
+
+
+def _page_key(keyval: int, on_control: bool) -> int | str | None:
+    """What a key does window-wide: +1 / -1 page, "close", or None to let
+    the focused widget have it. Enter and Space belong to a focused button
+    or checkbox (Space ticks "Don't show this again", Enter on Skip or Back
+    does that), so they only turn the page when focus is elsewhere."""
+    if keyval == Gdk.KEY_Right or (
+        keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space) and not on_control
+    ):
+        return 1
+    if keyval == Gdk.KEY_Left:
+        return -1
+    if keyval == Gdk.KEY_Escape:
+        return "close"
+    return None
 
 
 class OnboardingWindow(Adw.Window):
@@ -1029,6 +1057,8 @@ class OnboardingWindow(Adw.Window):
             box.append(body)
             if pg.get("ask_model"):
                 box.append(self._model_choice())
+            if pg.get("open_plugins") and self._on_open_plugins is not None:
+                box.append(self._plugins_button())
             self._carousel.append(box)
         self._carousel.connect("page-changed", self._on_page_changed)
         root.append(self._carousel)
@@ -1047,7 +1077,7 @@ class OnboardingWindow(Adw.Window):
         controls.append(self._dont)
         self._skip = Gtk.Button(label="Skip")
         self._skip.add_css_class("flat")
-        self._skip.connect("clicked", lambda _b: self._finish(open_plugins=False))
+        self._skip.connect("clicked", lambda _b: self._finish())
         controls.append(self._skip)
         controls.append(Gtk.Box(hexpand=True))
         self._back = Gtk.Button(label="Back")
@@ -1072,7 +1102,8 @@ class OnboardingWindow(Adw.Window):
         self.set_content(toolbar)
 
         # Window-wide arrows / Enter / Space / Esc, caught in the capture
-        # phase so they work whichever widget has focus.
+        # phase so they work whichever widget has focus (see _page_key for
+        # when Enter / Space are left to the focused control).
         keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key)
@@ -1082,6 +1113,22 @@ class OnboardingWindow(Adw.Window):
         # Frame-clock driven animation (replaces the old 33 ms timeout)
         self._timer = self._area.add_tick_callback(self._tick)
         self._update_controls()
+
+    def _plugins_button(self) -> Gtk.Widget:
+        """Opens Plugin Manager over the tour (which stays open), so the
+        page is usable even without a tray to reach Plugins from."""
+        btn = Gtk.Button(label="Open Plugins")
+        btn.add_css_class("pill")
+        btn.set_halign(Gtk.Align.CENTER)
+        btn.set_margin_top(4)
+        btn.connect("clicked", lambda _b: self._open_plugins())
+        return btn
+
+    def _open_plugins(self) -> None:
+        try:
+            self._on_open_plugins()
+        except Exception:
+            pass
 
     def _model_choice(self) -> Gtk.Widget:
         """Download now / Later for the AI model page. Moving on without
@@ -1142,7 +1189,7 @@ class OnboardingWindow(Adw.Window):
     def _go(self, delta):
         ni = self._index + delta
         if ni >= len(self._pages):
-            self._finish(open_plugins=False)
+            self._finish()
             return
         if ni < 0:
             return
@@ -1166,31 +1213,22 @@ class OnboardingWindow(Adw.Window):
         self._skip.set_visible(not last)
 
     def _on_key(self, _ctrl, keyval, _code, _state):
-        if keyval in (Gdk.KEY_Right, Gdk.KEY_Return, Gdk.KEY_space):
-            self._go(1)
-            return True
-        if keyval == Gdk.KEY_Left:
-            self._go(-1)
-            return True
-        if keyval == Gdk.KEY_Escape:
-            self._finish(open_plugins=False)
-            return True
-        return False
+        focus = self.get_focus()
+        step = _page_key(keyval, isinstance(focus, (Gtk.Button, Gtk.CheckButton)))
+        if step == "close":
+            self._finish()
+        elif step is not None:
+            self._go(step)
+        return step is not None
 
-    def _finish(self, open_plugins=False):
+    def _finish(self):
         if self._dont.get_active():
             try:
                 self._settings.set("show_welcome_dialog", False)
                 self._settings.save()
             except Exception:
                 pass
-        cb = self._on_open_plugins if (open_plugins and self._on_open_plugins) else None
         self.close()
-        if cb:
-            try:
-                cb()
-            except Exception:
-                pass
 
     def _on_destroy(self, _w):
         if getattr(self, "_timer", None):
