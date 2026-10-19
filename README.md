@@ -1,191 +1,89 @@
-# vinoPop
+<p align="center"><img src="icons/vinopop.svg" width="96" height="96" alt="vinoPop icon: a bar of three buttons on the dark vino tile"></p>
 
-> Like PopClip on the Mac, but for Linux.
+<h1 align="center">vinoPop</h1>
 
-Highlight some text and a little bar of buttons shows up right over it. Copy it, open it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed. You never have to move your hands away from where you were already working.
+<p align="center">Like PopClip on the Mac, but for Linux. Highlight text, get a bar of buttons that fit it. The AI ones run on your Intel NPU, and nothing leaves your machine.</p>
 
-It runs on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE, take your pick) and natively on KDE Plasma 6 / Wayland. Free, open source, and nothing phones home.
+<p align="center"><img src="docs/media/popup.svg" width="800" alt="Dragging over a paragraph in Kate pops a dark bar of buttons above it: copy, search, translate, summarize, rewrite, explain and +9. Clicking Summarize opens a bubble that streams a two-sentence summary from the local model, with Copy and Replace chips. Then selecting a sudo modprobe command pops a shorter bar whose highlighted button is Run in terminal."></p>
 
-> **X11 desktop users:** vinoPop supports X11, but recent testing has focused on KDE Plasma 6 / Wayland. If you hit a rough spot on Cinnamon, GNOME-on-X11, XFCE, or MATE, please [open an issue](https://github.com/karanshukla/vinoPop/issues).
+Select some text and a little bar shows up right over it. Copy it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed, without moving your hands from where you were already working.
 
----
+- **Reads what you selected.** Links, shell commands, file paths, emails and plain text each get the buttons that fit.
+- **Offline AI.** Summarize, rewrite, explain and translate run Gemma 4 on the NPU through OpenVINO (GPU or CPU if there's no NPU). OCR a screen region with `Shift+Super+O`.
+- **Clipboard history and snippets** on `Super+Shift+V`: recent text and images, pinned entries, and snippets with placeholders like `{date}` and `{clipboard}`.
+- **Plugins are just `.py` files**, and the recipe builder makes web searches, commands and transforms without code. Base64, JSON, hashes, timestamps, colours, a calculator, case conversion, QR codes and more ship in the box.
+- **Private.** Your text stays on your machine unless you click something that obviously goes online, like web search or opening a link. Nothing phones home.
 
-## What it does
+Runs natively on KDE Plasma 6 / Wayland, and on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE). Other Wayland desktops run under XWayland.
 
-- **Reads what you selected** and shows the buttons that fit: links, shell commands, file paths, emails, or just plain text.
-- **Global hotkey** to pop the bar on your current selection from any app.
-- **Tray icon** for settings, the plugin manager, and a quick on/off toggle.
-- **Plugins are just `.py` files.** Drop one in `~/.config/vinopop/plugins/`, or grab one from the built-in list.
-- **Plenty come bundled:** Base64, JSON pretty-print, URL encode/decode, hashes, timestamp and colour conversion, a calculator, case conversion, slugify, QR codes, large type, offline translate / summarize / rewrite / explain, and run-in-terminal for things that look like commands.
-- **Make your own buttons without code.** The recipe builder (Plugins → Custom) turns a selection into a web search, a command, a notification or a transform. Searches for Wikipedia, Maps, YouTube, Stack Overflow, MDN, GitHub, PyPI and npm ship as recipes.
-- **Clipboard history and snippets** (`Super+Shift+V`): recent text and images, pinned entries, and saved snippets with placeholders like `{date}` and `{clipboard}`. Snippets can also expand from a typed trigger, off by default.
-- **OCR a screen region** (`Shift+Super+O`): drag a box over text you can't select (a PDF scan, a video frame, an error dialog) and it lands on the clipboard and in the popup. Runs offline.
-- **Double-click a word** (while holding a modifier) to pop the bar. Works on real Wayland, not just XWayland.
-- **Your text stays on your machine** unless you click something that obviously goes online, like web search or opening a link.
+## Requirements
 
----
+- GTK 4.14+ and libadwaita 1.5+: Ubuntu 24.04, Fedora 40, Debian 13 or newer.
+- For the offline AI: an Intel NPU (Core Ultra or newer) and the [NPU driver](https://github.com/intel/linux-npu-driver). No NPU? The iGPU or CPU works, just slower.
 
-## Install from source
+## Install
 
-### System dependencies
+System packages first:
 
 ```sh
 # Ubuntu / Linux Mint / Debian
 sudo apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
-    gir1.2-adw-1 xclip xdotool xdg-utils python3-xlib
+    gir1.2-adw-1 xclip xdotool xdg-utils python3-xlib python3-pyside6.qtwidgets
 
 # Fedora
 sudo dnf install -y python3 python3-gobject gtk4 libadwaita \
-    xclip xdotool xdg-utils python3-xlib
+    xclip xdotool xdg-utils python3-xlib python3-pyside6
 
 # Arch
 sudo pacman -S python python-gobject gtk4 libadwaita \
-    xclip xdotool xdg-utils python-xlib
+    xclip xdotool xdg-utils python-xlib pyside6
 ```
 
-On KDE Plasma Wayland also install `wl-clipboard` (selection and clipboard),
-and `ydotool` if you want Paste/Cut to work without KDE's Remote Control
-prompt.
+On KDE Plasma Wayland also install `wl-clipboard`, plus `gtk4-layer-shell` for native popup placement (`gir1.2-gtk4layershell-1.0` on Debian 13 / Ubuntu 24.10+) and `ydotool` if you want Paste/Cut without KDE's Remote Control prompt.
 
-vinoPop uses GTK 4 (4.14 or newer) and libadwaita (1.5 or newer), so Ubuntu
-24.04, Fedora 40, Debian 13 or anything newer.
-
-For the tray icon, install PySide6 for the Python that runs vinoPop (it runs the
-icon in a small Qt process so it works natively on KDE and over StatusNotifier):
-
-```sh
-sudo apt-get install -y python3-pyside6.qtwidgets   # Ubuntu / Debian
-sudo dnf install -y python3-pyside6                 # Fedora
-sudo pacman -S pyside6                              # Arch
-# or, anywhere: pip install --user PySide6
-```
-
-Without it vinoPop runs fine but has no tray icon. Start with `--no-tray` to skip
-the attempt, and open the windows directly with `python3 settings_gui.py` and
-`python3 plugin_manager.py`.
-
-Optional: `qrencode` for the QR plugin, and gtk4-layer-shell for native popup
-placement on KDE Plasma Wayland (`gir1.2-gtk4layershell-1.0` on
-Debian 13 / Ubuntu 24.10+, `gtk4-layer-shell` on Fedora and Arch).
-
-On KDE Plasma Wayland, vinoPop uses gtk4-layer-shell to place the popup when
-it's installed, and XWayland otherwise. Every other Wayland desktop (GNOME,
-sway, Hyprland) runs on XWayland: the native backend needs KWin's scripting
-API for the cursor position. `VINOPOP_BACKEND=x11` or `=wayland_kde` overrides
-the choice.
-
-### Offline AI (OCR, summarize, rewrite, explain, translate)
-
-These run on your own machine through OpenVINO: the LLM on an Intel NPU when
-there is one (the iGPU or CPU otherwise), and OCR on the CPU. Install the
-Python side for the same Python that runs vinoPop:
-
-```sh
-pip install --user -r requirements-ai.txt
-```
-
-(On Debian/Ubuntu, whose system Python refuses `pip --user`, add
-`--break-system-packages` or run vinoPop from a venv created with
-`--system-site-packages` so it still sees PyGObject.)
-
-The model downloads once (Gemma 4 E2B, about 4 GB, fast and light on RAM, or
-set `"ai_llm_model": "gemma-4-e4b"` for the more accurate 5 GB one). Onboarding
-asks whether to get it now, in the background; otherwise the first AI action
-downloads it. Settings → Advanced → *Download the AI model in the background*
-changes that answer later. After that nothing goes online. `"ai_device"`
-forces `"NPU"`, `"GPU"` or `"CPU"`.
-
-`vinopop --doctor` (add `--json` for a bug report) checks the AI
-packages, which devices OpenVINO sees and the order each model will try them
-in, and whether the model is downloaded. With
-[ovfetch](https://github.com/karanshukla/ovfetch) installed it also reports
-whether the pinned OpenVINO is inside the range Intel records for your NPU
-driver. Like vinoWhisper's doctor this is diagnosis only: the NPU is still
-tried, and falls back to GPU/CPU if it won't compile.
-
-### Install vinoPop
+Then vinoPop:
 
 ```sh
 git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
 cd ~/vinopop
 bash install.sh
-```
-
-`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. To start it right away without logging out:
-
-```sh
+pip install --user -r requirements-ai.txt   # optional: the offline AI and OCR
 vinopop
 ```
 
-From a checkout without installing, run `./vinopop`. It shows up as `vinopop` in `ps` and `top`, so `pkill -x vinopop` stops it.
+`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. `bash ~/vinopop/install.sh --uninstall` removes it all.
 
-To uninstall:
+<details>
+<summary>Odds and ends</summary>
 
-```sh
-bash ~/vinopop/install.sh --uninstall
-```
+- PySide6 is only for the tray icon. Without it vinoPop runs fine with no tray; `--no-tray` skips the attempt, and `python3 settings_gui.py` / `python3 plugin_manager.py` open the windows directly.
+- `qrencode` enables the QR plugin.
+- On Debian/Ubuntu, whose system Python refuses `pip --user`, add `--break-system-packages` or use a venv created with `--system-site-packages` so it still sees PyGObject.
+- From a checkout without installing, run `./vinopop`. It shows up as `vinopop` in `ps`, so `pkill -x vinopop` stops it.
+- `vinopop --doctor` (add `--json` for a bug report) checks the AI packages, the devices OpenVINO sees and whether the model is downloaded.
+- Upgrading from LinuxPop? On first run its config, cache and data folders are renamed to `vinopop`, so settings, plugins, snippets and history carry over.
 
----
+</details>
 
-## Using it
+## Use it
 
-- Select text in any app and the popup appears above your selection.
-- Press the hotkey (default `Super+Shift+Y`) and the popup appears at the cursor with whatever's selected.
-- `Super+Shift+V` opens clipboard history and snippets; `Shift+Super+O` OCRs a screen region.
-- Hit `Esc`, click somewhere else, or just wait a few seconds and it goes away.
-- The tray icon toggles auto-popup, opens Settings and Plugins, and shows the popup on demand.
+- **Select text** in any app and the bar appears above it.
+- **`Super+Shift+Y`** pops the bar at the cursor with whatever's selected.
+- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog.
+- **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
+- `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
 
-Upgrading from LinuxPop? On first run its `linuxpop` config, cache and data
-folders are renamed to `vinopop`, so settings, plugins, snippets and history
-carry over.
+<p align="center"><img src="docs/media/clipboard.svg" width="800" alt="In a reply drafted in Kate, Super+Shift+V opens the vinoPop clipboard picker on its Recent tab: a GitHub link, a screenshot, a modprobe command and a pinned note. Tab switches to Snippets, typing sig filters to ;sig and ;sign-off, and Enter pastes Thanks, Karan and today's date where the caret was."></p>
 
-### Settings
+## Settings and plugins
 
-Right-click the tray icon and pick **Settings**, or edit
-`~/.config/vinopop/settings.json` by hand.
+Right-click the tray icon for **Settings**, or edit `~/.config/vinopop/settings.json`. [How it works](docs/how-it-works.md#settings) has every key.
 
-| Key | Default | Description |
-|---|---|---|
-| `hotkey` | `super+shift+y` | Combo to summon popup. Record via Settings dialog. |
-| `hotkey_source` | `primary` | `primary` (highlighted) or `clipboard` |
-| `clipboard_hotkey` | `super+shift+v` | Opens clipboard history and snippets. Empty disables. |
-| `ocr_hotkey` | `shift+super+o` | Capture a screen region and OCR it. Empty disables. |
-| `clipboard_history_enabled` | `true` | Remember what you copy |
-| `snippet_triggers_enabled` | `false` | Expand a snippet when you type its trigger |
-| `snippet_shell_enabled` | `false` | Let snippets run `{shell:CMD}`. Off for a reason: an imported snippet could run anything. |
-| `show_on_selection` | `true` | Auto-popup when you select text |
-| `auto_hide_initial_ms` | `6500` | Hide if mouse never reaches popup |
-| `auto_hide_leave_ms` | `4000` | Hide this long after mouse leaves the safe zone |
-| `min_selection_length_enabled` | `false` | Enable the minimum-selection-length filter |
-| `min_selection_length` | `2` | When enabled, ignore selections shorter than this |
-| `terminal_keep_open` | `true` | Keep terminal open after running a command |
-| `terminal_confirm_run` | `true` | Show the exact command before Run in terminal launches it |
-| `search_engine` | `google` | `duckduckgo`, `bing`, `brave`, `startpage`, `ecosia`, `kagi`, `qwant`, `yandex`, or `custom` |
-| `search_engine_custom_url` | `""` | For `custom`: a URL with `{q}` in it |
-| `double_click_popup_enabled` | `false` | Hold a modifier + double-click a word to pop the bar |
-| `double_click_modifier` | `ctrl` | Modifier for the double-click trigger (`ctrl`/`alt`/`super`/`shift`) |
-| `translate_target_lang` | `en` | Target language for the Translate plugin (ISO code) |
-| `ai_device` | `auto` | `NPU`, `GPU` or `CPU` to force one |
-| `ai_llm_model` | `gemma-4-e2b` | or `gemma-4-e4b` |
-| `ai_idle_unload_minutes` | `5` | Unload the model after this long idle. `0` keeps it loaded. |
-| `editable_atspi_listener_enabled` | `false` | Use AT-SPI for editable detection + selection geometry |
-| `popup_anchor_to_selection` | `true` | Anchor popup to the selection rect (needs AT-SPI enabled) |
-
-### Plugins
-
-Open **Plugins…** from the tray menu to add or remove the built-in ones,
-build a recipe under **Custom**, or drop your own `.py` file into
-`~/.config/vinopop/plugins/`.
-
-A plugin file just needs a top-level `register(register_plugin)` function:
+**Plugins…** in the tray menu adds or removes the bundled ones and builds no-code recipes under **Custom**. Searches for Wikipedia, Maps, YouTube, Stack Overflow, MDN, GitHub, PyPI and npm ship as recipes. For your own, drop a `.py` file into `~/.config/vinopop/plugins/` with a `register` function:
 
 ```python
 from classifier import ContentType
 from plugin_base import Plugin
-
-
-def _handler(text: str) -> None:
-    print("got:", text)
 
 
 def register(register_plugin) -> None:
@@ -194,36 +92,31 @@ def register(register_plugin) -> None:
             name="my-plugin",
             icon="emblem-favorite-symbolic",
             tooltip="Do something",
-            handler=_handler,
+            handler=lambda text: print("got:", text),
             content_types=(ContentType.PLAIN_TEXT,),
             priority=50,
         )
     )
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full plugin API.
-
----
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full plugin API.
 
 ## Known rough edges
 
-- **X11 support has had less recent testing.** The X11 backend (Cinnamon, GNOME-on-X11, XFCE, MATE) still runs, but recent testing has focused on KDE Plasma 6 / Wayland. Please file issues if you hit a glitch.
-- **Native Wayland means KDE Plasma for now.** vinoPop has a real Wayland backend on KDE Plasma 6: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API. Every other Wayland desktop (GNOME, sway, Hyprland) runs the X11 path under XWayland. There's more detail in [docs/FEDORA-KDE.md](docs/FEDORA-KDE.md). On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), Paste/Cut press keys through the desktop's Remote Control portal (KDE asks once; `ydotool` + `ydotoold` is the fallback), and modifier+double-click needs your user in the `input` group. Popup placement, hover persistence, click-outside dismissal and the app blocklist all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI).
-- **HiDPI** works, but has mostly been tested at 2× scaling. File an issue if the popup lands in the wrong spot on your setup.
-- **The odd input grab.** If another app is holding an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.
+- **X11 has had less recent testing** than KDE Plasma 6 / Wayland. If you hit a glitch on Cinnamon, GNOME-on-X11, XFCE or MATE, please [open an issue](https://github.com/karanshukla/vinoPop/issues).
+- **Native Wayland means KDE Plasma for now.** GNOME, sway and Hyprland run the X11 path under XWayland. [How it works](docs/how-it-works.md#backends) has the details.
+- **HiDPI** works, but has mostly been tested at 2× scaling.
+- **The odd input grab.** If another app holds an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.
 
----
+## More
+
+- [How it works](docs/how-it-works.md): backends, the offline AI setup, every setting.
+- [Fedora KDE notes](docs/FEDORA-KDE.md).
+- [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ## Credits
 
-vinoPop started as a fork of [LinuxPop](https://github.com/GaimsDevSoftware/linuxpop)
-by Robert Berge, who wrote the popup, the plugin system, the recipe builder,
-clipboard history, screen OCR and the KDE Wayland backend. Thanks for the
-original project! Since the rename, the AI actions and OCR run offline on
-OpenVINO, and the plugins that sent your text to online services (Google
-Translate, define, speak) are gone.
-
----
+vinoPop started as a fork of [LinuxPop](https://github.com/GaimsDevSoftware/linuxpop) by Robert Berge, who wrote the popup, the plugin system, the recipe builder, clipboard history, screen OCR and the KDE Wayland backend. Thanks for the original project! Since the rename, the AI actions and OCR run offline on OpenVINO, and the plugins that sent your text to online services (Google Translate, define, speak) are gone.
 
 ## License
 
