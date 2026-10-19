@@ -86,7 +86,7 @@ def test_popup_hotkey_runs_off_main_and_drops_presses_while_busy(main_mod):
     app = types.SimpleNamespace()
     _bind(app, main_mod, "_off_main")
 
-    def gather():
+    def gather(*_args):
         gathers.append(threading.current_thread().name)
         release.wait(5)
 
@@ -128,6 +128,36 @@ def test_prepare_popup_shows_on_the_gtk_thread_with_one_window_lookup(main_mod, 
     idle[0][0](*idle[0][1])
     assert shown[0]["editable"] is False  # okular is read-only
     assert lookups == [1]  # blocklist + read-only check shared one KWin lookup
+
+
+def test_popup_hotkey_closes_a_showing_popup_and_opens_a_hidden_one(main_mod):
+    from triggers.toggle import HotkeyToggle
+
+    now = [100.0]
+    hidden, opened = [], []
+    visible = [True]
+    popup = types.SimpleNamespace(
+        win=types.SimpleNamespace(get_visible=lambda: visible[0]),
+        hotkey_shown_at=None,  # up for a selection
+        hide=lambda: hidden.append(1),
+    )
+    app = types.SimpleNamespace(
+        popup=popup,
+        _popup_toggle=HotkeyToggle(lambda: now[0]),
+        show_popup_now=lambda **kw: opened.append(kw),
+    )
+    main_mod.App._on_popup_hotkey(app)
+    assert hidden == [1] and opened == []
+    visible[0] = False
+    now[0] += 1.0
+    main_mod.App._on_popup_hotkey(app)
+    assert opened == [{"via_hotkey": True}]
+    # the popup the hotkey just opened survives the key still being held
+    visible[0] = True
+    popup.hotkey_shown_at = now[0] + 0.1
+    now[0] += 0.66
+    main_mod.App._on_popup_hotkey(app)
+    assert hidden == [1]
 
 
 # ---- 3. no rebind churn ------------------------------------------------------
@@ -238,7 +268,7 @@ def test_paste_from_history_goes_through_idle_add(main_mod, monkeypatch):
     items = []
     app = types.SimpleNamespace(
         settings={"clipboard_history_enabled": True},
-        popup=types.SimpleNamespace(show_actions=lambda it, x, y: items.extend(it)),
+        popup=types.SimpleNamespace(show_actions=lambda it, x, y, **_kw: items.extend(it)),
     )
     app._on_clipboard_hotkey = lambda: pytest.fail("called on the popup's worker thread")
     assert main_mod.App._show_no_selection_popup(app, 1, 2) is False

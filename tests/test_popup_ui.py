@@ -130,3 +130,112 @@ def test_x_poll_fires_on_new_presses_only(popup, monkeypatch):
     for _ in range(4):
         poll._tick()
     assert clicks == [1] and escs == [1]
+
+
+# ---- keyboard navigation (#44) ---------------------------------------------
+@pytest.mark.parametrize(
+    "rows,index,key,shift,expected",
+    [
+        ([3], 0, "Right", False, 1),
+        ([3], 2, "Right", False, 0),  # wraps
+        ([3], 0, "Left", False, 2),
+        ([3], 1, "Tab", False, 2),
+        ([3], 1, "Tab", True, 0),  # Shift+Tab
+        ([4, 2], 3, "Right", False, 4),  # across into row 2
+        ([4, 2], 1, "Down", False, 5),
+        ([4, 2], 3, "Down", False, 5),  # clamps to row 2's last button
+        ([4, 2], 5, "Up", False, 1),
+        ([4, 2], 1, "Up", False, 1),  # already on the top row
+        ([4, 0], 1, "Down", False, 1),  # row 2 empty
+        ([4, 2], 4, "Home", False, 0),
+        ([4, 2], 0, "End", False, 5),
+        ([3], 9, "Left", False, 1),  # a stale index is clamped first
+        ([], 0, "Right", False, 0),
+    ],
+)
+def test_nav_target(popup, rows, index, key, shift, expected):
+    assert popup._nav_target(rows, index, key, shift) == expected
+
+
+class _FakeButton:
+    def __init__(self, name, log):
+        self.name = name
+        self.log = log
+        self.classes = set()
+
+    def add_css_class(self, c):
+        self.classes.add(c)
+
+    def remove_css_class(self, c):
+        self.classes.discard(c)
+
+    def emit(self, signal):
+        self.log.append((signal, self.name))
+
+
+@pytest.fixture
+def kbd(popup):
+    """A hotkey-opened PopupWindow with buttons a, b, c on row 1 and d on
+    row 2, without GTK widgets or an X connection."""
+    log = []
+    row1 = [_FakeButton(n, log) for n in "abc"]
+    row2 = [_FakeButton("d", log)]
+    p = popup.PopupWindow.__new__(popup.PopupWindow)
+    p._rows = lambda: [row1, row2]
+    p._kbd_nav = True
+    p._kbd_index = 0
+    p._last_press_state = popup.Gdk.ModifierType.SHIFT_MASK
+    p._arm_initial_hide = lambda: log.append(("rearm", None))
+
+    def _hide():
+        log.append(("hide", None))
+        p._kbd_nav = False
+
+    p.hide = _hide
+    p._kbd_select(0)
+
+    def selected():
+        return [b.name for b in row1 + row2 if "vinopop-selected" in b.classes]
+
+    return p, log, selected
+
+
+def test_keyboard_moves_the_highlight_and_enter_runs_it(kbd, popup):
+    p, log, selected = kbd
+    assert selected() == ["a"]  # opened via the hotkey: first button
+    assert p._kbd_key("Right")
+    assert p._kbd_key("Down")
+    assert selected() == ["d"]
+    assert p._kbd_key("Tab", shift=True)
+    assert selected() == ["c"]
+    assert p._kbd_key("Return")
+    assert ("clicked", "c") in log
+    # a Shift left over from an earlier mouse press doesn't make it a copy
+    assert p._last_press_state == popup.Gdk.ModifierType(0)
+    assert ("rearm", None) in log  # keys keep the popup up
+
+
+def test_space_activates_and_escape_closes(kbd):
+    p, log, _selected = kbd
+    assert p._kbd_key("space")
+    assert ("clicked", "a") in log
+    assert p._kbd_key("Escape")
+    assert ("hide", None) in log
+
+
+def test_other_keys_are_left_alone(kbd):
+    p, log, selected = kbd
+    assert not p._kbd_key("a")
+    assert selected() == ["a"] and log == []
+
+
+def test_focused_popup_routes_gtk_keys_the_same_way(kbd, popup):
+    p, _log, selected = kbd
+    Gdk = popup.Gdk
+    assert p._on_key_press(None, Gdk.KEY_Right, 0, Gdk.ModifierType(0))
+    assert selected() == ["b"]
+    # Shift+Tab arrives as ISO_Left_Tab
+    assert p._on_key_press(None, Gdk.KEY_ISO_Left_Tab, 0, Gdk.ModifierType.SHIFT_MASK)
+    assert selected() == ["a"]
+    p._kbd_nav = False  # a popup a selection opened: only Esc is handled
+    assert not p._on_key_press(None, Gdk.KEY_Right, 0, Gdk.ModifierType(0))

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 
 import gi
@@ -21,8 +22,9 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 try:
     from Xlib import XK, X  # noqa: E402
     from Xlib import display as xdisplay
+    from Xlib import error as xerror
 except Exception:  # python-xlib is absent on pure-Wayland (KDE) installs
-    X = XK = xdisplay = None  # type: ignore
+    X = XK = xdisplay = xerror = None  # type: ignore
 
 from core import actions
 from core.classifier import ContentType
@@ -76,6 +78,14 @@ button.vinopop-action:active {
 
 button.vinopop-action image {
     color: #fafafa;
+}
+
+/* The button Enter/Space would run, when the hotkey opened the popup.
+ * The popup never has keyboard focus (paste has to reach the app), so
+ * this stands in for GTK's focus ring. */
+button.vinopop-action.vinopop-selected {
+    background-color: #1f7d42;
+    color: #ffffff;
 }
 
 /* Overflow chip - shown when more plugins matched than the popup
@@ -378,6 +388,57 @@ def _x11_input_state(xdpy, esc_keycode: int) -> tuple[bool, int, int, bool]:
     return pressed, data.root_x, data.root_y, esc
 
 
+# Keys the popup takes while the hotkey's popup is up (on X11 they're grabbed
+# on the root window for that long): keysym name -> also grab with Shift.
+_NAV_KEYS = {
+    "Left": False,
+    "Right": False,
+    "Up": False,
+    "Down": False,
+    "Tab": True,  # Shift+Tab
+    "Home": False,
+    "End": False,
+    "Return": False,
+    "KP_Enter": False,
+    "space": False,
+    "Escape": False,
+}
+_ACTIVATE_KEYS = ("Return", "KP_Enter", "space")
+
+
+def _nav_target(rows: list[int], index: int, key: str, shift: bool = False) -> int:
+    """Where `key` moves the selection from flat `index`, in a bar whose
+    rows hold rows[i] buttons. Left/Right and Tab wrap across the whole
+    bar; Up/Down switch rows keeping the column."""
+    total = sum(rows)
+    if total == 0:
+        return 0
+    index = max(0, min(index, total - 1))
+    if key == "Tab":
+        key = "Left" if shift else "Right"
+    if key == "Left":
+        return (index - 1) % total
+    if key == "Right":
+        return (index + 1) % total
+    if key == "Home":
+        return 0
+    if key == "End":
+        return total - 1
+    if key in ("Up", "Down"):
+        row, col = 0, index
+        while col >= rows[row]:
+            col -= rows[row]
+            row += 1
+        step = -1 if key == "Up" else 1
+        new_row = row + step
+        while 0 <= new_row < len(rows) and rows[new_row] == 0:
+            new_row += step
+        if not 0 <= new_row < len(rows):
+            return index
+        return sum(rows[:new_row]) + min(col, rows[new_row] - 1)
+    return index
+
+
 class _XInputPoll:
     """The popup's X11 button/Esc poll, for other never-focused windows (the
     AI bubble): fires on_click / on_escape on each new press. start()
@@ -560,6 +621,16 @@ class PopupWindow:
         # screen-space safe-zone math is not (pointer.get_position() is
         # surface-local there), so Wayland persistence is driven from here.
         self._pointer_in_popup = False
+        # When the hotkey last showed the popup (time.monotonic()), or None
+        # when it's up for a selection; main.py's hotkey toggle reads it.
+        self.hotkey_shown_at: float | None = None
+        # Keyboard navigation (#44), on while a hotkey-opened popup is up:
+        # the highlighted button, and the X11 key grabs that drive it.
+        self._kbd_nav = False
+        self._kbd_index = 0
+        self._kbd_grabs: list[tuple[int, int]] = []
+        self._kbd_keys: dict[int, str] = {}
+        self._kbd_watch_id: int | None = None
 
     def _clear_buttons(self) -> None:
         # remove() drops the box's (only) GTK reference, which releases the
@@ -821,6 +892,7 @@ class PopupWindow:
         content_type: ContentType,
         editable: bool = True,
         rect: tuple[int, int, int, int] | None = None,
+        via_hotkey: bool = False,
     ) -> None:
         if self.win.get_visible() and self._pointer_in_popup:
             # The user is reaching for a button, so this isn't a selection
@@ -929,7 +1001,7 @@ class PopupWindow:
 
         specs = [(p.icon, p.tooltip, make_handler(p)) for p in plugins]
         self._present_buttons(specs, hidden_count, max_btns)
-        self._present_near(x, y, rect=rect)
+        self._present_near(x, y, rect=rect, via_hotkey=via_hotkey)
 
     def _add_overflow_chip(
         self,
@@ -1091,6 +1163,7 @@ class PopupWindow:
         items: list[tuple[str, str, Callable[[], None]]],
         x: int,
         y: int,
+        via_hotkey: bool = False,
     ) -> None:
         """Show the popup with a hard-coded list of (icon, tooltip, callback)
         actions instead of going through plugin_loader. Used for the
@@ -1128,13 +1201,14 @@ class PopupWindow:
             (icon, tooltip, make_handler(callback, tooltip)) for (icon, tooltip, callback) in items
         ]
         self._present_buttons(specs, 0, 0)
-        self._present_near(x, y)
+        self._present_near(x, y, via_hotkey=via_hotkey)
 
     def _present_near(
         self,
         x: int,
         y: int,
         rect: tuple[int, int, int, int] | None = None,
+        via_hotkey: bool = False,
     ) -> None:
         """Render the popup near physical screen coords (x, y) and arm
         the tracking/auto-hide machinery. Extracted from show_for so
@@ -1265,12 +1339,164 @@ class PopupWindow:
         # regardless of where the cursor is sitting. Cancelled by
         # _on_enter when the pointer actually reaches the popup.
         self._arm_initial_hide()
+        self.hotkey_shown_at = time.monotonic() if via_hotkey else None
+        self._kbd_stop()
+        if via_hotkey:
+            self._kbd_start()
 
     def hide(self) -> None:
         self._cancel_hide_timeout()
         self._cancel_initial_hide()
         self._stop_tracking()
+        self._kbd_stop()
+        self.hotkey_shown_at = None
         self.win.set_visible(False)
+
+    # ---- keyboard navigation (#44) -----------------------------------------
+    #
+    # The popup never takes keyboard focus, so the paste or keystroke an
+    # action sends still lands in the app the text came from. When the hotkey
+    # opened it the hands are on the keyboard, so on X11 the navigation keys
+    # are grabbed on the root window while it's up: arrows / Tab / Home / End
+    # move a highlight, Enter / Space run the highlighted button, Esc closes.
+    # _on_key_press routes the same keys if a WM focuses the popup anyway.
+    # Wayland has no such grab (the layer surface is keyboard mode NONE), so
+    # there the popup stays mouse-only for now.
+
+    def _rows(self) -> list[list[Gtk.Widget]]:
+        rows = []
+        for row in (self._row1, self._row2):
+            btns = []
+            if row.get_visible():
+                child = row.get_first_child()
+                while child is not None:
+                    if child.get_visible():
+                        btns.append(child)
+                    child = child.get_next_sibling()
+            rows.append(btns)
+        return rows
+
+    def _kbd_start(self) -> None:
+        if self._xdpy is None or X is None:
+            return
+        root = self._xdpy.screen().root
+        catchers = []
+        for name, with_shift in _NAV_KEYS.items():
+            keycode = self._xdpy.keysym_to_keycode(XK.string_to_keysym(name))
+            if not keycode:
+                continue
+            self._kbd_keys[keycode] = name
+            for mods in (0, X.ShiftMask) if with_shift else (0,):
+                for lock in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
+                    # One catcher per request: CatchError holds a single error.
+                    catcher = xerror.CatchError(xerror.BadAccess)
+                    root.grab_key(
+                        keycode,
+                        mods | lock,
+                        False,
+                        X.GrabModeAsync,
+                        X.GrabModeAsync,
+                        onerror=catcher,
+                    )
+                    catchers.append(catcher)
+                    self._kbd_grabs.append((keycode, mods | lock))
+        try:
+            self._xdpy.sync()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] grabbing the navigation keys failed: {exc}")
+        if any(c.get_error() for c in catchers):
+            # Another client owns some of these combos; the rest still work.
+            print("[popup] some navigation keys are bound by another app")
+        self._kbd_nav = True
+        self._kbd_select(0)
+        self._kbd_watch_id = GLib.io_add_watch(
+            self._xdpy.fileno(),
+            GLib.PRIORITY_DEFAULT,
+            GLib.IOCondition.IN,
+            self._kbd_on_x_input,
+        )
+
+    def _kbd_stop(self) -> None:
+        if self._kbd_watch_id is not None:
+            GLib.source_remove(self._kbd_watch_id)
+            self._kbd_watch_id = None
+        was_on, self._kbd_nav = self._kbd_nav, False
+        if self._kbd_grabs and self._xdpy is not None:
+            root = self._xdpy.screen().root
+            for keycode, mask in self._kbd_grabs:
+                try:
+                    root.ungrab_key(keycode, mask)
+                except Exception:
+                    pass
+            try:
+                self._xdpy.sync()
+                self._kbd_drain()  # drop presses that raced the ungrab
+            except Exception:
+                pass
+        self._kbd_grabs.clear()
+        self._kbd_keys.clear()
+        if was_on:
+            for btns in self._rows():
+                for btn in btns:
+                    btn.remove_css_class("vinopop-selected")
+
+    def _kbd_on_x_input(self, _fd, _cond) -> bool:
+        try:
+            self._kbd_drain()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] reading navigation keys failed: {exc}")
+        return self._kbd_watch_id is not None
+
+    def _kbd_drain(self) -> None:
+        """Handle the grabbed key presses queued on the Xlib connection.
+        _tick calls it too: replies to its queries can pull events off the
+        socket before the fd watch sees them."""
+        if self._xdpy is None:
+            return
+        while self._xdpy.pending_events():
+            event = self._xdpy.next_event()
+            if event.type != X.KeyPress or not self._kbd_nav:
+                continue
+            name = self._kbd_keys.get(event.detail)
+            if name is not None:
+                self._kbd_key(name, bool(event.state & X.ShiftMask))
+
+    def _kbd_select(self, index: int) -> None:
+        flat = [b for btns in self._rows() for b in btns]
+        if not flat:
+            return
+        self._kbd_index = max(0, min(index, len(flat) - 1))
+        for i, btn in enumerate(flat):
+            if i == self._kbd_index:
+                btn.add_css_class("vinopop-selected")
+            else:
+                btn.remove_css_class("vinopop-selected")
+
+    def _kbd_key(self, name: str, shift: bool = False) -> bool:
+        """Handle one navigation key; returns whether it was one."""
+        if name == "Escape":
+            self.hide()
+            return True
+        rows = self._rows()
+        flat = [b for btns in rows for b in btns]
+        if not flat or name not in _NAV_KEYS:
+            return False
+        # Using the keyboard counts as being on the popup: restart the
+        # auto-hide countdown rather than let it run out mid-choice.
+        self._arm_initial_hide()
+        if name in _ACTIVATE_KEYS:
+            index = min(self._kbd_index, len(flat) - 1)
+            # Shift-click means "copy instead of paste"; don't let the
+            # state of an earlier mouse press carry over to this key.
+            self._last_press_state = Gdk.ModifierType(0)
+            flat[index].emit("clicked")
+            if self._kbd_nav:
+                # Still up: the expand chevron revealed row 2. Highlight
+                # the button now in its place, the first one revealed.
+                self._kbd_select(index)
+            return True
+        self._kbd_select(_nav_target([len(b) for b in rows], self._kbd_index, name, shift))
+        return True
 
     def _arm_initial_hide(self) -> None:
         self._cancel_initial_hide()
@@ -1378,6 +1604,10 @@ class PopupWindow:
                         return False
                 self._prev_button_pressed = pressed
 
+                if self._kbd_nav:
+                    self._kbd_drain()
+                    if not self.win.get_visible():
+                        return False
                 if esc_pressed and not self._prev_esc_pressed:
                     self._prev_esc_pressed = esc_pressed
                     self.hide()
@@ -1481,10 +1711,16 @@ class PopupWindow:
         if self._xdpy is None and self.win.get_visible():
             self._arm_hide_timeout(self._leave_grace_ms)
 
-    def _on_key_press(self, _controller, keyval, _keycode, _state) -> bool:
+    def _on_key_press(self, _controller, keyval, _keycode, state) -> bool:
         if keyval == Gdk.KEY_Escape:
             self.hide()
             return True
+        if self._kbd_nav:
+            name = Gdk.keyval_name(keyval) or ""
+            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            if name == "ISO_Left_Tab":
+                name, shift = "Tab", True
+            return self._kbd_key(name, shift)
         return False
 
     def _on_button_press(self, gesture, _n_press, x, y) -> None:

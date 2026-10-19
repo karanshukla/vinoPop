@@ -113,3 +113,10 @@ def test_x11_can_bind_hotkey(combo, ok):
     except (ImportError, ValueError) as exc:
         pytest.skip(f"x11 backend unavailable: {exc}")
     assert X11Backend.can_bind_hotkey(None, combo) is ok
+
+
+def test_x11_autorepeat_is_not_a_new_press():
+    # autorepeat: KeyRelease + KeyPress with the same server time
+    assert hotkey._is_autorepeat(5000, 5000)
+    assert not hotkey._is_autorepeat(5000, None)
+    assert not hotkey._is_autorepeat(5300, 5000)
