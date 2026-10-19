@@ -160,9 +160,10 @@ DEFAULTS: dict[str, Any] = {
     # the next (NPU -> GPU -> CPU). A slow first NPU compile keeps running
     # in the background and the model moves to the NPU once it's done.
     "ai_load_timeout_seconds": 120.0,
-    # Minutes the LLM may sit unused before it's unloaded to free its
-    # memory (~4 GB). The compile cache keeps the next load quick. 0 keeps
-    # it loaded for the life of the daemon.
+    # Minutes the LLM and the OCR engine may sit unused before they're
+    # unloaded to free their memory (~4 GB and ~1 GB). The compile cache
+    # keeps the next load quick. 0 keeps them loaded for the life of the
+    # daemon.
     "ai_idle_unload_minutes": 5.0,
     # Milliseconds before the popup auto-hides if the mouse never enters
     # it. 6.5 s leaves enough time to read the buttons without overstaying

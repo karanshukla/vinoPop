@@ -5,16 +5,24 @@ Its OpenVINO engine always compiles for "CPU"; `_DeviceCore` swaps in our
 device choice (the CPU unless `ai_device` says otherwise, see
 devices.OCR_ORDER) and
 points the compiled-blob cache at our cache dir.
+
+The engine is dropped once it has been idle for `ai_idle_unload_minutes`,
+like the LLM: the CPU plugin holds ~800MB of buffers after the first
+inference, and a reload comes from the compiled-blob cache.
 """
 
 from __future__ import annotations
 
+import ctypes
+import gc
 import logging
 import threading
+import time
 
 from xdg_paths import CACHE_DIR
 
 from . import devices, telemetry
+from .llm import IDLE_UNLOAD_MINUTES, _setting
 
 log = logging.getLogger("vinopop")
 
@@ -23,6 +31,8 @@ _engine = None
 _device = None
 # Devices that loaded but then failed to run, skipped for this session.
 _broken: set[str] = set()
+_last_used = 0.0
+_idle_timer: threading.Timer | None = None
 
 
 def _patch_device(dev: str) -> None:
@@ -72,6 +82,49 @@ def device():
     return _device
 
 
+def _trim_heap() -> None:
+    """Hand freed heap pages back to the OS. glibc otherwise keeps them in
+    its arenas after a big free; there is no malloc_trim off glibc."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
+def unload_if_idle() -> bool:
+    """Free the engine once it has sat unused for the idle timeout.
+    Skipped while a capture holds the lock; returns whether it unloaded."""
+    global _engine, _device
+    minutes = _setting("ai_idle_unload_minutes", IDLE_UNLOAD_MINUTES)
+    if minutes <= 0 or _engine is None:
+        return False
+    if not _lock.acquire(blocking=False):
+        return False
+    try:
+        if _engine is None or time.monotonic() - _last_used < minutes * 60:
+            return False
+        log.info("[vino_ai] OCR idle for %.0f min, unloading from %s", minutes, _device)
+        _engine, _device = None, None
+        gc.collect()
+        _trim_heap()
+        return True
+    finally:
+        _lock.release()
+
+
+def _schedule_unload() -> None:
+    global _idle_timer
+    minutes = _setting("ai_idle_unload_minutes", IDLE_UNLOAD_MINUTES)
+    if _idle_timer is not None:
+        _idle_timer.cancel()
+        _idle_timer = None
+    if minutes <= 0:
+        return
+    _idle_timer = threading.Timer(minutes * 60 + 1, unload_if_idle)
+    _idle_timer.daemon = True
+    _idle_timer.start()
+
+
 def _reading_order(boxes, texts) -> str:
     """Join detected lines top-to-bottom, merging boxes that sit on the
     same visual row (left-to-right) so a multi-column UI line doesn't come
@@ -96,20 +149,27 @@ def _reading_order(boxes, texts) -> str:
 
 def recognize(image_path: str) -> str:
     """OCR an image file and return its text ("" when nothing was found).
-    Blocking; call it from a worker thread."""
-    global _engine, _device
-    with _lock:
-        engine = _load()
-        try:
-            result = engine(str(image_path))
-        except Exception as exc:  # noqa: BLE001 - retried on the next device
-            # A device can compile fine and still fail at inference (GPU
-            # driver bugs); drop it and run this capture on the next one.
-            log.warning("[vino_ai] OCR on %s failed while running: %s", _device, exc)
-            if _device is not None:
-                _broken.add(_device)
-            _engine, _device = None, None
-            result = _load()(str(image_path))
+    Blocking; call it from a worker thread. Arms the idle unload afterwards,
+    even when it failed, since a fallback engine may still be loaded."""
+    global _engine, _device, _last_used
+    try:
+        with _lock:
+            try:
+                engine = _load()
+                try:
+                    result = engine(str(image_path))
+                except Exception as exc:  # noqa: BLE001 - retried on the next device
+                    # A device can compile fine and still fail at inference (GPU
+                    # driver bugs); drop it and run this capture on the next one.
+                    log.warning("[vino_ai] OCR on %s failed while running: %s", _device, exc)
+                    if _device is not None:
+                        _broken.add(_device)
+                    _engine, _device = None, None
+                    result = _load()(str(image_path))
+            finally:
+                _last_used = time.monotonic()
+    finally:
+        _schedule_unload()
     if result is None or not getattr(result, "txts", None):
         return ""
     return _reading_order(result.boxes, result.txts).strip()

@@ -603,8 +603,87 @@ def test_ocr_retries_on_next_device_when_inference_fails(monkeypatch):
     monkeypatch.setattr(ocr, "_engine", None)
     monkeypatch.setattr(ocr, "_broken", set())
     monkeypatch.setattr(ocr, "_load", fake_load)
+    monkeypatch.setattr(ocr, "_schedule_unload", lambda: None)
     assert ocr.recognize("x.png") == "hi"
     assert ocr._broken == {"GPU"} and ocr.device() == "CPU"
+
+
+class _FakeOcrEngine:
+    def __call__(self, path):
+        return types.SimpleNamespace(txts=["hi"], boxes=[[(0, 0), (1, 0), (1, 1), (0, 1)]])
+
+
+@pytest.fixture
+def loaded_ocr(monkeypatch):
+    from vino_ai import ocr
+
+    trims = []
+    monkeypatch.setattr(ocr, "_engine", _FakeOcrEngine())
+    monkeypatch.setattr(ocr, "_device", "CPU")
+    monkeypatch.setattr(ocr, "_setting", lambda key, default: 5.0)
+    monkeypatch.setattr(ocr, "_trim_heap", lambda: trims.append(1))
+    return ocr, trims
+
+
+def test_idle_ocr_engine_is_unloaded(monkeypatch, loaded_ocr):
+    ocr, trims = loaded_ocr
+    monkeypatch.setattr(ocr, "_last_used", ocr.time.monotonic())
+    assert ocr.unload_if_idle() is False  # used just now
+    assert ocr._engine is not None and not trims
+    monkeypatch.setattr(ocr, "_last_used", ocr.time.monotonic() - 301)
+    assert ocr.unload_if_idle() is True
+    assert ocr._engine is None and ocr.device() is None
+    assert trims == [1]
+
+
+def test_ocr_idle_unload_disabled_with_zero(monkeypatch, loaded_ocr):
+    ocr, _trims = loaded_ocr
+    monkeypatch.setattr(ocr, "_setting", lambda key, default: 0.0)
+    monkeypatch.setattr(ocr, "_last_used", 0.0)
+    assert ocr.unload_if_idle() is False
+    assert ocr._engine is not None
+
+
+def test_ocr_idle_unload_skipped_during_a_capture(monkeypatch, loaded_ocr):
+    ocr, _trims = loaded_ocr
+    monkeypatch.setattr(ocr, "_last_used", 0.0)
+    with ocr._lock:
+        assert ocr.unload_if_idle() is False
+    assert ocr._engine is not None
+
+
+def test_ocr_recognize_records_use_and_arms_unload(monkeypatch, loaded_ocr):
+    ocr, _trims = loaded_ocr
+    armed = []
+    monkeypatch.setattr(ocr, "_last_used", 0.0)
+    monkeypatch.setattr(ocr, "_load", lambda: ocr._engine)
+    monkeypatch.setattr(ocr, "_schedule_unload", lambda: armed.append(1))
+    assert ocr.recognize("x.png") == "hi"
+    assert armed == [1]
+    assert ocr.unload_if_idle() is False  # just used
+
+
+def test_ocr_unload_timer_follows_the_setting(monkeypatch, loaded_ocr):
+    ocr, _trims = loaded_ocr
+    monkeypatch.setattr(ocr, "_idle_timer", None)
+    ocr._schedule_unload()
+    timer = ocr._idle_timer
+    assert timer is not None and timer.daemon and timer.interval == 301
+    monkeypatch.setattr(ocr, "_setting", lambda key, default: 0.0)
+    ocr._schedule_unload()  # re-arming cancels the old timer; 0 arms none
+    assert ocr._idle_timer is None and timer.finished.is_set()
+
+
+def test_ocr_heap_trim_without_glibc(monkeypatch):
+    from vino_ai import ocr
+
+    ocr._trim_heap()  # the real call, on whatever libc runs the tests
+
+    def no_libc(_name):
+        raise OSError("libc.so.6: cannot open shared object file")
+
+    monkeypatch.setattr(ocr.ctypes, "CDLL", no_libc)
+    ocr._trim_heap()  # no glibc (musl, macOS): a no-op, not an error
 
 
 def test_doctor_reports_skipped_device(monkeypatch, tmp_path):
