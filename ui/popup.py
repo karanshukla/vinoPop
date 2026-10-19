@@ -8,7 +8,6 @@ user clicks outside it.
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
 from collections.abc import Callable
 
@@ -949,23 +948,13 @@ class PopupWindow:
         )
 
         def _on_click(_btn):
-            try:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "4000",
-                        "-i",
-                        "dialog-information",
-                        f"{hidden} action{'s' if hidden != 1 else ''} hidden",
-                        "Open Plugin Manager → Order to reorder, or raise "
-                        "the popup limit in Settings → Appearance.",
-                    ],
-                    check=False,
-                )
-            except OSError:
-                pass
+            actions.notify(
+                f"{hidden} action{'s' if hidden != 1 else ''} hidden",
+                "Open Plugin Manager → Order to reorder, or raise "
+                "the popup limit in Settings → Appearance.",
+                "dialog-information",
+                4000,
+            )
             self.hide()
             if self._on_open_plugin_order is not None:
                 try:

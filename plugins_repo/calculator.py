@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Evaluate a math expression in the selection and show the result."""
 
 from __future__ import annotations
@@ -7,8 +7,8 @@ import ast
 import math
 import operator
 import re
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -136,37 +136,11 @@ def _calc(text: str) -> None:
         # Inside the try: str() of an int with over 4300 digits raises
         result_str = _format_result(result)
     except Exception as exc:  # noqa: BLE001
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "dialog-error",
-                "Calculator error",
-                str(exc)[:200],
-            ],
-            check=False,
-        )
+        actions.notify("Calculator error", str(exc)[:200], "dialog-error")
         return
     # Replace "2+2" with "4" in place, fallback to clipboard-only.
-    import actions
-
     actions.replace_selection(result_str)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "vinopop-calculator",
-            "Result",
-            f"{expr} = {result_str}",
-        ],
-        check=False,
-    )
+    actions.notify("Calculator", f"{expr} = {result_str}", "vinopop-calculator", 2500)
 
 
 def register(register_plugin) -> None:

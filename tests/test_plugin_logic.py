@@ -7,14 +7,23 @@ import pytest
 
 
 @pytest.fixture
-def replaced(monkeypatch):
+def notified(monkeypatch):
+    """Titles of the notifications handlers send, none of them shown."""
+    from core import actions
+
+    titles: list[str] = []
+    monkeypatch.setattr(actions, "notify", lambda title, *a, **kw: titles.append(title))
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)
+    return titles
+
+
+@pytest.fixture
+def replaced(monkeypatch, notified):
     """Capture what a handler would paste over the selection, and silence notifications."""
     from core import actions
 
     out: list[str] = []
     monkeypatch.setattr(actions, "replace_selection", out.append)
-    monkeypatch.setattr(actions, "notify", lambda *a, **kw: out.append("<notify>"))
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)
     return out
 
 
@@ -115,11 +124,11 @@ def test_slugify_transliterates_nordic_letters():
     assert case_convert._slug("  Hello,   World  ") == "hello-world"
 
 
-def test_slugify_never_replaces_text_with_nothing(replaced):
+def test_slugify_never_replaces_text_with_nothing(replaced, notified):
     import case_convert
 
     case_convert._slugify("привет")
-    assert replaced == ["<notify>"]
+    assert replaced == [] and len(notified) == 1
 
 
 # ---- base64 -----------------------------------------------------------------
@@ -352,7 +361,7 @@ def test_qr_reports_an_oserror(qr_env, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", fail)
     qr_code._qr("hello")
-    assert qr_env[0][0][-2] == "QR error"
+    assert qr_env[0][0][-2] == "QR code failed"
 
 
 def test_qr_install_hint_names_the_package_manager(monkeypatch):

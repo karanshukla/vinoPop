@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Developer hashing and decoding utilities: SHA-256, MD5, JWT payload decode.
 SHA and MD5 copy the digest to the clipboard. JWT decode pretty-prints the
 payload and copies it.
@@ -10,8 +10,8 @@ import base64
 import hashlib
 import json
 import re
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -29,22 +29,8 @@ def _looks_like_jwt(text: str) -> bool:
 
 
 def _copy_and_notify(text: str, title: str) -> None:
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "security-high-symbolic",
-            title,
-            text[:280],
-        ],
-        check=False,
-    )
+    actions.notify(title, text[:280], "security-high-symbolic", 2500)
 
 
 def _sha256(text: str) -> None:
@@ -66,58 +52,24 @@ def _b64url_decode(part: str) -> bytes:
 def _jwt_decode(text: str) -> None:
     parts = text.strip().split(".")
     if len(parts) < 2:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "dialog-error",
-                "JWT decode",
-                "Not a JWT (expected header.payload.signature)",
-            ],
-            check=False,
+        actions.notify(
+            "JWT decode", "Not a JWT (expected header.payload.signature)", "dialog-error"
         )
         return
     try:
         header = json.loads(_b64url_decode(parts[0]))
         payload = json.loads(_b64url_decode(parts[1]))
     except Exception as exc:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "dialog-error",
-                "JWT decode",
-                str(exc)[:200],
-            ],
-            check=False,
-        )
+        actions.notify("JWT decode", str(exc)[:200], "dialog-error")
         return
     if not isinstance(header, dict):
         header = {}
     pretty = json.dumps(payload, indent=2, ensure_ascii=False)
-    import actions
-
     actions.replace_selection(pretty)
     alg = header.get("alg", "?")
     typ = header.get("typ", "?")
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "security-high-symbolic",
-            f"JWT decoded (alg={alg}, typ={typ})",
-            pretty[:400],
-        ],
-        check=False,
+    actions.notify(
+        f"JWT decoded (alg={alg}, typ={typ})", pretty[:400], "security-high-symbolic", 2500
     )
 
 

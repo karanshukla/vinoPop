@@ -48,24 +48,9 @@ class X11Backend(PlatformBackend):
                 "vinoPop now supports natively."
             )
             print(f"[vinopop] WARNING: {warning}", file=sys.stderr)
-            try:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "6000",
-                        "-u",
-                        "normal",
-                        "-i",
-                        "vinopop",
-                        "vinoPop: limited under XWayland",
-                        warning,
-                    ],
-                    check=False,
-                )
-            except FileNotFoundError:
-                pass
+            from core import actions
+
+            actions.notify("Limited under XWayland", warning, timeout_ms=6000, urgency="normal")
 
     # ---- selection / clipboard ------------------------------------------
     def read_selection(self, source: str) -> str:

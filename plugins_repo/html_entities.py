@@ -1,12 +1,12 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """HTML entity encode / decode. <p>café & "co"</p> ↔ &lt;p&gt;café &amp; &quot;co&quot;&lt;/p&gt;"""
 
 from __future__ import annotations
 
 import html
 import re
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -32,22 +32,8 @@ def _copy(text: str, label: str) -> None:
     # Replace the user's selection with the result AND keep
     # it on the clipboard. Fallback (read-only context): the
     # clipboard still has it so the user can paste manually.
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "tag-symbolic",
-            label,
-            text[:200],
-        ],
-        check=False,
-    )
+    actions.notify(label, text[:200], "tag-symbolic", 2500)
 
 
 def _encode(text: str) -> None:

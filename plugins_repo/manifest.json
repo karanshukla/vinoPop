@@ -76,7 +76,7 @@
   },
   {
     "file": "wordcount.py",
-    "version": 1,
+    "version": 2,
     "title": "Word and character count",
     "description": "Shows word, character and line counts as a desktop notification",
     "category": "Productivity",
@@ -88,7 +88,7 @@
   },
   {
     "file": "calculator.py",
-    "version": 1,
+    "version": 2,
     "title": "Calculator",
     "description": "Evaluates math expressions in the selection (sqrt, sin, pi, ...)",
     "category": "Productivity",
@@ -100,7 +100,7 @@
   },
   {
     "file": "case_convert.py",
-    "version": 1,
+    "version": 2,
     "title": "Case converter",
     "description": "UPPERCASE, lowercase, Title Case and slugify",
     "category": "Productivity",
@@ -112,7 +112,7 @@
   },
   {
     "file": "text_transformations.py",
-    "version": 1,
+    "version": 2,
     "title": "Text transformations bundle",
     "description": "Reverse, sort lines, deduplicate, trim, strip HTML, remove diacritics, ASCII-only, swap case - 8 buttons in one plugin",
     "category": "Productivity",
@@ -124,7 +124,7 @@
   },
   {
     "file": "qr_code.py",
-    "version": 1,
+    "version": 2,
     "title": "QR code",
     "description": "Generates a QR code from text or a URL (requires qrencode)",
     "category": "Productivity",
@@ -250,7 +250,7 @@
   },
   {
     "file": "base64_codec.py",
-    "version": 1,
+    "version": 2,
     "title": "Base64 encode/decode",
     "description": "Encodes or decodes selected text as Base64 and copies the result",
     "category": "Developer",
@@ -262,7 +262,7 @@
   },
   {
     "file": "json_format.py",
-    "version": 1,
+    "version": 2,
     "title": "JSON pretty-print",
     "description": "Pretty-prints JSON and copies it to the clipboard",
     "category": "Developer",
@@ -274,7 +274,7 @@
   },
   {
     "file": "url_encode.py",
-    "version": 1,
+    "version": 2,
     "title": "URL encode/decode",
     "description": "Percent-encodes or decodes text for use in URLs",
     "category": "Developer",
@@ -286,7 +286,7 @@
   },
   {
     "file": "dev_hashes.py",
-    "version": 1,
+    "version": 2,
     "title": "Hashes and JWT decode",
     "description": "SHA-256, MD5 and JWT payload decode - output to clipboard with a notification",
     "category": "Developer",
@@ -298,7 +298,7 @@
   },
   {
     "file": "converters.py",
-    "version": 1,
+    "version": 2,
     "title": "Timestamp and color converters",
     "description": "Auto-detects Unix epoch ↔ ISO 8601, #hex ↔ rgb(r,g,b)",
     "category": "Developer",
@@ -310,7 +310,7 @@
   },
   {
     "file": "html_entities.py",
-    "version": 1,
+    "version": 2,
     "title": "HTML entity encode/decode",
     "description": "<p>café & \"co\"</p> ↔ &lt;p&gt;café &amp; &quot;co&quot;&lt;/p&gt;",
     "category": "Developer",

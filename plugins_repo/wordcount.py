@@ -1,10 +1,9 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Show word, character and line counts of the selected text via notification."""
 
 from __future__ import annotations
 
-import subprocess
-
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -15,22 +14,7 @@ def _count(text: str) -> None:
     chars_no_ws = len("".join(text.split()))
     lines = len(text.splitlines())
     body = f"{words} words, {chars} chars ({chars_no_ws} without whitespace), {lines} lines"
-    try:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "vinopop-wordcount",
-                "vinoPop wordcount",
-                body,
-            ],
-            check=False,
-        )
-    except FileNotFoundError:
-        print(f"[wordcount] {body}")
+    actions.notify("Word count", body, "vinopop-wordcount")
 
 
 def register(register_plugin) -> None:

@@ -1,12 +1,12 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """UPPERCASE / lowercase / Title Case / slugify text transformations."""
 
 from __future__ import annotations
 
 import re
-import subprocess
 import unicodedata
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -15,22 +15,8 @@ def _copy(text: str, label: str) -> None:
     # Replace the user's selection with the result AND keep
     # it on the clipboard. Fallback (read-only context): the
     # clipboard still has it so the user can paste manually.
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "accessories-text-editor",
-            label,
-            text[:200],
-        ],
-        check=False,
-    )
+    actions.notify(label, text[:200], "accessories-text-editor", 2500)
 
 
 # Letters NFKD can't decompose into base + accent, so "ignore" would drop them
@@ -50,8 +36,6 @@ def _slugify(text: str) -> None:
     slug = _slug(text)
     if not slug:
         # e.g. Cyrillic/CJK: nothing survives, and pasting "" would delete the selection
-        import actions
-
         actions.notify("Slugify", "Nothing in the selection can be written as a URL slug.")
         return
     _copy(slug, "Slugified")

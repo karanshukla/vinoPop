@@ -13,7 +13,6 @@ import gc
 import json
 import logging
 import re
-import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -259,19 +258,14 @@ def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -
         msg = f"The NPU couldn't load the model, so it's running on {dev} (slower, warmer)."
     log.warning("[vino_ai] %s %s", msg, npu_error)
     on_status(msg)
-    try:
-        subprocess.run(
-            [
-                "notify-send",
-                "-i",
-                "vinopop",
-                "vinoPop AI is not on the NPU",
-                f"{msg}\n{npu_error}".strip()[:300],
-            ],
-            check=False,
-        )
-    except FileNotFoundError:
-        pass
+    from core.notify import notify
+
+    notify(
+        "AI is not on the NPU",
+        f"{msg}\n{npu_error}".strip()[:300],
+        timeout_ms=None,
+        transient=False,
+    )
 
 
 def device() -> str | None:

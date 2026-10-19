@@ -31,17 +31,13 @@ startup (and after install via the Plugin Manager).
 ```python
 """Example plugin: shout the selected text into a notification."""
 
-import subprocess
-
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
 
 def _shout(text: str) -> None:
-    subprocess.run(
-        ["notify-send", "-i", "face-surprise", "SHOUT", text.upper()],
-        check=False,
-    )
+    actions.notify("SHOUT", text.upper(), "face-surprise")
 
 
 def register(register_plugin) -> None:
@@ -82,7 +78,8 @@ text → popup shows your new button.
 
 - **Run blocking work on a thread** - the handler is called on the GTK main
   loop. Spawn a `threading.Thread` for HTTP requests, subprocess calls that
-  may hang, etc. Use `notify-send` to communicate results.
+  may hang, etc. Use `actions.notify(title, body, icon)` to communicate
+  results: it shows the notification as vinoPop's, not as `notify-send`'s.
 - **Copy results to the clipboard** with
   `subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode())`
   so the user can paste them.
@@ -119,7 +116,7 @@ file, add it to `plugins_repo/retired.json` with the reason, so installs that
 still have it say so.
 
 External system dependencies (e.g. your plugin needs `imagemagick` installed)
-should fail gracefully - `shutil.which("convert")` check and a `notify-send`
+should fail gracefully - `shutil.which("convert")` check and an `actions.notify`
 explaining what's missing.
 
 ## Bug reports & feature requests

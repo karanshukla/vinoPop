@@ -8,7 +8,6 @@ import fcntl
 import logging
 import os
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -27,13 +26,9 @@ from platform_backend import is_wayland_session  # noqa: E402
 
 
 def _notify(title: str, body: str) -> None:
-    try:
-        subprocess.run(
-            ["notify-send", "--hint=byte:transient:1", "-i", "vinopop", title, body],
-            check=False,
-        )
-    except FileNotFoundError:
-        pass
+    from core import actions
+
+    actions.notify(title, body, timeout_ms=None)
 
 
 def _load_layer_shell() -> bool:
@@ -159,24 +154,9 @@ def _acquire_single_instance_lock() -> None:
             "existing process first: pkill -x vinopop"
         )
         print(f"[vinopop] {message}", file=sys.stderr)
-        try:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "3000",
-                    "-u",
-                    "normal",
-                    "-i",
-                    "vinopop",
-                    "vinoPop is already running",
-                    message,
-                ],
-                check=False,
-            )
-        except FileNotFoundError:
-            pass
+        from core import actions
+
+        actions.notify("vinoPop is already running", message, urgency="normal")
         sys.exit(0)
     # Write our PID inside the (now-locked) file for diagnostics
     os.ftruncate(fd, 0)
@@ -331,7 +311,7 @@ class App:
 
             def _done(model, error):
                 body = f"{model.label} is ready." if error is None else f"Download failed: {error}"
-                _notify("vinoPop AI model", body)
+                _notify("AI model", body)
 
             self._prefetch_thread = models.prefetch(_done)
         except Exception:
@@ -738,7 +718,9 @@ class App:
         """No Clipboard plugin: pop up the clipboard text instead (worker)."""
         text = _read_selection("clipboard")
         if not text:
-            _notify("vinoPop", "Install the Clipboard plugin to get the picker.")
+            _notify(
+                "Clipboard picker unavailable", "Install the Clipboard plugin to get the picker."
+            )
             return
         try:
             x, y = _pointer_position()
@@ -954,23 +936,13 @@ class App:
                     return False
                 except Exception:
                     log.exception("welcome dialog failed; falling back to notify")
-                try:
-                    subprocess.run(
-                        [
-                            "notify-send",
-                            "--hint=byte:transient:1",
-                            "-i",
-                            "vinopop",
-                            "-t",
-                            "8000",
-                            "vinoPop is running",
-                            "Select text anywhere to see actions. Tray icon "
-                            "has settings & plugins.",
-                        ],
-                        check=False,
-                    )
-                except FileNotFoundError:
-                    pass
+                from core import actions
+
+                actions.notify(
+                    "vinoPop is running",
+                    "Select text anywhere to see actions. Tray icon has settings & plugins.",
+                    timeout_ms=8000,
+                )
             return False
 
         GLib.timeout_add(800, _open_welcome)

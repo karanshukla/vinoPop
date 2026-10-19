@@ -225,10 +225,9 @@ def _recognize(image_path: Path) -> str | None:
 
 
 def _notify(title: str, body: str, *, icon: str = "dialog-information", ms: int = 3500) -> None:
-    subprocess.run(
-        ["notify-send", "--hint=byte:transient:1", "-t", str(ms), "-i", icon, title, body],
-        check=False,
-    )
+    from core import actions
+
+    actions.notify(title, body, icon, ms)
 
 
 def _unlink(path: Path) -> None:
@@ -293,20 +292,16 @@ def _offer_describe(title: str, body: str, image: Path, ocr_text: str) -> None:
     def _wait() -> None:
         clicked = False
         try:
+            from core import actions
+
             res = subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "10000",
-                    "-i",
-                    "edit-paste-symbolic",
-                    "-A",
-                    "describe=Describe image",
-                    "-w",
+                actions.notify_argv(
                     title,
                     body,
-                ],
+                    "edit-paste-symbolic",
+                    10000,
+                    extra=("-A", "describe=Describe image", "-w"),
+                ),
                 capture_output=True,
                 text=True,
                 timeout=60,

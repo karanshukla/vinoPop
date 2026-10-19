@@ -1,12 +1,12 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Two practical converters: Unix timestamp ↔ ISO date, and color formats."""
 
 from __future__ import annotations
 
 import datetime as dt
 import re
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -15,22 +15,8 @@ def _copy(text: str, label: str) -> None:
     # Replace the user's selection with the result AND keep
     # it on the clipboard. Fallback (read-only context): the
     # clipboard still has it so the user can paste manually.
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "alarm-symbolic",
-            label,
-            text[:200],
-        ],
-        check=False,
-    )
+    actions.notify(label, text[:200], "alarm-symbolic", 2500)
 
 
 def _timestamp_convert(text: str) -> None:
@@ -78,18 +64,8 @@ def _timestamp_convert(text: str) -> None:
             return
         except ValueError:
             continue
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "3000",
-            "-i",
-            "dialog-error",
-            "Timestamp converter",
-            f"Couldn't parse {s!r} as a timestamp or epoch",
-        ],
-        check=False,
+    actions.notify(
+        "Timestamp converter", f"Couldn't parse {s!r} as a timestamp or epoch", "dialog-error"
     )
 
 
@@ -162,18 +138,8 @@ def _color_convert(text: str) -> None:
         )
         _copy(f"#{r:02x}{g:02x}{b:02x}", "hsl → hex")
         return
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "3000",
-            "-i",
-            "dialog-error",
-            "Color converter",
-            "Couldn't recognise as #hex, rgb(r,g,b) or hsl(h,s%,l%)",
-        ],
-        check=False,
+    actions.notify(
+        "Color converter", "Couldn't recognise as #hex, rgb(r,g,b) or hsl(h,s%,l%)", "dialog-error"
     )
 
 

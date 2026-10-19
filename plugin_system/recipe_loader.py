@@ -590,19 +590,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                 subprocess.Popen(_command_argv(template, text), start_new_session=True)
             # ValueError: a NUL in the selection (Popen refuses it as an argument)
             except (OSError, ValueError) as exc:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "3000",
-                        "-i",
-                        "dialog-error",
-                        "Recipe error",
-                        f"Could not run: {exc}",
-                    ],
-                    check=False,
-                )
+                notify("Recipe error", f"Could not run: {exc}", "dialog-error")
 
         return handler
 
@@ -610,19 +598,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
         def handler(text: str) -> None:
             body = _render(template, text)
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "3000",
-                    "-i",
-                    icon,
-                    title,
-                    body[:600],
-                ],
-                check=False,
-            )
+            notify(title, body[:600], icon)
 
         return handler
 
@@ -636,19 +612,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
             from platform_backend import get_backend
 
             get_backend().set_clipboard(out)
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "3000",
-                    "-i",
-                    icon,
-                    title,
-                    out[:200],
-                ],
-                check=False,
-            )
+            notify(title, out[:200], icon)
 
         return handler
 
@@ -663,18 +627,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
         if not steps:
 
             def handler(_text: str) -> None:
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "3000",
-                        "-i",
-                        "dialog-warning",
-                        "vinoPop chain",
-                        f"{recipe.get('name', 'chain')}: no steps defined",
-                    ],
-                    check=False,
+                notify(
+                    "Empty chain",
+                    f"{recipe.get('name', 'chain')}: no steps defined",
+                    "dialog-warning",
                 )
 
             return handler
@@ -711,19 +667,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     from platform_backend import get_backend
 
                     get_backend().set_clipboard(current)
-                    subprocess.run(
-                        [
-                            "notify-send",
-                            "--hint=byte:transient:1",
-                            "-t",
-                            "2500",
-                            "-i",
-                            icon,
-                            title or "Copied",
-                            current[:200],
-                        ],
-                        check=False,
-                    )
+                    notify(title or "Copied", current[:200], icon, 2500)
                 elif stype == "paste":
                     # Put text on clipboard, then send Ctrl+V to whichever
                     # window currently holds focus. Same pattern the
@@ -732,19 +676,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
                     actions.replace_selection(current)
                 elif stype == "notify":
-                    subprocess.run(
-                        [
-                            "notify-send",
-                            "--hint=byte:transient:1",
-                            "-t",
-                            "4000",
-                            "-i",
-                            icon,
-                            title or "Chain",
-                            (rendered or current)[:600],
-                        ],
-                        check=False,
-                    )
+                    notify(title or "Chain", (rendered or current)[:600], icon, 4000)
                 elif stype == "open_url":
                     url = (rendered or current).strip()
                     from core import actions
