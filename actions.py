@@ -156,7 +156,9 @@ def pin_as_snippet(text: str) -> None:
         if response != "save":
             return
         try:
-            ch._create_snippet(name=name, text=text, trigger=trig, category=category)
+            # literal: the selection is someone else's text, so a {shell:...}
+            # or {clipboard} in it is pasted as written, never expanded (#86).
+            ch._create_snippet(name=name, text=text, trigger=trig, category=category, literal=True)
             subprocess.run(
                 [
                     "notify-send",
