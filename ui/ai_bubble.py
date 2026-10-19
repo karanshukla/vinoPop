@@ -22,7 +22,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from platform_backend.monitors import monitor_at, to_logical  # noqa: E402
+from platform_backend.monitors import clamp_to_area, monitor_at, to_logical, usable_area  # noqa: E402
 
 log = logging.getLogger("vinopop")
 
@@ -104,8 +104,8 @@ def _backend():
 
 
 def _logical_anchor(x: int, y: int, is_logical: bool) -> tuple[float, float, Gdk.Rectangle | None]:
-    """The pointer in logical coords plus the geometry of the monitor
-    holding it. X11 root coords are physical, so on a HiDPI screen they are
+    """The pointer in logical coords plus the usable area (workarea) of the
+    monitor holding it. X11 root coords are physical, so on a HiDPI screen they are
     divided by that monitor's scale (the same rule popup.py uses); KWin's
     coords are already logical."""
     display = Gdk.Display.get_default()
@@ -113,19 +113,19 @@ def _logical_anchor(x: int, y: int, is_logical: bool) -> tuple[float, float, Gdk
         return float(x), float(y), None
     mon = monitor_at(display.get_monitors(), x, y, is_logical)
     lx, ly = to_logical(x, y, mon, is_logical)
-    return lx, ly, (mon.get_geometry() if mon is not None else None)
+    return lx, ly, (usable_area(mon) if mon is not None else None)
 
 
 def _bubble_target(lx: float, ly: float, w: int, h: int, geom) -> tuple[int, int]:
     """Top-left for a w x h bubble just below logical (lx, ly), centred on
-    it, flipped above when there's no room and kept on `geom`'s monitor."""
+    it, flipped above when there's no room and kept inside `geom` (the
+    monitor's usable area)."""
     tx = int(lx - w / 2)
     ty = int(ly + 24)
     if geom is not None:
-        tx = max(geom.x + 4, min(tx, geom.x + geom.width - w - 4))
         if ty + h > geom.y + geom.height - 4:
             ty = int(ly - h - 24)
-        ty = max(geom.y + 4, ty)
+        tx, ty = clamp_to_area(tx, ty, w, h, geom)
     return tx, ty
 
 
@@ -156,7 +156,7 @@ class ResultBubble:
         self._stall_id: int | None = None
         self._last_activity = time.monotonic()
         self._replace_id: int | None = None
-        self._placed_h = 0
+        self._placed_size = (0, 0)
         # Set once destroyed, so late idle callbacks from a worker don't
         # touch dead widgets and a timeout + outside click can't race.
         self._dead = False
@@ -268,7 +268,7 @@ class ResultBubble:
             self._scroll.set_max_content_height(int(geom.height * _MAX_HEIGHT_FRACTION))
         _, nat = self.win.get_preferred_size()
         w, h = max(nat.width, 1), max(nat.height, 1)
-        self._placed_h = h
+        self._placed_size = (w, h)
         tx, ty = _bubble_target(lx, ly, w, h, geom)
         if backend is not None:
             backend.move_popup_window(self.win, tx, ty)
@@ -276,7 +276,10 @@ class ResultBubble:
     def _queue_replace(self) -> None:
         """Re-place once the streamed text has grown the bubble, so it stays
         on screen and, when it sits above the pointer, grows up rather than
-        down over the selection. Coalesced: tokens arrive many per frame."""
+        down over the selection. Width counts too: the window grows right
+        from its left edge, so a one-line answer that widens the bubble near
+        the right edge ran off screen (#97). Coalesced: tokens arrive many
+        per frame."""
         if self._replace_id is None and not self._dead:
             self._replace_id = GLib.idle_add(self._replace_now)
 
@@ -285,7 +288,7 @@ class ResultBubble:
         if self._dead:
             return False
         _, nat = self.win.get_preferred_size()
-        if nat.height != self._placed_h:
+        if (max(nat.width, 1), max(nat.height, 1)) != self._placed_size:
             self._place(_backend())
         return False
 

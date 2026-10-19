@@ -27,7 +27,7 @@ except Exception:  # python-xlib is absent on pure-Wayland (KDE) installs
 from core import actions
 from core.classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
-from platform_backend.monitors import monitor_at  # noqa: E402
+from platform_backend.monitors import clamp_to_area, monitor_at, usable_area  # noqa: E402
 from plugin_system import plugin_loader
 
 log = logging.getLogger("vinopop")
@@ -1075,9 +1075,7 @@ class PopupWindow:
         x, y, _, _ = self._popup_rect
         monitor = _monitor_for_point(self.win.get_display(), x + w / 2, y, True)
         if monitor is not None:
-            geom = monitor.get_geometry()
-            x = max(geom.x + 4, min(x, geom.x + geom.width - w - 4))
-            y = max(geom.y + 4, min(y, geom.y + geom.height - h - 4))
+            x, y = clamp_to_area(x, y, w, h, usable_area(monitor))
         if (x, y) != self._popup_rect[:2]:
             get_backend().move_popup_window(self.win, x, y)
         self._popup_rect = (x, y, w, h)
@@ -1214,15 +1212,14 @@ class PopupWindow:
             target_y = int(ly - h - _LINE_CLEARANCE)
             below_y = int(ly + _BELOW_GAP)
 
-        # Keep on-screen (geom is also in logical coords)
+        # Keep inside the monitor's usable area (also in logical coords)
         if monitor is not None:
-            geom = monitor.get_geometry()
-            target_x = max(geom.x + 4, min(target_x, geom.x + geom.width - w - 4))
-            if target_y < geom.y + 4:
+            area = usable_area(monitor)
+            if target_y < area.y + 4:
                 # Not enough room above: show below the selection/pointer
                 # instead, with a gap so we don't overlap downward.
                 target_y = below_y
-            target_y = min(target_y, geom.y + geom.height - h - 4)
+            target_x, target_y = clamp_to_area(target_x, target_y, w, h, area)
 
         # Move to the real position, then map. X11: XMoveWindow on the
         # still-unmapped override-redirect window; Wayland: layer-shell

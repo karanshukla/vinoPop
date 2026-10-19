@@ -8,7 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from platform_backend.monitors import layer_margins, monitor_at, to_logical
+from platform_backend.monitors import (
+    clamp_to_area,
+    layer_margins,
+    monitor_at,
+    to_logical,
+    usable_area,
+)
 
 
 class _Mon:
@@ -57,6 +63,68 @@ def test_physical_coords_are_scaled_per_monitor():
     assert mon is hidpi
     assert to_logical(3000, 1600, mon, is_logical=False) == (1500, 800)
     assert to_logical(3000, 1600, mon, is_logical=True) == (3000, 1600)
+
+
+# ---- keeping boxes on screen (#97) ----------------------------------------
+G = SimpleNamespace(x=0, y=0, width=1920, height=1080)
+
+
+def test_clamp_leaves_a_box_that_fits_alone():
+    assert clamp_to_area(800, 300, 400, 200, G) == (800, 300)
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "expect"),
+    [
+        (1800, 300, (1920 - 400 - 4, 300)),  # right edge
+        (800, 1000, (800, 1080 - 200 - 4)),  # bottom edge
+        (1800, 1000, (1516, 876)),  # bottom-right corner
+        (-50, -50, (4, 4)),  # top-left
+    ],
+)
+def test_clamp_pulls_the_box_back_inside(x, y, expect):
+    assert clamp_to_area(x, y, 400, 200, G) == expect
+
+
+def test_clamp_on_the_second_monitor_uses_its_origin():
+    geom = RIGHT.get_geometry()
+    x, y = clamp_to_area(1920 + 2500, 1400, 400, 200, geom)
+    assert (x, y) == (1920 + 2560 - 400 - 4, 1440 - 200 - 4)
+    # ...and a box at the left edge of the right monitor isn't pushed onto
+    # the left one.
+    assert clamp_to_area(1900, 100, 400, 200, geom)[0] == 1920 + 4
+
+
+def test_box_bigger_than_the_area_keeps_its_top_left_visible():
+    # The header (title, Copy, close) is at the top-left; keep it reachable.
+    assert clamp_to_area(500, 500, 3000, 2000, G) == (4, 4)
+
+
+class _X11Mon(_Mon):
+    def __init__(self, *a, workarea=None, **kw):
+        super().__init__(*a, **kw)
+        self._wa = workarea
+
+    def get_workarea(self):
+        return self._wa
+
+
+def test_usable_area_prefers_the_workarea():
+    panel = SimpleNamespace(x=0, y=0, width=1920, height=1040)  # 40 px dock
+    assert usable_area(_X11Mon(0, 0, 1920, 1080, workarea=panel)) is panel
+    assert (
+        clamp_to_area(800, 1000, 400, 200, usable_area(_X11Mon(0, 0, 1920, 1080, workarea=panel)))[
+            1
+        ]
+        == 836
+    )
+
+
+def test_usable_area_falls_back_to_the_monitor():
+    assert usable_area(LEFT) is LEFT.get_geometry()  # Wayland: no workarea
+    empty = SimpleNamespace(x=0, y=0, width=0, height=0)
+    mon = _X11Mon(0, 0, 1920, 1080, workarea=empty)
+    assert usable_area(mon) is mon.get_geometry()
 
 
 # ---- shared KWin pointer query --------------------------------------------
@@ -185,6 +253,66 @@ def test_ai_bubble_uses_logical_coords():
     # Centred under logical (500, 300), not clamped into the bottom-right
     # corner as the physical (1000, 600) used to be after GTK doubled it.
     assert (tx, ty) == (350, 324)
+
+
+@pytest.fixture
+def ai_bubble():
+    pytest.importorskip("gi")
+    try:
+        from ui import ai_bubble
+    except (ImportError, ValueError) as exc:
+        pytest.skip(f"GTK 4 unavailable: {exc}")
+    return ai_bubble
+
+
+@pytest.mark.parametrize(
+    ("lx", "ly"),
+    [(1910, 500), (1910, 1075), (5, 1075), (1920 + 2550, 1435), (1925, 10)],
+)
+def test_ai_bubble_stays_on_its_monitor(ai_bubble, lx, ly):
+    mon = monitor_at([LEFT, RIGHT], lx, ly)
+    g = mon.get_geometry()
+    w, h = 540, 280
+    tx, ty = ai_bubble._bubble_target(lx, ly, w, h, g)
+    assert g.x <= tx and tx + w <= g.x + g.width
+    assert g.y <= ty and ty + h <= g.y + g.height
+
+
+def test_ai_bubble_flips_above_near_the_bottom(ai_bubble):
+    tx, ty = ai_bubble._bubble_target(900, 1000, 300, 100, G)
+    assert ty == 1000 - 100 - 24
+
+
+def test_ai_bubble_tall_answer_flipped_above_still_fits(ai_bubble):
+    # Pointer near the top of a short screen: neither below nor above fits.
+    short = SimpleNamespace(x=0, y=0, width=1366, height=400)
+    tx, ty = ai_bubble._bubble_target(600, 150, 400, 380, short)
+    assert (tx, ty) == (400, 4)
+
+
+class _GrowingWin:
+    def __init__(self, w, h):
+        self.size = (w, h)
+
+    def get_preferred_size(self):
+        return None, SimpleNamespace(width=self.size[0], height=self.size[1])
+
+
+def test_ai_bubble_re_places_when_only_the_width_grows(ai_bubble):
+    """#97: a one-line answer widens the bubble without changing its height;
+    it grew right from its old left edge and ran off the screen."""
+    b = ai_bubble.ResultBubble.__new__(ai_bubble.ResultBubble)
+    b._dead = False
+    b._replace_id = None
+    b.win = _GrowingWin(300, 100)
+    b._placed_size = (300, 100)
+    placed = []
+    b._place = lambda _backend: placed.append(b.win.size)
+    b._replace_now()
+    assert placed == []  # same size: no move
+    b.win.size = (460, 100)
+    b._replace_now()
+    assert placed == [(460, 100)]
 
 
 # ---- KWin helper bus names -------------------------------------------------

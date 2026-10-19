@@ -59,6 +59,31 @@ def to_logical(x: float, y: float, monitor: Any, is_logical: bool) -> tuple[floa
     return x / s, y / s
 
 
+def usable_area(monitor: Any) -> Any:
+    """The part of `monitor` a popup may cover, in logical coords: the X11
+    workarea (the monitor minus docked panels) when GDK exposes it, else the
+    whole monitor. Wayland has no workarea query; there, layer-shell keeps
+    surfaces off exclusive zones itself."""
+    get_workarea = getattr(monitor, "get_workarea", None)
+    if get_workarea is not None:
+        try:
+            area = get_workarea()
+            if area.width > 0 and area.height > 0:
+                return area
+        except Exception:
+            pass
+    return monitor.get_geometry()
+
+
+def clamp_to_area(x: float, y: float, w: int, h: int, area: Any, pad: int = 4) -> tuple[int, int]:
+    """Top-left that keeps a w x h box inside `area` with `pad` px to spare.
+    A box too big for the area keeps its left/top edge on screen, so the
+    header and close button stay reachable."""
+    x = max(area.x + pad, min(int(x), area.x + area.width - w - pad))
+    y = max(area.y + pad, min(int(y), area.y + area.height - h - pad))
+    return int(x), int(y)
+
+
 def layer_margins(x: int, y: int, geom: Any) -> tuple[int, int]:
     """Layer-shell LEFT/TOP margins for global logical (x, y) on the output
     whose geometry is `geom`. Margins are relative to the surface's own
