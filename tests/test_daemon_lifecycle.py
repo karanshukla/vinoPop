@@ -108,7 +108,7 @@ def test_prepare_popup_shows_on_the_gtk_thread_with_one_window_lookup(main_mod, 
         active_window_haystacks=lambda: lookups.append(1) or ["org.kde.okular", "doc.pdf"],
     )
     monkeypatch.setattr(main_mod, "get_backend", lambda: backend)
-    import editable_detect
+    from triggers import editable_detect
 
     monkeypatch.setattr(editable_detect, "get_backend", lambda: backend)
     monkeypatch.setattr(editable_detect, "_start_focus_listener", lambda: None)
@@ -193,7 +193,7 @@ def test_polling_flip_is_ignored_on_wayland(main_mod, monkeypatch):
 
 
 def test_bound_polling_initialised_from_settings(main_mod, monkeypatch, tmp_path):
-    import settings
+    from core import settings
 
     s = settings.Settings(tmp_path / "settings.json")
     s.set("hotkey", "")
@@ -260,7 +260,7 @@ def test_clipboard_fallback_notifies_through_helper(main_mod, monkeypatch):
 
 @pytest.fixture
 def editable(monkeypatch):
-    import editable_detect
+    from triggers import editable_detect
 
     monkeypatch.setattr(editable_detect, "_start_focus_listener", lambda: None)
     monkeypatch.setattr(editable_detect, "_cached_focus_editable", lambda: None)
@@ -351,7 +351,7 @@ class FakeDisplay:
     ],
 )
 def test_hotkey_run_closes_display_on_early_return(monkeypatch, combo, display_kwargs):
-    import hotkey
+    from triggers import hotkey
 
     FakeDisplay.instances.clear()
     monkeypatch.setattr(hotkey.display, "Display", lambda: FakeDisplay(**display_kwargs))
@@ -369,7 +369,7 @@ def test_hotkey_run_closes_display_on_early_return(monkeypatch, combo, display_k
 def test_dblclick_watcher_enables_on_record_display_and_stops(monkeypatch):
     import Xlib.display
 
-    import mouse_watcher
+    from triggers import mouse_watcher
 
     disabled = threading.Event()
     calls = []

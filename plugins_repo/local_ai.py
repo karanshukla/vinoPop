@@ -22,6 +22,7 @@ def _open(title: str, task: str, text: str, *, replace: bool = False) -> None:
     if not text:
         return
     import ai_bubble
+
     from vino_ai import ai_worker
 
     ai_bubble.show(

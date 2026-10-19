@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Tray icon: runs in its own Qt process (tray_qt.py)
+# Tray icon: runs in its own Qt process (tray/tray_qt.py)
 tray = ["PySide6>=6.5"]
 
 # Offline AI, pinned like requirements-ai.txt (keep the two in step)
@@ -76,7 +76,7 @@ ignore = [
 
 [tool.mypy]
 # New code is typed from the start; the GTK3 modules get added as they're ported
-files = ["vino_ai", "classifier.py", "xdg_paths.py"]
+files = ["vino_ai", "core/classifier.py", "core/xdg_paths.py"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 

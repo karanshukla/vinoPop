@@ -92,7 +92,18 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-import gtk4_app  # noqa: E402
+from core.classifier import classify  # noqa: E402
+from core.settings import get_settings  # noqa: E402
+from core.version import __version__  # noqa: E402
+from core.xdg_paths import (  # noqa: E402
+    CACHE_DIR,
+    CONFIG_DIR,
+    LOG_FILE,
+    PrivateRotatingFileHandler,
+    make_private,
+    private_dir,
+)
+from platform_backend import get_backend  # noqa: E402
 
 # XInitThreads is intentionally NOT called here. We tried it (since
 # multiple threads touch X - watcher, hotkey, popup tick, clipboard
@@ -105,25 +116,16 @@ import gtk4_app  # noqa: E402
 # up under load, revisit by giving each Xlib-using component its own
 # connection (already mostly the case) rather than re-enabling
 # XInitThreads.
-import plugin_loader  # noqa: E402
-import theme  # noqa: E402
-from classifier import classify  # noqa: E402
-from editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
-from platform_backend import get_backend  # noqa: E402
-from popup import PopupWindow  # noqa: E402
-from settings import get_settings  # noqa: E402
-from version import __version__  # noqa: E402
-from xdg_paths import (  # noqa: E402
-    CACHE_DIR,
-    CONFIG_DIR,
-    LOG_FILE,
-    PrivateRotatingFileHandler,
-    make_private,
-    private_dir,
+from plugin_system import plugin_loader  # noqa: E402
+from triggers.editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
+from ui import (
+    gtk4_app,  # noqa: E402
+    theme,  # noqa: E402
 )
+from ui.popup import PopupWindow  # noqa: E402
 
 if TYPE_CHECKING:
-    from watcher import SelectionWatcher
+    from triggers.watcher import SelectionWatcher
 
 LOCK_FILE = CACHE_DIR / "vinopop.lock"
 FIRST_RUN_MARKER = CONFIG_DIR / ".first-run-done"
@@ -657,7 +659,7 @@ class App:
         if not hotkey_str:
             return
         try:
-            from screen_ocr import is_supported
+            from capture.screen_ocr import is_supported
 
             ok, reason = is_supported()
             if not ok:
@@ -684,7 +686,7 @@ class App:
 
         def _capture() -> None:
             try:
-                from screen_ocr import run_ocr_to_clipboard
+                from capture.screen_ocr import run_ocr_to_clipboard
 
                 run_ocr_to_clipboard()
             except Exception:
@@ -813,7 +815,7 @@ class App:
         return True  # keep timeout alive
 
     def _start_tray(self) -> None:
-        from tray import Tray
+        from tray.tray import Tray
 
         self.tray = Tray(
             on_toggle_watcher=self.toggle_watcher,
@@ -830,7 +832,7 @@ class App:
         log.info("opening settings dialog…")
         if self._settings_dialog is None:
             try:
-                from settings_gui import SettingsDialog
+                from ui.settings_gui import SettingsDialog
             except Exception:
                 log.exception("settings_gui import failed")
                 return
@@ -881,7 +883,7 @@ class App:
         log.info("opening plugin manager…")
         if self._plugin_dialog is None:
             try:
-                from plugin_manager import PluginManagerDialog
+                from ui.plugin_manager import PluginManagerDialog
             except Exception:
                 log.exception("plugin_manager import failed")
                 return
@@ -933,7 +935,7 @@ class App:
         # notify-send if GTK can't construct the dialog for some reason.
         def _open_welcome():
             try:
-                from onboarding import show_onboarding
+                from ui.onboarding import show_onboarding
 
                 show_onboarding(
                     self.settings,
@@ -943,7 +945,7 @@ class App:
             except Exception:
                 log.exception("onboarding failed; falling back to welcome dialog")
                 try:
-                    from welcome import show_welcome_dialog
+                    from ui.welcome import show_welcome_dialog
 
                     show_welcome_dialog(
                         self.settings,
@@ -1057,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
     # any GTK init or hotkey grabs so the second copy exits before
     # interfering with the existing instance.
     _acquire_single_instance_lock()
-    import autostart
+    from core import autostart
 
     if autostart.migrate_from_main_py():
         log.info("[autostart] now starts the vinopop launcher instead of main.py")

@@ -1261,12 +1261,12 @@ if __name__ == "__main__":  # standalone preview / replay
     import os
     import sys
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import gtk4_app
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from ui import gtk4_app
 
     gtk4_app.init()
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         _s = get_settings()
     except Exception:
@@ -1285,7 +1285,7 @@ if __name__ == "__main__":  # standalone preview / replay
             show_welcome_dialog=True, hotkey="super+shift+y", clipboard_hotkey="super+shift+v"
         )
     try:
-        from theme import install_premium_theme
+        from ui.theme import install_premium_theme
 
         install_premium_theme(_s.get("theme", "dark") or "dark")
     except Exception:

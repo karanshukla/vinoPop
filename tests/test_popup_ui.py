@@ -12,7 +12,7 @@ pytest.importorskip("gi")
 @pytest.fixture
 def popup():
     try:
-        import popup
+        from ui import popup
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     return popup

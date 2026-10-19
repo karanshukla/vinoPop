@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parent.parent / "settings_gui.py"
+SRC = Path(__file__).resolve().parent.parent / "ui" / "settings_gui.py"
 
 
 def _dialog_methods() -> dict[str, ast.FunctionDef]:

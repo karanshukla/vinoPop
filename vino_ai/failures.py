@@ -16,7 +16,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-from xdg_paths import STATE_DIR
+from core.xdg_paths import STATE_DIR
 
 from . import telemetry
 

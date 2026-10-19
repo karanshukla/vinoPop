@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
+from core.xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
 
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 

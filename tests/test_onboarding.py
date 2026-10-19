@@ -8,7 +8,7 @@ pytest.importorskip("gi")
 @pytest.fixture
 def onboarding():
     try:
-        import onboarding
+        from ui import onboarding
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     return onboarding

@@ -2,8 +2,8 @@ import json
 import os
 import stat
 
-import settings
-from settings import DEFAULTS, Settings
+from core import settings
+from core.settings import DEFAULTS, Settings
 
 
 def test_get_returns_copies_of_mutable_defaults(tmp_path):

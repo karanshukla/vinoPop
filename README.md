@@ -56,7 +56,7 @@ vinopop
 <details>
 <summary>Odds and ends</summary>
 
-- PySide6 is only for the tray icon. Without it vinoPop runs fine with no tray; `--no-tray` skips the attempt, and `python3 settings_gui.py` / `python3 plugin_manager.py` open the windows directly.
+- PySide6 is only for the tray icon. Without it vinoPop runs fine with no tray; `--no-tray` skips the attempt, and `python3 -m ui.settings_gui` / `python3 -m ui.plugin_manager` (from the checkout) open the windows directly.
 - `qrencode` enables the QR plugin.
 - On Debian/Ubuntu, whose system Python refuses `pip --user`, add `--break-system-packages` or use a venv created with `--system-site-packages` so it still sees PyGObject.
 - From a checkout without installing, run `./vinopop`. It shows up as `vinopop` in `ps`, so `pkill -x vinopop` stops it.

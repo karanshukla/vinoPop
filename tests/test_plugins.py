@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from plugin_base import Plugin
+from plugin_system.plugin_base import Plugin
 
 PLUGINS = Path(__file__).resolve().parent.parent / "plugins_repo"
 GTK_FREE = sorted(
@@ -50,7 +50,7 @@ def test_base64_predicate():
 @pytest.fixture
 def user_plugins(tmp_path, monkeypatch):
     """An empty user plugin dir that load_all() reads instead of the real one."""
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
@@ -65,7 +65,7 @@ def user_plugins(tmp_path, monkeypatch):
 
 
 _GOOD = """
-from plugin_base import Plugin
+from plugin_system.plugin_base import Plugin
 
 def register(r):
     r(Plugin(name="good", icon="x", tooltip="Good", handler=print))
@@ -83,7 +83,7 @@ def register(r):
 def test_a_plugin_calling_sys_exit_does_not_stop_the_daemon(user_plugins, bad):
     import sys
 
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     (user_plugins / "a_bad.py").write_text(bad)
     (user_plugins / "b_good.py").write_text(_GOOD)
@@ -94,7 +94,7 @@ def test_a_plugin_calling_sys_exit_does_not_stop_the_daemon(user_plugins, bad):
 
 
 def test_a_register_that_raises_leaves_no_buttons_behind(user_plugins):
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     (user_plugins / "half.py").write_text(
         "from plugin_base import Plugin\n"
@@ -125,7 +125,7 @@ def test_a_register_that_raises_leaves_no_buttons_behind(user_plugins):
 )
 def test_custom_tab_row_survives_a_malformed_recipe(recipe):
     try:
-        import plugin_manager
+        from ui import plugin_manager
     except (ImportError, ValueError):
         pytest.skip("needs GTK 4 + libadwaita")
     title, subtitle = plugin_manager._recipe_row_text(Path("a.json"), recipe, {})
@@ -135,7 +135,7 @@ def test_custom_tab_row_survives_a_malformed_recipe(recipe):
 
 def test_custom_tab_flags_a_recipe_vinopop_stopped_bundling():
     try:
-        import plugin_manager
+        from ui import plugin_manager
     except (ImportError, ValueError):
         pytest.skip("needs GTK 4 + libadwaita")
     recipe = {"name": "define", "action": {"type": "open_url", "template": "x"}}
@@ -155,7 +155,7 @@ def _manifest():
 
 
 def test_every_catalogue_entry_and_its_file_carry_the_same_version():
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     for entry in _manifest():
         sub = "recipes/" if entry.get("kind") == "recipe" else ""
@@ -165,7 +165,7 @@ def test_every_catalogue_entry_and_its_file_carry_the_same_version():
 
 
 def test_retired_files_are_not_in_the_catalogue():
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     retired = plugin_loader.retired_bundled()
     assert {"speak.py", "define.json"} <= set(retired)
@@ -174,7 +174,7 @@ def test_retired_files_are_not_in_the_catalogue():
 
 
 def test_an_older_install_is_offered_the_update(tmp_path):
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     src = tmp_path / "repo.py"
     src.write_text("# vinopop-plugin-version: 2\nfixed = True\n")
@@ -198,8 +198,7 @@ def test_an_older_install_is_offered_the_update(tmp_path):
 def test_updating_a_recipe_keeps_its_on_off_switch(tmp_path, monkeypatch):
     import json
 
-    import plugin_loader
-    import recipe_loader
+    from plugin_system import plugin_loader, recipe_loader
 
     monkeypatch.setattr(recipe_loader, "RECIPES_DIR", tmp_path)
     src = tmp_path / "repo.json"

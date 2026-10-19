@@ -18,8 +18,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
-import recipe_loader  # noqa: E402
-from icon_picker import IconPicker  # noqa: E402
+from plugin_system import recipe_loader  # noqa: E402
+from ui.icon_picker import IconPicker  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Action catalog -- the four building blocks of any custom button.
@@ -253,7 +253,7 @@ def _install_mock_css() -> None:
 
 
 def _icon(name: str, size: int) -> Gtk.Image:
-    import icon_style
+    from ui import icon_style
 
     img = Gtk.Image.new_from_icon_name(icon_style.available(name))
     img.set_pixel_size(size)

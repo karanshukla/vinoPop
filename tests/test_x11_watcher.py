@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("Xlib")
 
 from platform_backend.base import expect_selection  # noqa: E402
-from watcher import SelectionWatcher  # noqa: E402
+from triggers.watcher import SelectionWatcher  # noqa: E402
 
 CLIPBOARD = 42
 

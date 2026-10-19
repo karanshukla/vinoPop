@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from xdg_paths import CACHE_DIR
+from core.xdg_paths import CACHE_DIR
 
 from . import devices, failures, models, npu_canary, telemetry
 
@@ -92,7 +92,7 @@ _told_stuck = False
 
 def _setting(key: str, default: float) -> float:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         value = get_settings().get(key)
         return default if value is None else float(value)

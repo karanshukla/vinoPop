@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import icon_style
+from ui import icon_style
 
 ROOT = Path(__file__).resolve().parent.parent
 ICONS = ROOT / "icons"
@@ -91,7 +91,10 @@ class _Theme:
 def _declared_icons() -> set[str]:
     found: set[str] = set()
     sources = list((ROOT / "plugins_repo").glob("*.py"))
-    sources += [ROOT / n for n in ("plugin_loader.py", "recipe_wizard.py", "actions.py")]
+    sources += [
+        ROOT / n
+        for n in ("plugin_system/plugin_loader.py", "ui/recipe_wizard.py", "core/actions.py")
+    ]
     for path in sources:
         found |= set(re.findall(r"[\"']([a-z][a-z0-9-]*-symbolic)[\"']", path.read_text()))
     for path in (ROOT / "plugins_repo").rglob("*.json"):
@@ -204,7 +207,7 @@ def test_shipped_by_both_matches_installed_themes(theme):
 def test_picker_suggestions_only_offer_icons_the_theme_draws():
     pytest.importorskip("gi")
     try:
-        import icon_picker
+        from ui import icon_picker
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     breeze_like = _Theme("network-workgroup-symbolic", "system-search-symbolic", "starred-symbolic")
@@ -232,7 +235,7 @@ class _Settings:
 def test_kde_icon_theme_follows_the_mode_both_ways():
     pytest.importorskip("gi")
     try:
-        import theme
+        from ui import theme
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     s = _Settings()

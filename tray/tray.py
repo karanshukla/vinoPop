@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from xdg_paths import CACHE_DIR as SOCKET_DIR
+from core.xdg_paths import CACHE_DIR as SOCKET_DIR
 
 TRAY_SCRIPT = str(Path(__file__).resolve().parent / "tray_qt.py")
 

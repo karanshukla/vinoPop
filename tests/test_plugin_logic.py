@@ -9,7 +9,7 @@ import pytest
 @pytest.fixture
 def replaced(monkeypatch):
     """Capture what a handler would paste over the selection, and silence notifications."""
-    import actions
+    from core import actions
 
     out: list[str] = []
     monkeypatch.setattr(actions, "replace_selection", out.append)

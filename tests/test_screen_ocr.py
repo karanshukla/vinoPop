@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-import screen_ocr
+from capture import screen_ocr
 
 
 @pytest.fixture

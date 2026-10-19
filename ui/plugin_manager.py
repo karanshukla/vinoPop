@@ -9,14 +9,14 @@ from pathlib import Path
 
 import gi
 
-from xdg_paths import CONFIG_DIR
+from core.xdg_paths import CONFIG_DIR
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-import gtk4_app  # noqa: E402
+from ui import gtk4_app  # noqa: E402
 
 # libhandy needed two tree-walking hacks here (_unwrap_subtitle_labels and
 # _unellipsize_tab_labels) because HdyActionRow ellipsised subtitles and
@@ -51,7 +51,7 @@ def _icon_button(icon_name: str, tooltip: str | None = None) -> Gtk.Button:
     return btn
 
 
-REPO_DIR = Path(__file__).resolve().parent / "plugins_repo"
+REPO_DIR = Path(__file__).resolve().parent.parent / "plugins_repo"
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
 USER_RECIPE_DIR = CONFIG_DIR / "recipes"
 
@@ -83,7 +83,7 @@ def _load_manifest() -> list[dict]:
 def _status(entry: dict) -> str:
     """The installed copy of a catalogue entry against the bundled one:
     "missing", "current", "outdated" or "changed" (see plugin_loader)."""
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     return plugin_loader.bundled_status(
         _source_path(entry), _target_dir(entry) / entry["file"], int(entry.get("version") or 0)
@@ -167,7 +167,7 @@ class PluginManagerDialog:
         # rather than one undifferentiated flat list. _catalog_group is
         # tracked as a reference to the *first* group purely so the
         # parent-page lookup in _rebuild_catalog_buttons still works.
-        import icon_style
+        from ui import icon_style
 
         catalog_page = Adw.PreferencesPage()
         catalog_page.set_title("Available")
@@ -315,7 +315,7 @@ class PluginManagerDialog:
         logo (e.g. an AI service) sits on a light tile so it reads. Falls back
         to a coloured initial only when there's no usable icon."""
         try:
-            import icon_style
+            from ui import icon_style
 
             icon_name = icon_style.resolve(icon_name)
         except Exception:
@@ -384,7 +384,7 @@ class PluginManagerDialog:
         return btn
 
     def _on_update_clicked(self, _btn: Gtk.Button, entry: dict) -> None:
-        import plugin_loader
+        from plugin_system import plugin_loader
 
         try:
             plugin_loader.update_bundled(_source_path(entry), _target_dir(entry) / entry["file"])
@@ -456,7 +456,7 @@ class PluginManagerDialog:
             self._add_row(group, empty)
             return
         manifest_by_file = {e["file"]: e for e in _load_manifest()}
-        import plugin_loader as _pl
+        from plugin_system import plugin_loader as _pl
 
         retired = _pl.retired_bundled()
 
@@ -472,7 +472,7 @@ class PluginManagerDialog:
             by_source = {}
             all_plugins = {}
         try:
-            from settings import get_settings as _gs
+            from core.settings import get_settings as _gs
 
             settings_obj = _gs()
             disabled_names = set(settings_obj.get("disabled_plugins") or [])
@@ -532,7 +532,7 @@ class PluginManagerDialog:
 
     def _on_subplugin_toggle(self, switch: Adw.SwitchRow, _param, sub_name: str) -> None:
         try:
-            from settings import get_settings as _gs
+            from core.settings import get_settings as _gs
 
             settings_obj = _gs()
             disabled = list(settings_obj.get("disabled_plugins") or [])
@@ -586,7 +586,7 @@ class PluginManagerDialog:
         return group
 
     def _fill_custom_group(self, group: Adw.PreferencesGroup) -> None:
-        import recipe_loader
+        from plugin_system import recipe_loader
 
         # Translate the internal action-type slug into something a person
         # who didn't write the JSON would recognise.
@@ -596,7 +596,7 @@ class PluginManagerDialog:
             "notify": "Shows a notification",
             "copy_transformed": "Transforms text and copies it",
         }
-        import plugin_loader
+        from plugin_system import plugin_loader
 
         retired = plugin_loader.retired_bundled()
         for path, recipe in recipe_loader.list_recipes():
@@ -648,14 +648,14 @@ class PluginManagerDialog:
     def _open_recipe_wizard(
         self, existing: dict | None = None, existing_path: Path | None = None
     ) -> None:
-        from recipe_wizard import RecipeWizard
+        from ui.recipe_wizard import RecipeWizard
 
         parent = self._window
         wizard = RecipeWizard(parent=parent, recipe=existing, source_path=existing_path)
         new_recipe = wizard.run_and_get()
         if new_recipe is None:
             return
-        import recipe_loader
+        from plugin_system import recipe_loader
 
         try:
             saved_path = recipe_loader.save_recipe(new_recipe, target_path=existing_path)
@@ -671,7 +671,7 @@ class PluginManagerDialog:
         self._open_recipe_wizard(existing=recipe, existing_path=path)
 
     def _on_delete_recipe(self, _btn, path: Path) -> None:
-        import recipe_loader
+        from plugin_system import recipe_loader
 
         recipe_loader.delete_recipe(path)
         self._refresh_custom_group()
@@ -681,7 +681,7 @@ class PluginManagerDialog:
     def _on_toggle_recipe(self, switch: Gtk.Switch, _param, path: Path) -> None:
         """Flip the recipe's 'enabled' field and reload the plugin layer
         so the popup picks up the change without a restart."""
-        import recipe_loader
+        from plugin_system import recipe_loader
 
         recipe_loader.set_recipe_enabled(path, switch.get_active())
         # Don't repaint the whole group -- that would rebuild every row
@@ -704,10 +704,10 @@ class PluginManagerDialog:
         return group
 
     def _fill_order_group(self, group: Adw.PreferencesGroup) -> None:
-        import plugin_loader
+        from plugin_system import plugin_loader
 
         try:
-            from settings import get_settings
+            from core.settings import get_settings
 
             settings = get_settings()
         except Exception:
@@ -733,7 +733,7 @@ class PluginManagerDialog:
             row.set_title(plugin.tooltip or plugin.name)
             row.set_subtitle(plugin.name)
             try:
-                import icon_style
+                from ui import icon_style
 
                 img = Gtk.Image.new_from_icon_name(icon_style.resolve(plugin.icon))
                 img.set_pixel_size(20)
@@ -772,7 +772,7 @@ class PluginManagerDialog:
             ordered_names[index],
         )
         try:
-            from settings import get_settings
+            from core.settings import get_settings
 
             s = get_settings()
             s.set("plugin_order", ordered_names)

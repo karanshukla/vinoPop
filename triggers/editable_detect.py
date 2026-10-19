@@ -195,7 +195,7 @@ def _start_focus_listener() -> None:
         return
     # Local import - avoids settings module circulars at module load.
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
             _log.info(
@@ -306,7 +306,7 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
     # > Advanced > "Smarter editable detection", we don't even try.
     # WM_CLASS fallback handles the common case fine.
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
             return None
@@ -455,7 +455,7 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
     if not _HAS_ATSPI:
         return None
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         if not bool(get_settings().get("editable_atspi_listener_enabled")):
             return None

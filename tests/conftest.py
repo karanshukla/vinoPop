@@ -11,3 +11,8 @@ for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOM
 # Plugins import core modules by bare name, as they do once installed
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "plugins_repo"))
+sys.path.insert(0, str(ROOT))
+
+from plugin_system import compat  # noqa: E402
+
+compat.install()

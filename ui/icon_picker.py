@@ -20,7 +20,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-from xdg_paths import HICOLOR_APPS, USER_ICONS_DIR  # noqa: E402
+from core.xdg_paths import HICOLOR_APPS, USER_ICONS_DIR  # noqa: E402
 
 # How many icons to render per "page". GTK FlowBox is fast enough that
 # 1000+ per page is fine on modern hardware; lazy loading was solving a
@@ -46,7 +46,7 @@ def _suggestions(theme) -> list[str]:
     """_FALLBACK_SUGGESTIONS the theme can draw, with names it lacks
     swapped for their icon_style fallback (Breeze has no
     web-browser-symbolic) and anything still missing left out."""
-    import icon_style
+    from ui import icon_style
 
     out: list[str] = []
     for name in _FALLBACK_SUGGESTIONS:
