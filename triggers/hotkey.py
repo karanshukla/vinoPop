@@ -128,6 +128,12 @@ def _lock_variants(dpy: display.Display) -> Iterable[int]:
     return ignored
 
 
+def _is_autorepeat(press_time: int, last_release_time: int | None) -> bool:
+    """X11 autorepeat on a held key arrives as KeyRelease + KeyPress pairs
+    carrying the same server timestamp; a real second press can't."""
+    return last_release_time is not None and press_time == last_release_time
+
+
 class Hotkey:
     def __init__(
         self,
@@ -289,6 +295,7 @@ class Hotkey:
         # woke this thread 5 times/sec per registered hotkey - multiply by
         # the popup + clipboard hotkeys and the daemon was getting 10
         # context switches/sec for no reason.)
+        last_release: int | None = None
         while not self._stop.is_set():
             if dpy.pending_events() == 0:
                 import select
@@ -345,7 +352,14 @@ class Hotkey:
                             pass
                     keycode = new_keycode
                 continue
+            if event.type == X.KeyRelease and event.detail == keycode:
+                last_release = event.time
+                continue
             if event.type == X.KeyPress and event.detail == keycode:
+                if _is_autorepeat(event.time, last_release):
+                    # Holding the hotkey must not fire again: with the
+                    # toggle (#44) the repeat would close the popup it opened.
+                    continue
                 # Filter out the lock-only variants by masking expected mods
                 effective = event.state & (
                     X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask

@@ -168,6 +168,7 @@ ROLES = {
 # Fallback by callback name, for callers that don't pass role=
 _ROLE_BY_CALLBACK = {
     "show_popup_now": "popup",
+    "_on_popup_hotkey": "popup",
     "_on_clipboard_hotkey": "clipboard",
     "_on_ocr_hotkey": "ocr",
 }

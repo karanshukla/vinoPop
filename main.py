@@ -118,6 +118,7 @@ from platform_backend import get_backend  # noqa: E402
 # XInitThreads.
 from plugin_system import plugin_loader  # noqa: E402
 from triggers.editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
+from triggers.toggle import CLOSE, OPEN, HotkeyToggle  # noqa: E402
 from ui import (
     gtk4_app,  # noqa: E402
     theme,  # noqa: E402
@@ -273,6 +274,8 @@ class App:
         self.hotkey = None
         self.clipboard_hotkey = None
         self.ocr_hotkey = None
+        # Open/close/ignore for presses of the popup hotkey (#44)
+        self._popup_toggle = HotkeyToggle()
         # Optional global double-click watcher. Created lazily when the
         # double_click_popup_enabled setting is on - PopClip-style
         # click-in-text-field popup.
@@ -368,7 +371,7 @@ class App:
         """Show the selection popup for text. Safe from any thread."""
         self._off_main(self._prepare_popup, text, x, y)
 
-    def _prepare_popup(self, text: str, x: int, y: int) -> None:
+    def _prepare_popup(self, text: str, x: int, y: int, via_hotkey: bool = False) -> None:
         """Worker thread: filters and probes, then shows on the GTK thread."""
         # No min-length check here on purpose - that filter belongs to
         # the watcher (auto-popup on selection), not to this routine.
@@ -417,17 +420,33 @@ class App:
                 rect = None
 
         def _show() -> bool:
-            self.popup.show_for(text, x, y, ctype, editable=editable, rect=rect)
+            self.popup.show_for(
+                text, x, y, ctype, editable=editable, rect=rect, via_hotkey=via_hotkey
+            )
             return False
 
         GLib.idle_add(_show)
 
-    def show_popup_now(self) -> None:
+    def _on_popup_hotkey(self) -> None:
+        """The popup hotkey, on the GTK thread: closes the popup when it's
+        showing, opens it otherwise. A press that's the key still held
+        (autorepeat) does neither."""
+        popup = self.popup
+        action = self._popup_toggle.press(popup.win.get_visible(), popup.hotkey_shown_at)
+        if action == CLOSE:
+            log.info("[hotkey-fire] popup showing - closing it")
+            popup.hide()
+        elif action == OPEN:
+            self.show_popup_now(via_hotkey=True)
+        else:
+            log.info("[hotkey-fire] ignored: key still held")
+
+    def show_popup_now(self, via_hotkey: bool = False) -> None:
         """Hotkey / tray entry point. Returns at once; the lookup runs on a
         worker and presses that arrive meanwhile are dropped."""
-        self._off_main(self._gather_hotkey_popup, drop_if_busy=True)
+        self._off_main(self._gather_hotkey_popup, via_hotkey, drop_if_busy=True)
 
-    def _gather_hotkey_popup(self) -> None:
+    def _gather_hotkey_popup(self, via_hotkey: bool = False) -> None:
         # Stamped so a "had to press the hotkey 3 times" report comes
         # with breadcrumbs in vinopop.log: did the trigger reach us at
         # all? did xclip return empty? did the popup get suppressed by
@@ -453,19 +472,19 @@ class App:
             # the single portal; the dedicated clipboard hotkey stays
             # available as a power-user shortcut.
             log.info("[hotkey-fire] no selection - showing paste menu")
-            self._prepare_no_selection_popup(x, y)
+            self._prepare_no_selection_popup(x, y, via_hotkey)
             return
         log.info("[hotkey-fire] showing popup at (%d, %d) for %d-char selection", x, y, len(text))
-        self._prepare_popup(text, x, y)
+        self._prepare_popup(text, x, y, via_hotkey)
 
-    def _prepare_no_selection_popup(self, x: int, y: int) -> None:
+    def _prepare_no_selection_popup(self, x: int, y: int, via_hotkey: bool = False) -> None:
         """Worker thread: blocklist check, then the edit menu on the GTK thread."""
         if _active_window_blocked(list(self.settings.get("blocklist_patterns") or [])):
             log.info("[blocked] suppressed no-selection popup -- active window blocked")
             return
-        GLib.idle_add(self._show_no_selection_popup, x, y)
+        GLib.idle_add(self._show_no_selection_popup, x, y, via_hotkey)
 
-    def _show_no_selection_popup(self, x: int, y: int) -> bool:
+    def _show_no_selection_popup(self, x: int, y: int, via_hotkey: bool = False) -> bool:
         """Build a PopClip-style edit menu for the no-selection case.
 
         Shown when the popup hotkey fires while you're sitting in an
@@ -543,7 +562,7 @@ class App:
                 _send_keys("BackSpace"),
             )
         )
-        self.popup.show_actions(items, x, y)
+        self.popup.show_actions(items, x, y, via_hotkey=via_hotkey)
         return False
 
     def _maybe_start_dblclick_watcher(self) -> None:
@@ -649,7 +668,7 @@ class App:
             return
         use_polling = bool(self.settings.get("hotkey_use_polling", False))
         self.hotkey = get_backend().make_hotkey(
-            hotkey_str, self.show_popup_now, use_polling=use_polling, role="popup"
+            hotkey_str, self._on_popup_hotkey, use_polling=use_polling, role="popup"
         )
         self.hotkey.start()
         self._bound_hotkey = hotkey_str
