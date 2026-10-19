@@ -150,15 +150,11 @@ def _failures() -> list[Result]:
 
 
 def _wayland_input() -> list[Result]:
-    """Key injection (Paste/Cut) and /dev/input access on native Wayland."""
-    import os
-
-    if (os.environ.get("XDG_SESSION_TYPE") or "").lower() != "wayland" or os.environ.get(
-        "VINOPOP_BACKEND", ""
-    ).lower() == "x11":
-        return []
+    """Key injection (Paste/Cut) and /dev/input access with the KDE Wayland backend."""
     # import_module keeps mypy from following platform_backend into the
     # untyped GTK/X11 modules it can reach.
+    if importlib.import_module("platform_backend").detect() != "wayland_kde":
+        return []
     evdev_input = importlib.import_module("platform_backend.evdev_input")
     keyinject = importlib.import_module("platform_backend.keyinject")
 

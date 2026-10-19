@@ -17,8 +17,10 @@ How it maps each piece of the X11 design onto Wayland/KDE:
 | Global hotkey | KGlobalAccel over D-Bus |
 | Tray icon | StatusNotifierItem via libappindicator (KDE SNI) |
 
-The backend is chosen automatically from `XDG_SESSION_TYPE`. Force it with
-`VINOPOP_BACKEND=x11` or `VINOPOP_BACKEND=wayland_kde`.
+The backend is chosen automatically: a Wayland session (`XDG_SESSION_TYPE`)
+whose `XDG_CURRENT_DESKTOP` lists `KDE` gets the Wayland/KDE backend; any other
+desktop, including other Wayland compositors, gets the X11 backend under
+XWayland. Force it with `VINOPOP_BACKEND=x11` or `VINOPOP_BACKEND=wayland_kde`.
 
 ## Install dependencies
 

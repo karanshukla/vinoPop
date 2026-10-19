@@ -22,6 +22,9 @@ if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
+from platform_backend import detect as detect_backend  # noqa: E402
+from platform_backend import is_wayland_session  # noqa: E402
+
 
 def _notify(title: str, body: str) -> None:
     try:
@@ -31,11 +34,6 @@ def _notify(title: str, body: str) -> None:
         )
     except FileNotFoundError:
         pass
-
-
-# Mutter-based desktops: no wlr-layer-shell, so a native Wayland surface
-# can't be placed at the selection.
-_MUTTER_DESKTOPS = ("GNOME", "UNITY", "PANTHEON", "BUDGIE", "CINNAMON")
 
 
 def _load_layer_shell() -> bool:
@@ -62,36 +60,27 @@ def _load_layer_shell() -> bool:
 def _choose_gdk_backend() -> str:
     """Decide where GDK runs, before GTK initialises. GTK 4 dropped
     Gtk.Window.move(), so the popup can only be placed via gtk4-layer-shell
-    (KWin, wlroots) or as an X11 override-redirect window. Wayland sessions
-    without layer-shell (GNOME/mutter, or the typelib not installed) run the
-    whole process on XWayland. Returns a line for the log."""
+    or as an X11 override-redirect window. Native Wayland is only used with
+    the KDE backend (platform_backend.detect()); every other Wayland desktop,
+    or KDE without layer-shell, runs the whole process on XWayland.
+    Returns a line for the log."""
     if os.environ.get("GDK_BACKEND"):
         return f"GDK_BACKEND={os.environ['GDK_BACKEND']} (preset, left alone)"
-    wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
-    x11 = bool(os.environ.get("DISPLAY"))
-    session = (os.environ.get("XDG_SESSION_TYPE") or "").lower()
-    # Same rule as platform_backend.detect(): Wayland only when there is no
-    # X11 display or the session says it is Wayland.
-    if not wayland or (x11 and session != "wayland"):
+    if not is_wayland_session():
         return "X11 session - GDK on X11"
-    forced = (os.environ.get("VINOPOP_BACKEND") or "").strip().lower()
-    desktop = (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
-    mutter = any(d in desktop for d in _MUTTER_DESKTOPS)
-    if forced == "x11":
-        reason = "VINOPOP_BACKEND=x11"
-    elif mutter:
-        reason = f"{desktop or 'this desktop'} has no wlr-layer-shell"
+    if detect_backend() == "x11":
+        if (os.environ.get("VINOPOP_BACKEND") or "").strip().lower() == "x11":
+            reason = "VINOPOP_BACKEND=x11"
+        else:
+            desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "this desktop"
+            reason = f"{desktop} is not KDE Plasma"
     elif not _load_layer_shell():
         reason = "Gtk4LayerShell (gtk4-layer-shell) is not installed"
     else:
         return "Wayland session - native Wayland with gtk4-layer-shell"
-    if not x11:
+    if not os.environ.get("DISPLAY"):
         return f"Wayland session, {reason}, and no XWayland DISPLAY - popup placement unavailable"
     os.environ["GDK_BACKEND"] = "x11"
-    if mutter and not forced:
-        # KWin-only paths (cursorPos script, KGlobalAccel) can't work on
-        # mutter; the X11 backend's xclip/Xlib/xdotool path does on XWayland.
-        os.environ["VINOPOP_BACKEND"] = "x11"
     return f"Wayland session, {reason} - running on XWayland (GDK_BACKEND=x11)"
 
 
