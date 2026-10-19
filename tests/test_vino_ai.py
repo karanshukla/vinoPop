@@ -2,13 +2,16 @@
 are stubbed, so these run in CI as they do on a laptop."""
 
 import json
+import subprocess
 import sys
 import types
 
 import pytest
 
-from vino_ai import ai_worker, devices, doctor, llm, models, ovfetch
+from vino_ai import ai_worker, devices, doctor, llm, models, npu_canary, ovfetch
 from vino_ai.ocr import _reading_order
+
+_real_stuck = npu_canary.stuck  # the fixture below stubs it for loader tests
 
 # ---- OCR reading order ---------------------------------------------------
 
@@ -165,6 +168,8 @@ def _llm_state(monkeypatch, tmp_path):
         llm.failures, "fingerprint", lambda key, rev: {"model": key, "driver": "1.0"}
     )
     monkeypatch.setattr(llm.devices, "forced", lambda: None)
+    monkeypatch.setattr(llm.npu_canary, "stuck", lambda: False)
+    monkeypatch.setattr(llm, "_told_stuck", False)
     monkeypatch.setattr(llm, "_special_cache", {})
     monkeypatch.setattr(llm.models, "model_dir", lambda _m: tmp_path / "model")
 
@@ -484,6 +489,46 @@ def test_forced_device_is_tried_despite_a_record(loader):
     _genai(loader, lambda dev: tried.append(dev) or dev)
     assert llm._load(lambda _m: None) == "NPU"
     assert tried == ["NPU"]
+
+
+def test_stuck_npu_is_skipped_and_reported_once_until_it_recovers(loader):
+    tried, seen, notes = [], [], []
+    stuck = [True]
+    _genai(loader, lambda dev: tried.append(dev) or dev)
+    loader.setattr(llm.npu_canary, "stuck", lambda: stuck[0])
+    loader.setattr(llm.subprocess, "run", lambda cmd, **kw: notes.append(cmd))
+
+    assert llm._load(seen.append) == "GPU"
+    assert tried == ["GPU"]
+    assert any(llm.npu_canary.RELOAD in m for m in seen)
+    assert len(notes) == 1 and llm.npu_canary.RELOAD in notes[0][-1]
+    assert llm.failures.blocking("NPU", llm.failures.fingerprint("m", "r")) is None
+
+    llm._drop_pipe()
+    assert llm._load(seen.append) == "GPU"
+    assert len(notes) == 1  # told once, not on every reload
+
+    stuck[0] = False
+    llm._drop_pipe()
+    assert llm._load(seen.append) == "NPU"
+    stuck[0] = True
+    llm._drop_pipe()
+    llm._load(seen.append)
+    assert len(notes) == 2  # stuck again after recovering: told again
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [(-11, True), (0, False), (1, False), (subprocess.TimeoutExpired("probe", 60), False)],
+)
+def test_npu_probe_only_counts_a_segfault_as_stuck(monkeypatch, outcome, expected):
+    def run(cmd, **kw):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return subprocess.CompletedProcess(cmd, outcome, "", "boom")
+
+    monkeypatch.setattr(npu_canary.subprocess, "run", run)
+    assert _real_stuck() is expected
 
 
 def test_device_still_compiling_is_not_compiled_twice(loader):

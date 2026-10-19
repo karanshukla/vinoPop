@@ -22,7 +22,7 @@ from pathlib import Path
 
 from xdg_paths import CACHE_DIR
 
-from . import devices, failures, models, telemetry
+from . import devices, failures, models, npu_canary, telemetry
 
 log = logging.getLogger("vinopop")
 
@@ -86,6 +86,8 @@ _inflight: set[str] = set()
 _state_lock = threading.Lock()  # guards _late and _inflight
 _last_used = 0.0
 _idle_timer: threading.Timer | None = None
+# The stuck-NPU notification went out; again only once the NPU has recovered.
+_told_stuck = False
 
 
 def _setting(key: str, default: float) -> float:
@@ -175,7 +177,7 @@ def _adopt_late(model_key: str, order: list[str]) -> None:
 
 
 def _load(on_status: Callable[[str], None]):
-    global _pipe, _pipe_key
+    global _pipe, _pipe_key, _told_stuck
     model = models.llm_model()
     order = devices.candidates(devices.LLM_ORDER)
     _adopt_late(model.key, order)
@@ -209,6 +211,12 @@ def _load(on_status: Callable[[str], None]):
             )
             errors.append(f"{dev}: skipped, failed before ({rec.get('error')})")
             continue
+        if dev == "NPU":
+            on_status("Checking the NPU…")
+            # Not recorded: a driver reload fixes it without any version changing.
+            if npu_canary.stuck():
+                errors.append(f"NPU: {npu_canary.STUCK}")
+                continue
         on_status(f"Loading model on {dev}…")
         props: dict[str, object] = {"CACHE_DIR": str(cache)}
         if dev == "NPU":
@@ -227,7 +235,10 @@ def _load(on_status: Callable[[str], None]):
             continue
         log.info("[vino_ai] LLM %s loaded on %s", model.repo_id, dev)
         failures.forget(dev)
-        if errors and errors[0].startswith("NPU:") and "failed before" not in errors[0]:
+        if dev == "NPU":
+            _told_stuck = False
+        warn = errors and errors[0].startswith("NPU:") and "failed before" not in errors[0]
+        if warn and not (_told_stuck and npu_canary.STUCK in errors[0]):
             _warn_fallback(dev, errors[0], on_status)
         _pipe, _pipe_key = pipe, (model.key, dev)
         return pipe
@@ -237,8 +248,13 @@ def _load(on_status: Callable[[str], None]):
 def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -> None:
     """The NPU is the point of vinoPop: say so loudly when the model ended
     up somewhere slower and hotter."""
+    global _told_stuck
     if "still compiling" in npu_error:
         msg = f"The NPU is still compiling the model, so it's running on {dev} until that's done."
+    elif npu_canary.STUCK in npu_error:
+        _told_stuck = True
+        msg = f"The NPU driver is stuck, so the model is running on {dev}. Reload it with: {npu_canary.RELOAD}"
+        npu_error = ""
     else:
         msg = f"The NPU couldn't load the model, so it's running on {dev} (slower, warmer)."
     log.warning("[vino_ai] %s %s", msg, npu_error)
@@ -250,7 +266,7 @@ def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -
                 "-i",
                 "vinopop",
                 "vinoPop AI is not on the NPU",
-                f"{msg}\n{npu_error}"[:300],
+                f"{msg}\n{npu_error}".strip()[:300],
             ],
             check=False,
         )
