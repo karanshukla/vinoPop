@@ -1,8 +1,9 @@
 """GTK 4 + libadwaita preferences window for vinoPop.
 
-Uses Adw.PreferencesWindow with grouped boxed-list rows (Adw.SwitchRow,
-Adw.ComboRow, Adw.SpinRow, Adw.EntryRow) - the GNOME-Settings-style UI
-that libhandy used to provide on GTK3.
+One Adw.PreferencesPage per topic in a sidebar (ui/sidebar_window), each
+with grouped boxed-list rows (Adw.SwitchRow, Adw.ComboRow, Adw.SpinRow,
+Adw.EntryRow) - the GNOME-Settings-style UI that libhandy used to provide
+on GTK3.
 
 Apply-on-change semantics: edits save immediately, no Save/Cancel buttons.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 import subprocess
 import threading
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import gi
 
@@ -21,7 +23,10 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from core.settings import get_settings  # noqa: E402
-from ui import gtk4_app  # noqa: E402
+from ui import gtk4_app, sidebar_window  # noqa: E402
+
+if TYPE_CHECKING:
+    from ui.plugin_manager import PluginManagerDialog
 
 # libhandy needed _unwrap_subtitle_labels() here: HdyActionRow baked
 # ellipsize=END / lines=1 into its subtitle label, so we walked the realised
@@ -444,7 +449,35 @@ _SETTING_ICONS = {
     "Trigger hotkey on first press": "media-playback-start-symbolic",
     "Reset settings to defaults": "view-refresh-symbolic",
     "Keep terminal open after running": "utilities-terminal-symbolic",
+    "Plugin Manager": "application-x-addon-symbolic",
+    "Installed plugins": "emblem-default-symbolic",
+    "Custom actions": "document-new-symbolic",
+    "Popup button order": "view-sort-ascending-symbolic",
 }
+
+#: The Plugins page: (title, subtitle, Plugin Manager tab) for each row.
+_PLUGIN_LINKS = [
+    (
+        "Plugin Manager",
+        "Browse the catalogue and install the actions you want in the popup.",
+        "available",
+    ),
+    (
+        "Installed plugins",
+        "Update or remove plugins, and switch off single actions in a bundle.",
+        "installed",
+    ),
+    (
+        "Custom actions",
+        "Make your own popup buttons without writing code.",
+        "custom",
+    ),
+    (
+        "Popup button order",
+        "Choose which buttons come first in the popup.",
+        "order",
+    ),
+]
 
 
 class SettingsDialog:
@@ -458,6 +491,8 @@ class SettingsDialog:
         self._on_changed = on_changed
         self._on_restart = on_restart
         self._on_open_plugins = on_open_plugins
+        # Only used when there's no on_open_plugins (standalone runs).
+        self._plugin_dialog: PluginManagerDialog | None = None
         # Runs the doctor the first time the Debug page is opened.
         self._debug_refresh: Callable[[], None] | None = None
         self._settings = get_settings()
@@ -486,8 +521,7 @@ class SettingsDialog:
 
         # One page per topic in a sidebar (like vinoWhisper's settings),
         # instead of every group stacked in one long scroll.
-        stack = Gtk.Stack()
-        stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        pages: list[tuple[str, str, str, Gtk.Widget]] = []
         for name, title, icon, builders in self._pages():
             page = Adw.PreferencesPage()
             for build in builders:
@@ -499,69 +533,15 @@ class SettingsDialog:
             # The Debug page's rows carry status icons instead.
             if name != "debug":
                 self._decorate_badges(page)
-            stack.add_titled(page, name, title).set_icon_name(icon)
+            pages.append((name, title, icon, page))
 
-        content_page = Adw.NavigationPage()
-        content_header = Adw.HeaderBar()
-        content_view = Adw.ToolbarView()
-        content_view.add_top_bar(content_header)
-        content_view.set_content(stack)
-        content_page.set_child(content_view)
-
-        sidebar = Gtk.ListBox()
-        sidebar.add_css_class("navigation-sidebar")
-        names: list[str] = []
-        for name, title, icon, _builders in self._pages():
-            names.append(name)
-            item = Gtk.Box(spacing=12)
-            item.set_margin_top(6)
-            item.set_margin_bottom(6)
-            item.set_margin_start(6)
-            item.append(Gtk.Image.new_from_icon_name(icon))
-            item.append(Gtk.Label(label=title, xalign=0))
-            sidebar.append(item)
-        sidebar_page = Adw.NavigationPage(title="Settings")
-        sidebar_view = Adw.ToolbarView()
-        sidebar_view.add_top_bar(Adw.HeaderBar())
-        sidebar_scroll = Gtk.ScrolledWindow()
-        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        sidebar_scroll.set_child(sidebar)
-        sidebar_view.set_content(sidebar_scroll)
-        sidebar_page.set_child(sidebar_view)
-
-        split = Adw.NavigationSplitView()
-        split.set_sidebar(sidebar_page)
-        split.set_content(content_page)
-        split.set_min_sidebar_width(190)
-        split.set_max_sidebar_width(230)
-
-        def _show_page(name: str) -> None:
-            stack.set_visible_child_name(name)
-            child = stack.get_child_by_name(name)
-            content_page.set_title(stack.get_page(child).get_title() or "")
+        def _on_show(name: str) -> None:
             self._page_name = name
             if name == "debug" and self._debug_refresh is not None:
                 refresh, self._debug_refresh = self._debug_refresh, None
                 refresh()
 
-        def _on_row(_box, row) -> None:
-            if row is None:
-                return
-            _show_page(names[row.get_index()])
-            split.set_show_content(True)
-
-        sidebar.connect("row-activated", _on_row)
-        sidebar.connect("row-selected", _on_row)
-        current = self._page_name if self._page_name in names else names[0]
-        _show_page(current)
-        sidebar.select_row(sidebar.get_row_at_index(names.index(current)))
-
-        # Narrow windows show one pane at a time: the page list, then the
-        # page with a back button.
-        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 600sp"))
-        narrow.add_setter(split, "collapsed", True)
-        win.add_breakpoint(narrow)
-        win.set_content(split)
+        sidebar_window.build(win, "Settings", pages, self._page_name, _on_show)
         _force_to_front(win)
 
     def _pages(self) -> list[tuple[str, str, str, list[Callable[[], Adw.PreferencesGroup]]]]:
@@ -590,6 +570,12 @@ class SettingsDialog:
                 "Filters",
                 "security-medium-symbolic",
                 [self._build_filter_group],
+            ),
+            (
+                "plugins",
+                "Plugins",
+                "application-x-addon-symbolic",
+                [self._build_plugins_group],
             ),
             (
                 "actions",
@@ -1852,6 +1838,35 @@ class SettingsDialog:
                 _forget,
             )
         return group
+
+    def _build_plugins_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup()
+        group.set_title("Plugins")
+        group.set_description(
+            "The popup's buttons come from plugins. Each row opens the Plugin Manager."
+        )
+        for title, subtitle, tab in _PLUGIN_LINKS:
+            row = _plain(Adw.ActionRow())
+            row.set_title(title)
+            row.set_subtitle(subtitle)
+            row.set_activatable(True)
+            chevron = Gtk.Image.new_from_icon_name("go-next-symbolic")
+            chevron.set_valign(Gtk.Align.CENTER)
+            row.add_suffix(chevron)
+            row.connect("activated", self._on_plugins_row, tab)
+            group.add(row)
+        return group
+
+    def _on_plugins_row(self, _row: Adw.ActionRow, tab: str) -> None:
+        if self._on_open_plugins is not None:
+            self._on_open_plugins(tab=tab)
+            return
+        # Standalone (python3 -m ui.settings_gui): no daemon to ask.
+        if self._plugin_dialog is None:
+            from ui.plugin_manager import PluginManagerDialog
+
+            self._plugin_dialog = PluginManagerDialog()
+        self._plugin_dialog.show(tab=tab)
 
     def _build_terminal_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
