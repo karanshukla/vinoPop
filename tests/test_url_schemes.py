@@ -3,9 +3,9 @@ put there, and xdg-open hands file: and custom schemes to whatever claims them."
 
 import pytest
 
-import actions
 import platform_backend
-import recipe_loader
+from core import actions
+from plugin_system import recipe_loader
 
 
 class _Backend:
@@ -80,7 +80,8 @@ def test_a_chain_cannot_open_a_decoded_file_url(opened):
     from pathlib import Path
 
     path = (
-        Path(recipe_loader.__file__).parent / "plugins_repo/recipes/chain-base64-decode-open.json"
+        Path(recipe_loader.__file__).parent.parent
+        / "plugins_repo/recipes/chain-base64-decode-open.json"
     )
     handler = recipe_loader._build_handler(json.loads(path.read_text()))
     handler(base64.b64encode(b"file:///home/u/Downloads/evil.exe").decode())

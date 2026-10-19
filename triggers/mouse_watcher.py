@@ -40,7 +40,7 @@ def _required_modifier_mask() -> int:
       Mod4Mask    = 64  (Super / Windows key)
     """
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         name = (get_settings().get("double_click_modifier") or "ctrl").lower()
     except Exception:

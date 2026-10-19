@@ -13,13 +13,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from xdg_paths import CONFIG_HOME
+from core.xdg_paths import CONFIG_HOME
 
 AUTOSTART_DIR = CONFIG_HOME / "autostart"
 AUTOSTART_FILE = AUTOSTART_DIR / "vinopop.desktop"
 # Written by releases from before the rename to vinoPop.
 LEGACY_AUTOSTART_FILE = AUTOSTART_DIR / "linuxpop.desktop"
-LAUNCHER = Path(__file__).resolve().parent / "vinopop"
+LAUNCHER = Path(__file__).resolve().parent.parent / "vinopop"
 
 
 def _exec_quote(arg: str) -> str:

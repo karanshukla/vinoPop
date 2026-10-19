@@ -278,7 +278,7 @@ _PERSIST_UNTIL_REVOKED = 2
 
 def _token_path() -> str:
     try:
-        from xdg_paths import STATE_DIR
+        from core.xdg_paths import STATE_DIR
 
         base = str(STATE_DIR)
     except Exception:  # noqa: BLE001 - xdg_paths is optional outside the app

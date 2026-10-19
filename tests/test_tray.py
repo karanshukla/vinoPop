@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-import tray
+from tray import tray
 
 NOOP = [lambda *a: None] * 7
 

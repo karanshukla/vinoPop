@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from classifier import ContentType
+from core.classifier import ContentType
 
 
 @dataclass

@@ -294,7 +294,7 @@ class ResultBubble:
         needs no permissions. Wayland: the /dev/input watcher (needs the
         'input' group); without it the ✕ chip and the timeouts still close."""
         try:
-            from popup import _ClickWatcher, _XInputPoll
+            from ui.popup import _ClickWatcher, _XInputPoll
         except Exception:
             return
         poll = _XInputPoll(self._on_global_click, self.dismiss)

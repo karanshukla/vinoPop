@@ -8,7 +8,7 @@ top: the vino family's green accent (shared with vinoWhisper, vinoAuthFace,
 vinoOpenEffects and vinoWatch) and vinoPop's own helper classes (.lp-*). Everything else - header bars, rows, entries, switches,
 popovers - is left to Adwaita.
 
-The floating popup bar is styled by popup.py. It keeps its fixed dark
+The floating popup bar is styled by ui/popup.py. It keeps its fixed dark
 palette and uses _LIGHT_REMAP / _apply_remap() below to swap it to a light
 variant when the resolved mode is light.
 
@@ -145,7 +145,7 @@ _BRAND_DARK_CSS = """
 """
 
 
-# Dark -> light hex remap for the popup bar's CSS (popup.py). The green
+# Dark -> light hex remap for the popup bar's CSS (ui/popup.py). The green
 # accent reads on either background, so only surfaces, text and borders swap.
 _LIGHT_REMAP = {
     "#0e0e10": "#ffffff",  # bar surface
@@ -227,7 +227,7 @@ def _on_system_dark_changed(sm, _pspec) -> None:
     _apply_brand(effective)
     import sys
 
-    popup = sys.modules.get("popup")
+    popup = sys.modules.get("ui.popup")
     if popup is not None:
         try:
             popup.reinstall_popup_css()
@@ -275,7 +275,7 @@ def install_premium_theme(mode: str = "dark") -> None:
     """
     global _requested_mode, _dark_handler
 
-    import gtk4_app
+    from ui import gtk4_app
 
     gtk4_app.init()
     if Gdk.Display.get_default() is None:

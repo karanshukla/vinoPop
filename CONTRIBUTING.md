@@ -3,6 +3,23 @@
 Thanks for your interest! vinoPop is a small, hackable tool - most useful
 contributions will be plugins.
 
+## Project layout
+
+```
+vinopop             launcher (what autostart and ~/.local/bin run)
+main.py             the daemon: wires everything together
+core/               classifier, actions, settings, XDG paths, version, autostart
+triggers/           what starts the popup: hotkeys, selection and double-click watchers, editable-field detection
+plugin_system/      Plugin dataclass, plugin and recipe loaders, compat for old bare-name imports
+ui/                 GTK 4 windows: popup bar, AI bubble, settings, plugin manager, recipe wizard, onboarding, theme
+capture/            screen OCR and its region selector
+tray/               tray protocol (daemon side) and the Qt tray process
+platform_backend/   X11 and KDE Wayland backends
+vino_ai/            offline AI on OpenVINO: models, worker, OCR, doctor
+plugins_repo/       bundled plugins and recipes (the catalogue)
+icons/  docs/  scripts/  tests/
+```
+
 ## Writing a plugin
 
 A plugin is a single Python file in `~/.config/vinopop/plugins/` that defines
@@ -59,7 +76,7 @@ text → popup shows your new button.
 | `requires_editable` | `bool` | Hide the button when the focused widget is not editable (default false) |
 
 `ContentType` values: `COMMAND`, `URL`, `EMAIL`, `PATH`, `PLAIN_TEXT`. See
-`classifier.py` for the classification rules.
+`core/classifier.py` for the classification rules.
 
 ### Tips
 
@@ -73,8 +90,9 @@ text → popup shows your new button.
   themes](https://developer.gnome.org/hig/reference/icons.html). Use
   `-symbolic` suffix for monochrome icons that pick up theme colors.
 - **Don't depend on a specific path layout** - `classifier`, `plugin_base`,
-  `actions` and `settings` are importable because plugin_loader puts the
-  vinoPop directory on `sys.path`. Don't add `sys.path.insert` to your
+  `actions` and `settings` are importable by those bare names because
+  `plugin_system/compat.py` maps them to `core.classifier`,
+  `plugin_system.plugin_base` and so on. Don't add `sys.path.insert` to your
   plugin.
 
 ### Submitting a plugin to the built-in catalogue

@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-import recipe_loader
+from plugin_system import recipe_loader
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_save_recipe_refuses_names_that_escape_the_recipes_dir(tmp_path, monkeyp
 def test_bundled_recipes_validate():
     import json
 
-    for path in recipe_loader.Path(recipe_loader.__file__).parent.glob(
+    for path in recipe_loader.Path(recipe_loader.__file__).parent.parent.glob(
         "plugins_repo/recipes/*.json"
     ):
         assert recipe_loader.validate(json.loads(path.read_text())) == [], path.name
@@ -444,7 +444,7 @@ def test_editing_a_recipe_still_overwrites_its_own_file(tmp_path, monkeypatch):
 def test_bundled_recipes_are_shell_safe():
     import json
 
-    for path in recipe_loader.Path(recipe_loader.__file__).parent.glob(
+    for path in recipe_loader.Path(recipe_loader.__file__).parent.parent.glob(
         "plugins_repo/recipes/*.json"
     ):
         assert recipe_loader.safety_errors(json.loads(path.read_text())) == [], path.name

@@ -15,15 +15,16 @@ import sys
 import traceback
 from pathlib import Path
 
-import actions
-from classifier import ContentType
-from plugin_base import Plugin
-from xdg_paths import CONFIG_DIR, HICOLOR_APPS, USER_ICONS_DIR
+from core import actions
+from core.classifier import ContentType
+from core.xdg_paths import CONFIG_DIR, HICOLOR_APPS, USER_ICONS_DIR
+from plugin_system import compat
+from plugin_system.plugin_base import Plugin
 
 _PLUGINS: list[Plugin] = []
 
 USER_PLUGIN_DIR = CONFIG_DIR / "plugins"
-VINOPOP_DIR = str(Path(__file__).resolve().parent)
+VINOPOP_DIR = str(Path(__file__).resolve().parent.parent)
 REPO_PLUGIN_DIR = Path(VINOPOP_DIR) / "plugins_repo"
 ICONS_DIR = Path(VINOPOP_DIR) / "icons"
 
@@ -44,6 +45,7 @@ _PLUGIN_SEED_MARKER = USER_PLUGIN_DIR.parent / ".default-plugins-seeded"
 
 def _ensure_on_path() -> None:
     """User plugins import classifier/plugin_base - make sure those resolve."""
+    compat.install()
     if VINOPOP_DIR not in sys.path:
         sys.path.insert(0, VINOPOP_DIR)
 
@@ -157,7 +159,7 @@ def register(plugin: Plugin) -> None:
     bundled .py file (e.g. "select-all" from editing_actions) without
     deleting the whole bundle."""
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         disabled = set(get_settings().get("disabled_plugins") or [])
     except Exception:
@@ -194,7 +196,7 @@ def for_content_type(content_type: ContentType, text: str | None = None) -> list
     # User-defined order takes precedence; plugins listed earlier come first.
     # Plugins not in the order list fall back to their built-in priority.
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         order = list(get_settings().get("plugin_order") or [])
     except Exception:
@@ -253,13 +255,13 @@ def _register_builtins() -> None:
     # an executable script ('./build.sh', '~/bin/deploy'), via the
     # predicate. Lets users run a script with one click instead of having
     # to switch to a terminal and type the path.
-    from classifier import is_runnable_path
+    from core.classifier import is_runnable_path
 
     def _can_run(text: str) -> bool:
         # If classify() already returned COMMAND we wouldn't be here via
         # the PATH branch - for the COMMAND branch, the plugin's content_types
         # gate already matched. We only need to gate the PATH case.
-        from classifier import classify as _classify
+        from core.classifier import classify as _classify
 
         ct = _classify(text)
         if ct == ContentType.COMMAND:
@@ -418,7 +420,7 @@ def update_bundled(src: Path, dst: Path) -> None:
         except (OSError, json.JSONDecodeError):
             pass
         if enabled is not None:
-            import recipe_loader
+            from plugin_system import recipe_loader
 
             recipe = json.loads(src.read_text(encoding="utf-8"))
             recipe_loader.save_recipe({**recipe, "enabled": enabled}, target_path=dst)
@@ -519,7 +521,7 @@ def load_all() -> None:
 
 def _load_recipes() -> None:
     try:
-        import recipe_loader
+        from plugin_system import recipe_loader
 
         recipe_loader.load_recipes(register)
     except Exception as exc:  # noqa: BLE001

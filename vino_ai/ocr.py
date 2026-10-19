@@ -19,7 +19,7 @@ import logging
 import threading
 import time
 
-from xdg_paths import CACHE_DIR
+from core.xdg_paths import CACHE_DIR
 
 from . import devices, telemetry
 from .llm import IDLE_UNLOAD_MINUTES, _setting

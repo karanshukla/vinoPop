@@ -195,7 +195,7 @@ def _wayland_input() -> list[Result]:
 
 def collect() -> list[Result]:
     try:
-        from version import __version__
+        from core.version import __version__
     except Exception:  # noqa: BLE001
         __version__ = "unknown"
     py = sys.version_info
@@ -217,7 +217,7 @@ def main(as_json: bool = False) -> int:
     # A diagnostic must not create files (or print "[settings] wrote defaults"
     # into --json output on a fresh machine).
     try:
-        import settings
+        from core import settings
 
         settings.write_defaults = False
     except Exception:  # noqa: BLE001

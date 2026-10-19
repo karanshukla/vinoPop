@@ -22,12 +22,13 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tray import FrameReader  # the same wire protocol as the daemon side
-from xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
-from xdg_paths import CONFIG_DIR, HICOLOR_APPS
+# Run as a script, so the repo root (not this folder) has to be on the path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
+from core.xdg_paths import CONFIG_DIR, HICOLOR_APPS
+from tray.tray import FrameReader  # the same wire protocol as the daemon side
 
-ICON_DIR = str(Path(__file__).resolve().parent / "icons")
+ICON_DIR = str(Path(__file__).resolve().parent.parent / "icons")
 # How long after startup a missing tray host counts as missing: at login the
 # panel can come up after us.
 _TRAY_HOST_GRACE_MS = 15000

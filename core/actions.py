@@ -9,8 +9,8 @@ import subprocess
 import threading
 import urllib.parse
 
-from classifier import _normalize as _strip_invisible
-from classifier import strip_shell_prompts
+from core.classifier import _normalize as _strip_invisible
+from core.classifier import strip_shell_prompts
 
 # Thread-local 'force copy only' flag. When set, replace_selection
 # writes to the clipboard but skips the Ctrl+V step - the popup uses
@@ -328,7 +328,7 @@ def _search_template() -> str:
     """Return the URL template for the user's chosen search engine.
     Falls back to Google if the configured engine is unknown."""
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         s = get_settings()
         engine = (s.get("search_engine") or "google").strip().lower()
@@ -374,7 +374,7 @@ def _find_terminal() -> tuple[str, list[str]] | None:
 
 def _terminal_keep_open() -> bool:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         return bool(get_settings().get("terminal_keep_open", True))
     except Exception:
@@ -383,7 +383,7 @@ def _terminal_keep_open() -> bool:
 
 def _should_confirm_terminal() -> bool:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         return bool(get_settings().get("terminal_confirm_run", True))
     except Exception:

@@ -16,7 +16,6 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
-
 from plugin_base import Plugin  # noqa: E402
 
 log = logging.getLogger("vinopop")
@@ -74,6 +73,7 @@ def _translate(text: str) -> None:
     if not text:
         return
     import ai_bubble
+
     from vino_ai import ai_worker
 
     state = {"bubble": None, "code": _target_lang()}

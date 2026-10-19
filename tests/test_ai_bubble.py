@@ -8,7 +8,7 @@ pytest.importorskip("gi")
 @pytest.fixture
 def ai_bubble():
     try:
-        import ai_bubble
+        from ui import ai_bubble
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     return ai_bubble

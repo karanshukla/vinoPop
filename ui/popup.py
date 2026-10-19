@@ -24,11 +24,11 @@ try:
 except Exception:  # python-xlib is absent on pure-Wayland (KDE) installs
     X = XK = xdisplay = None  # type: ignore
 
-import actions
-import plugin_loader
-from classifier import ContentType
+from core import actions
+from core.classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
 from platform_backend.monitors import monitor_at  # noqa: E402
+from plugin_system import plugin_loader
 
 log = logging.getLogger("vinopop")
 
@@ -145,7 +145,7 @@ def _resolve_button_size() -> int:
     Falls back to the default if the key isn't set or has been hand-
     edited to nonsense in settings.json."""
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         raw = get_settings().get("popup_button_size", _BUTTON_SIZE_DEFAULT)
         size = int(raw or _BUTTON_SIZE_DEFAULT)
@@ -178,7 +178,7 @@ def _build_css(size: int) -> bytes:
     # Apply the same dark->light palette swap the main theme uses, so
     # the popup doesn't end up as a dark island in a light window.
     try:
-        import theme as _theme
+        from ui import theme as _theme
 
         mode = _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark"))
         if mode == "light":
@@ -195,7 +195,7 @@ def get_settings_func():
     settings can't be reached. Wrapped so _build_css doesn't have to
     care about import-time ordering."""
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         return get_settings()
     except Exception:
@@ -603,7 +603,7 @@ class PopupWindow:
         Returning False is the safe default; misreads just give the
         normal filtered popup."""
         try:
-            from settings import get_settings as _gs
+            from core.settings import get_settings as _gs
 
             mod_name = (_gs().get("popup_force_all_modifier") or "").strip().lower()
         except Exception:
@@ -728,7 +728,7 @@ class PopupWindow:
         glyph on the dark bar."""
         fg, bg = "#fafafa", "#0e0e10"
         try:
-            import theme as _theme
+            from ui import theme as _theme
 
             mode = _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark"))
             if mode == "light":
@@ -796,7 +796,7 @@ class PopupWindow:
         icon_px = max(12, int(size * 0.72))
         # Swap to the colour tile or the mono glyph per the user's icon_style.
         try:
-            import icon_style
+            from ui import icon_style
 
             icon_name = icon_style.resolve(icon_name)
         except Exception:
@@ -851,7 +851,7 @@ class PopupWindow:
             # Sort the same way for_content_type does so plugin_order
             # is honoured in the expanded view too.
             try:
-                from settings import get_settings as _gs
+                from core.settings import get_settings as _gs
 
                 order = list(_gs().get("plugin_order") or [])
             except Exception:
@@ -878,7 +878,7 @@ class PopupWindow:
         # in priority/custom-order, so the first N are the highest-
         # ranked. Users who want everything raise max_popup_buttons.
         try:
-            from settings import get_settings as _gs
+            from core.settings import get_settings as _gs
 
             max_btns = _gs().get_int("max_popup_buttons") or 10
         except Exception:
@@ -993,7 +993,7 @@ class PopupWindow:
         'cap'    -> one row only; the rest go behind a +N chip.
         """
         try:
-            from settings import get_settings as _gs
+            from core.settings import get_settings as _gs
 
             m = (_gs().get("popup_overflow_mode") or "wrap").strip().lower()
         except Exception:

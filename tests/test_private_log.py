@@ -4,7 +4,7 @@ import logging
 import os
 import stat
 
-from xdg_paths import PrivateRotatingFileHandler
+from core.xdg_paths import PrivateRotatingFileHandler
 
 
 def _mode(p):

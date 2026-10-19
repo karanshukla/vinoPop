@@ -2,7 +2,7 @@
 
 GTK 4 has no Gtk.main(); vinoPop runs a plain GLib main loop instead of a
 Gtk.Application, so windows can open and close freely (the daemon has no
-"main window") and standalone `python3 settings_gui.py`-style runners keep
+"main window") and standalone `python3 -m ui.settings_gui`-style runners keep
 working. Target: GTK 4.14 and libadwaita 1.5 (Ubuntu 24.04, Fedora 40).
 """
 

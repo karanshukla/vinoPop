@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import autostart
+from core import autostart
 
 
 def test_plain_paths_are_left_bare():
@@ -35,7 +35,7 @@ def test_set_enabled_writes_and_removes_the_file(tmp_path, monkeypatch):
 
 
 def test_autostart_dir_follows_xdg_config_home():
-    import xdg_paths
+    from core import xdg_paths
 
     assert autostart.AUTOSTART_DIR == xdg_paths.CONFIG_HOME / "autostart"
 

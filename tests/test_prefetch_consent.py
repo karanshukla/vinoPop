@@ -10,8 +10,8 @@ import pytest
 pytest.importorskip("gi")
 
 import main  # noqa: E402
-import settings  # noqa: E402
 import vino_ai  # noqa: E402
+from core import settings  # noqa: E402
 from vino_ai import models  # noqa: E402
 
 
@@ -101,7 +101,7 @@ def test_existing_install_with_a_model_keeps_prefetching(start_app):
 
 
 def test_onboarding_asks_only_when_there_is_a_model_to_download(start_app, tmp_path):
-    import onboarding
+    from ui import onboarding
 
     def asks():
         pages = onboarding._build_pages(settings.Settings(tmp_path / "s.json"))

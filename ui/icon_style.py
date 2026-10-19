@@ -115,7 +115,7 @@ def available(icon_name: str, theme=None) -> str:
 
 def current_style() -> str:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         s = (get_settings().get("icon_style") or "color").strip().lower()
     except Exception:

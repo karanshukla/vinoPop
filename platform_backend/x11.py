@@ -218,17 +218,17 @@ class X11Backend(PlatformBackend):
 
     # ---- component factories --------------------------------------------
     def make_selection_watcher(self, on_selection, debounce_ms):
-        from watcher import SelectionWatcher
+        from triggers.watcher import SelectionWatcher
 
         return SelectionWatcher(on_selection, debounce_ms=debounce_ms)
 
     def make_hotkey(self, hotkey_str, on_trigger, use_polling=False, role=None):
-        from hotkey import Hotkey
+        from triggers.hotkey import Hotkey
 
         return Hotkey(hotkey_str, on_trigger, use_polling=use_polling)
 
     def can_bind_hotkey(self, hotkey_str):
-        from hotkey import _parse, _resolve_keysym
+        from triggers.hotkey import _parse, _resolve_keysym
 
         try:
             _, keysym_name = _parse(hotkey_str)
@@ -237,7 +237,7 @@ class X11Backend(PlatformBackend):
         return _resolve_keysym(keysym_name) != 0
 
     def make_double_click_watcher(self, on_double_click):
-        from mouse_watcher import DoubleClickWatcher
+        from triggers.mouse_watcher import DoubleClickWatcher
 
         return DoubleClickWatcher(on_double_click)
 

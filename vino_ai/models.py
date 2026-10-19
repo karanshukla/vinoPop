@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from xdg_paths import DATA_DIR
+from core.xdg_paths import DATA_DIR
 
 # The xet transfer backend can hang for good on a multi-GB model with no
 # error. Plain HTTPS resumes, and the timeout turns a stall into an
@@ -76,7 +76,7 @@ _download_lock = threading.Lock()
 
 def llm_model() -> LlmModel:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         key = get_settings().get("ai_llm_model") or DEFAULT_LLM
     except Exception:

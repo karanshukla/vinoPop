@@ -89,7 +89,7 @@ def test_a_stopped_watcher_captures_nothing(ch, monkeypatch):
 
 
 def test_plugin_loader_shuts_down_the_previous_copy_before_reloading(monkeypatch):
-    import plugin_loader
+    from plugin_system import plugin_loader
 
     calls = []
     good = types.ModuleType("vinopop_user_good")
@@ -561,7 +561,7 @@ class _FakeAlertDialog:
 def test_pin_as_snippet_saves_the_selection_as_literal(store, monkeypatch):
     from gi.repository import Adw, GLib
 
-    import actions
+    from core import actions
 
     monkeypatch.setitem(sys.modules, "clipboard_history", store)
     monkeypatch.setattr(Adw, "AlertDialog", _FakeAlertDialog)

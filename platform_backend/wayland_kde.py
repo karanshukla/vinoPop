@@ -447,7 +447,7 @@ class WaylandDoubleClickWatcher:
         """The configured modifier name, read fresh each click so changing
         the setting takes effect without a restart."""
         try:
-            from settings import get_settings
+            from core.settings import get_settings
 
             name = (get_settings().get("double_click_modifier") or "ctrl").lower()
         except Exception:

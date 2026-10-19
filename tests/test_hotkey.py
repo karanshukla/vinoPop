@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("gi")  # hotkey.py schedules its callback through GLib
 pytest.importorskip("Xlib")
 
-import hotkey  # noqa: E402
+from triggers import hotkey  # noqa: E402
 
 
 @pytest.mark.parametrize(

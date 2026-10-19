@@ -176,7 +176,7 @@ def test_offscreen_parking_keeps_the_output(layer):
 def test_ai_bubble_uses_logical_coords():
     pytest.importorskip("gi")
     try:
-        import ai_bubble
+        from ui import ai_bubble
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     hidpi = _Mon(0, 0, 1920, 1080, scale=2)
@@ -208,7 +208,7 @@ def test_kwin_helper_bus_names_are_unique(mod):
 def test_ocr_capture_argv_per_monitor():
     pytest.importorskip("gi")
     try:
-        import ocr_selector
+        from capture import ocr_selector
     except (ImportError, ValueError) as exc:
         pytest.skip(f"GTK 4 unavailable: {exc}")
     argv = ocr_selector._capture_argv

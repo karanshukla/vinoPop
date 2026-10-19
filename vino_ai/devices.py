@@ -50,7 +50,7 @@ def _log_npu_notes() -> None:
 
 def _setting() -> str:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         return str(get_settings().get("ai_device") or "auto").upper()
     except Exception:

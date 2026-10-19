@@ -20,8 +20,8 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
-import gtk4_app  # noqa: E402
-from settings import get_settings  # noqa: E402
+from core.settings import get_settings  # noqa: E402
+from ui import gtk4_app  # noqa: E402
 
 # libhandy needed _unwrap_subtitle_labels() here: HdyActionRow baked
 # ellipsize=END / lines=1 into its subtitle label, so we walked the realised
@@ -213,7 +213,7 @@ def _doctor_checks() -> list[dict]:
     import sys
     from pathlib import Path
 
-    launcher = Path(__file__).resolve().parent / "vinopop"
+    launcher = Path(__file__).resolve().parent.parent / "vinopop"
     try:
         res = subprocess.run(
             [sys.executable, str(launcher), "--doctor", "--json"],
@@ -231,7 +231,7 @@ def _session_info() -> list[tuple[str, str]]:
     import platform
 
     try:
-        from version import __version__
+        from core.version import __version__
     except Exception:  # noqa: BLE001
         __version__ = "unknown"
     env = os.environ.get
@@ -265,13 +265,13 @@ def _apply_theme(mode: str) -> None:
     """Load the app theme for `mode` and rebuild the popup's own CSS
     provider so the selection popup picks up the new palette too."""
     try:
-        import theme as _theme
+        from ui import theme as _theme
 
         _theme.install_premium_theme(mode)
     except Exception as exc:
         print(f"[settings] theme reload failed: {exc}")
     try:
-        import popup as _popup
+        from ui import popup as _popup
 
         _popup.reinstall_popup_css()
     except Exception as exc:
@@ -631,7 +631,7 @@ class SettingsDialog:
         box.add_css_class("lp-badge")
         box.add_css_class(f"lp-badge-{color_index % 4}")
         it = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
-        import icon_style
+        from ui import icon_style
 
         icon_name = icon_style.available(icon_name or "", it)
         name = icon_name if (icon_name and it.has_icon(icon_name)) else "emblem-system-symbolic"
@@ -772,7 +772,7 @@ class SettingsDialog:
             # Live-apply: rebuild the popup's CSS provider so the next
             # show_for() renders at the new size.
             try:
-                import popup as _popup
+                from ui import popup as _popup
 
                 _popup.reinstall_popup_css()
             except Exception as exc:
@@ -799,7 +799,7 @@ class SettingsDialog:
                 icon_preview.remove(child)
                 child = nxt
             try:
-                import icon_style as _ist
+                from ui import icon_style as _ist
 
                 concepts = _ist.PREVIEW_CONCEPTS
             except Exception:
@@ -931,7 +931,7 @@ class SettingsDialog:
         ocr_row = _plain(Adw.ActionRow())
         ocr_row.set_title("Screen OCR hotkey")
         try:
-            from screen_ocr import is_supported as _ocr_supported
+            from capture.screen_ocr import is_supported as _ocr_supported
 
             ocr_ok, ocr_reason = _ocr_supported()
         except Exception:
@@ -951,7 +951,7 @@ class SettingsDialog:
         # also relied on xclip - absent on a Wayland box.
         if not ocr_ok:
             try:
-                from screen_ocr import install_argv as _ocr_install_argv
+                from capture.screen_ocr import install_argv as _ocr_install_argv
 
                 argv = _ocr_install_argv()
             except Exception:
@@ -977,7 +977,7 @@ class SettingsDialog:
 
                 def _done(ok, err):
                     try:
-                        from screen_ocr import is_supported as _sup
+                        from capture.screen_ocr import is_supported as _sup
 
                         now_ok, reason = _sup()
                     except Exception:
@@ -1106,12 +1106,12 @@ class SettingsDialog:
             False,
         )
         try:
-            import autostart
+            from core import autostart
 
             auto_row.set_active(autostart.is_enabled())
 
             def _on_auto_toggle(sw, _p):
-                import autostart as _as
+                from core import autostart as _as
 
                 ok = _as.set_enabled(sw.get_active())
                 if not ok:
@@ -1511,7 +1511,7 @@ class SettingsDialog:
 
         # Pull catalog from actions.py so the two stay in sync.
         try:
-            from actions import SEARCH_ENGINES
+            from core.actions import SEARCH_ENGINES
         except Exception:
             SEARCH_ENGINES = {"google": ("Google", "https://www.google.com/search?q={q}")}
 
@@ -1768,7 +1768,7 @@ class SettingsDialog:
         return group
 
     def _build_session_group(self) -> Adw.PreferencesGroup:
-        from xdg_paths import LOG_FILE
+        from core.xdg_paths import LOG_FILE
 
         group = Adw.PreferencesGroup()
         group.set_title("This session")
@@ -1819,7 +1819,7 @@ class SettingsDialog:
         restart.set_sensitive(self._on_restart is not None)
 
         def _setup(*_) -> None:
-            from onboarding import OnboardingWindow
+            from ui.onboarding import OnboardingWindow
 
             win = OnboardingWindow(self._settings, on_open_plugins=self._on_open_plugins)
             if self._window is not None:

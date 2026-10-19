@@ -245,7 +245,7 @@ def _capture_image() -> tuple[Path | None, str | None]:
     # Prefer the frictionless overlay selector (drag -> done, no Accept step).
     # Fall back to the desktop's region tool if it isn't available.
     try:
-        import ocr_selector
+        from capture import ocr_selector
 
         if ocr_selector.available():
             crop = _capture_via_overlay()
@@ -262,7 +262,7 @@ def _capture_image() -> tuple[Path | None, str | None]:
 
 def _describe_enabled() -> bool:
     try:
-        from settings import get_settings
+        from core.settings import get_settings
 
         return bool(get_settings().get("ocr_describe_images", False))
     except Exception:
@@ -272,7 +272,7 @@ def _describe_enabled() -> bool:
 def _describe(image: Path, ocr_text: str) -> None:
     """Stream the AI model's alt text for `image` into a result bubble at
     the pointer, with Copy. Takes ownership of `image`."""
-    import ai_bubble
+    from ui import ai_bubble
     from vino_ai import ai_worker
 
     def _work(bubble) -> None:
@@ -331,7 +331,7 @@ def _capture_via_overlay() -> str | None:
 
     from gi.repository import GLib
 
-    import ocr_selector
+    from capture import ocr_selector
 
     done = threading.Event()
     holder: dict = {}

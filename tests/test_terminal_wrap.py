@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-import actions
-from classifier import strip_shell_prompts
+from core import actions
+from core.classifier import strip_shell_prompts
 
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
 

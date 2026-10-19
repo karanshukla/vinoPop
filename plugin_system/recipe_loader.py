@@ -35,13 +35,13 @@ import urllib.parse
 from collections.abc import Callable
 from pathlib import Path
 
-from classifier import ContentType
-from plugin_base import Plugin
-from xdg_paths import CONFIG_DIR
+from core.classifier import ContentType
+from core.xdg_paths import CONFIG_DIR
+from plugin_system.plugin_base import Plugin
 
 
 def notify(title: str, body: str, icon: str = "vinopop", timeout_ms: int = 3000) -> None:
-    import actions
+    from core import actions
 
     actions.notify(title, body, icon, timeout_ms)
 
@@ -576,7 +576,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
         def handler(text: str) -> None:
             url = _render(template, text).strip()
-            import actions
+            from core import actions
 
             # A template starting with {text} could produce any scheme.
             actions.open_web_url(url)
@@ -728,7 +728,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     # Put text on clipboard, then send Ctrl+V to whichever
                     # window currently holds focus. Same pattern the
                     # editing_actions plugin uses.
-                    import actions
+                    from core import actions
 
                     actions.replace_selection(current)
                 elif stype == "notify":
@@ -747,7 +747,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     )
                 elif stype == "open_url":
                     url = (rendered or current).strip()
-                    import actions
+                    from core import actions
 
                     actions.open_web_url(url)
                 else:
@@ -891,7 +891,7 @@ def _seed_default_recipes() -> None:
     if has_existing:
         _SEED_MARKER.touch()
         return
-    repo_dir = Path(__file__).resolve().parent / "plugins_repo" / "recipes"
+    repo_dir = Path(__file__).resolve().parent.parent / "plugins_repo" / "recipes"
     if not repo_dir.is_dir():
         _SEED_MARKER.touch()
         return

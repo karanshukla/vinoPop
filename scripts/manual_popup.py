@@ -9,11 +9,13 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib  # noqa: E402
 
 sys.path.insert(0, ".")
-import gtk4_app  # noqa: E402
-import plugin_loader  # noqa: E402
-import theme  # noqa: E402
-from classifier import ContentType  # noqa: E402
-from popup import PopupWindow  # noqa: E402
+from core.classifier import ContentType  # noqa: E402
+from plugin_system import plugin_loader  # noqa: E402
+from ui import (
+    gtk4_app,  # noqa: E402
+    theme,  # noqa: E402
+)
+from ui.popup import PopupWindow  # noqa: E402
 
 
 def main():

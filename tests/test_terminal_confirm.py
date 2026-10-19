@@ -2,7 +2,7 @@
 
 import pytest
 
-import actions
+from core import actions
 
 
 def test_hidden_newlines_cannot_push_a_command_below_the_fold():

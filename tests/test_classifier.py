@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from classifier import (
+from core.classifier import (
     _AMBIGUOUS_COMMANDS,
     _COMMAND_HINTS,
     _COMMAND_TOKENS,
