@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Clipboard history + snippets picker.
 
 Two backing stores:
@@ -231,6 +231,11 @@ class Entry:
     # sha1 of an image entry's PNG, so re-copying an image already in
     # history moves it up instead of saving a duplicate. Empty on older saves.
     image_hash: str = ""
+    # Pasted as written: no {placeholder} expansion. Set on text pinned from
+    # a selection (issue #86), which is someone else's text, so a
+    # {shell:...} or {clipboard} in it must not run or pull anything in.
+    # False on older saves and on snippets the user writes themselves.
+    literal: bool = False
 
     def trigger_list(self) -> list[str]:
         """Parse `trigger` into a list of clean shortcodes."""
@@ -484,8 +489,11 @@ def _unpin_snippet(snippet_id: str) -> None:
                 pass
 
 
-def _create_snippet(name: str, text: str, trigger: str = "", category: str = "") -> None:
-    """Make a brand-new snippet from scratch (not derived from history)."""
+def _create_snippet(
+    name: str, text: str, trigger: str = "", category: str = "", literal: bool = False
+) -> None:
+    """Make a brand-new snippet from scratch (not derived from history).
+    `literal` saves it to paste as written, placeholders and all."""
     snippet = Entry(
         id=uuid.uuid4().hex[:12],
         timestamp=time.time(),
@@ -494,6 +502,7 @@ def _create_snippet(name: str, text: str, trigger: str = "", category: str = "")
         name=name,
         trigger=trigger.strip(),
         category=category.strip(),
+        literal=literal,
     )
     with _snippets_lock:
         _snippets.insert(0, snippet)
@@ -1207,7 +1216,7 @@ def _fire_trigger_expansion(
     # Snippets with {ask:} can't run inline from a trigger - a blocking
     # dialog mid-keystroke is jarring. Skip silently; the user can still
     # invoke them via the picker.
-    if "{ask:" in snippet.text:
+    if not snippet.literal and "{ask:" in snippet.text:
         print(f"[triggers] '{trigger}' has {{ask:}} - skipping (use picker)")
         return False
     # Per-app/site blocklist: skip expansion in user-configured apps
@@ -1215,10 +1224,13 @@ def _fire_trigger_expansion(
     if _trigger_blocked():
         print(f"[triggers] '{trigger}' skipped - active window is in blocklist")
         return False
-    rendered, cursor_left, _ = render_placeholders(
-        snippet.text,
-        lambda _label: None,
-    )
+    if snippet.literal:
+        rendered, cursor_left = snippet.text, 0
+    else:
+        rendered, cursor_left, _ = render_placeholders(
+            snippet.text,
+            lambda _label: None,
+        )
     # Case-propagation: typed 'Rraak' → Title-case output;
     # typed 'RRAAK' → UPPER output.
     rendered = _propagate_case(typed, rendered)
@@ -2942,8 +2954,9 @@ class _PickerDialog:
         cursor_left = 0
         # Only snippets get placeholder substitution. Recent-history entries
         # are pasted verbatim - a "{date}" the user copied from somewhere
-        # else should stay literal.
-        if is_snippet and entry.kind == "text" and "{" in entry.text:
+        # else should stay literal - and so are snippets pinned from a
+        # selection, for the same reason.
+        if is_snippet and entry.kind == "text" and not entry.literal and "{" in entry.text:
             rendered, cursor_left, cancelled = render_placeholders(
                 entry.text,
                 self._ask_placeholder_values,

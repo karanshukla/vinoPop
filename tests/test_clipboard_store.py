@@ -535,3 +535,117 @@ def test_capture_still_works_with_a_bad_history_size(store, monkeypatch):
     _clipboard(store, monkeypatch, ["text/plain"], text="still here")
     store._capture_current_clipboard()
     assert [e.text for e in store._history] == ["still here"]
+
+
+# ----- issue #86: text pinned from a selection pastes literally ---------------
+
+_LIVE = "{a} {shell:touch /tmp/x} {clipboard} {selection} {date} {cursor} {ask:Who}"
+
+
+class _FakeAlertDialog:
+    """Stands in for Adw.AlertDialog: answers "save" as soon as it's shown."""
+
+    def __init__(self, **_kw):
+        self._on_response = None
+
+    def connect(self, _signal, cb):
+        self._on_response = cb
+
+    def present(self, _parent):
+        self._on_response(self, "save")
+
+    def __getattr__(self, _name):  # add_response, set_extra_child, ...
+        return lambda *_a, **_kw: None
+
+
+def test_pin_as_snippet_saves_the_selection_as_literal(store, monkeypatch):
+    from gi.repository import Adw, GLib
+
+    import actions
+
+    monkeypatch.setitem(sys.modules, "clipboard_history", store)
+    monkeypatch.setattr(Adw, "AlertDialog", _FakeAlertDialog)
+    monkeypatch.setattr(GLib, "idle_add", lambda fn: fn())
+    monkeypatch.setattr(actions.subprocess, "run", lambda *_a, **_kw: None)
+    actions.pin_as_snippet(_LIVE)
+    [s] = store._snippets
+    assert (s.text, s.literal) == (_LIVE, True)
+
+
+def test_a_literal_snippet_survives_a_save_and_reload(store):
+    store._create_snippet("code", _LIVE, literal=True)
+    store._create_snippet("mine", "{date}")
+    loaded: list = []
+    assert store._load_list(store.SNIPPETS_FILE, loaded)
+    assert [(e.text, e.literal) for e in loaded] == [("{date}", False), (_LIVE, True)]
+
+
+def test_snippets_saved_before_the_flag_load_as_live(store):
+    store.SNIPPETS_FILE.parent.mkdir(parents=True)
+    store.SNIPPETS_FILE.write_text(
+        json.dumps([{"id": "s", "timestamp": 1.0, "kind": "text", "text": "{date}"}])
+    )
+    loaded: list = []
+    assert store._load_list(store.SNIPPETS_FILE, loaded)
+    assert loaded[0].literal is False
+
+
+def _no_expansion(store, monkeypatch):
+    """Fail the test if anything a placeholder would trigger runs."""
+
+    def boom(*_a, **_kw):
+        raise AssertionError("placeholder expanded")
+
+    store.settings["snippet_shell_enabled"] = True
+    for fn in ("_read_clipboard_text", "_read_primary_selection", "_render_shell_token"):
+        monkeypatch.setattr(store, fn, boom)
+
+
+def _capture_paste(store, monkeypatch):
+    pasted = []
+    monkeypatch.setattr(
+        store, "_paste_to_window", lambda e, _t, cursor_left: pasted.append((e.text, cursor_left))
+    )
+    return pasted
+
+
+def test_picker_pastes_a_literal_snippet_as_written(store, picker, monkeypatch):
+    _no_expansion(store, monkeypatch)
+    monkeypatch.setattr(picker, "_ask_placeholder_values", lambda _f: pytest.fail("asked"))
+    pasted = _capture_paste(store, monkeypatch)
+    store._create_snippet("code", _LIVE, literal=True)
+    picker._paste_and_close(store._snippets[0], is_snippet=True)
+    assert pasted == [(_LIVE, 0)]
+
+
+def test_picker_still_expands_a_user_snippet(store, picker, monkeypatch):
+    pasted = _capture_paste(store, monkeypatch)
+    monkeypatch.setattr(store, "_read_clipboard_text", lambda: "CLIP")
+    store._create_snippet("mine", "got {clipboard}")
+    picker._paste_and_close(store._snippets[0], is_snippet=True)
+    assert pasted == [("got CLIP", 0)]
+
+
+def _expand_by_trigger(store, monkeypatch, snippet):
+    """What the trigger would stage on the clipboard (the worker isn't run)."""
+    out = []
+    monkeypatch.setattr(store, "_trigger_blocked", lambda: False)
+    monkeypatch.setattr(store, "_propagate_case", lambda _typed, text: out.append(text) or text)
+    monkeypatch.setattr(
+        store.threading, "Thread", lambda **_kw: types.SimpleNamespace(start=lambda: None)
+    )
+    store._fire_trigger_expansion(";t", ";t", " ", snippet)
+    return out
+
+
+def test_trigger_expands_a_literal_snippet_as_written(store, monkeypatch):
+    _no_expansion(store, monkeypatch)
+    store._create_snippet("code", _LIVE, trigger=";t", literal=True)
+    # the {ask:} in it doesn't skip the trigger either: it isn't a field here
+    assert _expand_by_trigger(store, monkeypatch, store._snippets[0]) == [_LIVE]
+
+
+def test_trigger_still_expands_a_user_snippet(store, monkeypatch):
+    monkeypatch.setattr(store, "_read_clipboard_text", lambda: "CLIP")
+    store._create_snippet("mine", "got {clipboard}", trigger=";t")
+    assert _expand_by_trigger(store, monkeypatch, store._snippets[0]) == ["got CLIP"]
