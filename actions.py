@@ -433,6 +433,32 @@ def _wrap_for_terminal(cmd: str, keep_open: bool | None = None) -> str:
     return wrapped
 
 
+def _collapse_blank_lines(cmd: str) -> str:
+    """Squeeze each run of blank (or whitespace-only) lines down to one
+    empty line and drop them at the ends. A selection can carry a hidden
+    span of newlines that pushes a second command below the dialog's
+    small preview; this keeps every line in view. The result is both
+    shown and run, so what the user sees is what bash gets."""
+    out: list[str] = []
+    for line in cmd.splitlines():
+        if line.strip():
+            out.append(line)
+        elif out and out[-1]:
+            out.append("")
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out)
+
+
+def _count_command_lines(cmd: str) -> int:
+    return sum(1 for line in cmd.splitlines() if line.strip())
+
+
+def _confirm_heading(cmd: str) -> str:
+    n = _count_command_lines(cmd)
+    return "Run this command?" if n <= 1 else f"Run these {n} lines?"
+
+
 def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     """GTK confirmation dialog. Default state is read-only preview --
     Cancel / Edit / Run. Clicking Edit unlocks the command field for
@@ -464,17 +490,29 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
         margin_end=18,
     )
 
+    # More than one line means plain Enter must not run it: the user has
+    # to read the whole thing and click Run (or press Ctrl+Enter).
+    multiline = _count_command_lines(cmd) > 1
+
     head = Gtk.Label(xalign=0)
-    head.set_markup("<span size='large' weight='bold'>Run this command?</span>")
+    head.set_markup(f"<span size='large' weight='bold'>{_confirm_heading(cmd)}</span>")
     box.append(head)
 
     explain = Gtk.Label(xalign=0)
     explain.add_css_class("dim-label")
-    explain.set_markup(
-        "<span size='small'>"
-        "Press <b>Run</b> to launch it as-is, <b>Edit</b> to tweak it first."
-        "</span>"
-    )
+    if multiline:
+        explain.set_markup(
+            "<span size='small'>"
+            "Check every line, then press <b>Run</b> (or Ctrl+Enter). "
+            "<b>Edit</b> to tweak it first."
+            "</span>"
+        )
+    else:
+        explain.set_markup(
+            "<span size='small'>"
+            "Press <b>Run</b> to launch it as-is, <b>Edit</b> to tweak it first."
+            "</span>"
+        )
     explain.set_wrap(True)
     box.append(explain)
 
@@ -593,7 +631,7 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
         if keyval == Gdk.KEY_Escape:
             _respond(False)
             return True
-        if is_enter and (ctrl or not text_view.get_editable()):
+        if is_enter and (ctrl or not (text_view.get_editable() or multiline)):
             _respond(True)
             return True
         return False
@@ -612,16 +650,21 @@ def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
     dlg.set_content(toolbar)
     dlg.present()
     # Focus the Run button by default so plain Enter confirms the as-is
-    # command (the common path). Edit button is one Tab away.
-    run_btn.grab_focus()
+    # command (the common path). Edit button is one Tab away. A multi-line
+    # command focuses Cancel instead, so a stray Enter does nothing harmful.
+    if multiline:
+        cancel.grab_focus()
+    else:
+        run_btn.grab_focus()
     return False
 
 
 def run_in_terminal(text: str) -> None:
     # The classifier counts '$ cmd' / root '# cmd' lines as commands, so
     # strip those prompts (and, in a copied session, the output lines)
-    # before bash sees them. The confirm dialog shows the cleaned text.
-    cmd = strip_shell_prompts(_strip_invisible(text))
+    # before bash sees them. Blank-line runs are squeezed so nothing hides
+    # below the fold. The confirm dialog shows the cleaned text.
+    cmd = _collapse_blank_lines(strip_shell_prompts(_strip_invisible(text)))
     found = _find_terminal()
     if not found:
         print("[actions] no terminal emulator found")
