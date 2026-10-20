@@ -9,15 +9,15 @@ The only network traffic is something you click that is plainly online:
 
 - web search and recipe buttons open a URL in your browser
 - opening a link you selected
+- the one-time AI model download from Hugging Face: the first time you use an
+  AI action, or in the background at startup if you chose "Download now" in
+  onboarding or turned it on in Settings → Advanced
 
 Only `http`, `https`, `ftp` and `mailto` links are handed to your browser or
 mail app. A web page decides what you select, so other schemes (custom app
 handlers like `steam:` or `vscode:`) are refused, and a selected `file://` link
 opens its folder rather than the file, which could otherwise run a downloaded
 program through its file-type handler.
-- the one-time AI model download from Hugging Face: the first time you use an
-  AI action, or in the background at startup if you chose "Download now" in
-  onboarding or turned it on in Settings → Advanced
 
 OCR, summarize, rewrite, explain and translate run on the local OpenVINO
 models; the selected text never leaves the machine.

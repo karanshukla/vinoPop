@@ -36,7 +36,7 @@ DEFAULT_PLUGIN_SEEDS = (
     "editing_actions.py",  # Cut / Paste / Backspace / Select All
     "clipboard_history.py",  # the core picker
     "wordcount.py",
-    "text_transformations.py",  # case + sort/dedupe/trim, all predicate-guarded
+    "text_transformations.py",  # reverse, sort/dedupe/trim, swap case; predicate-guarded
     "translate.py",  # offline translation bubble, language picker
     "local_ai.py",  # offline summarize / rewrite / explain
 )

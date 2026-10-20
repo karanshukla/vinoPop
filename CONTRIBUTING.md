@@ -76,9 +76,10 @@ text → popup shows your new button.
 
 ### Tips
 
-- **Run blocking work on a thread** - the handler is called on the GTK main
-  loop. Spawn a `threading.Thread` for HTTP requests, subprocess calls that
-  may hang, etc. Use `actions.notify(title, body, icon)` to communicate
+- **The handler runs on a worker thread**, not the GTK main loop, so
+  blocking work (subprocess calls, file reads) is fine there. Anything that
+  touches GTK (opening a window, updating a widget) must go through
+  `GLib.idle_add`. Use `actions.notify(title, body, icon)` to communicate
   results: it shows the notification as vinoPop's, not as `notify-send`'s.
 - **Copy results to the clipboard** with `actions.copy_to_clipboard(text)`
   (`from actions import copy_to_clipboard`) so the user can paste them. It

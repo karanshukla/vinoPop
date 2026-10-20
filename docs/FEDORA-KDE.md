@@ -15,7 +15,7 @@ How it maps each piece of the X11 design onto Wayland/KDE:
 | Keystroke / paste injection | xdg-desktop-portal RemoteDesktop (keysyms); `ydotool` + `ydotoold` as a fallback |
 | Modifier+double-click | `/dev/input` (every keyboard and mouse, keyd's virtual keyboard included) |
 | Global hotkey | KGlobalAccel over D-Bus |
-| Tray icon | StatusNotifierItem via libappindicator (KDE SNI) |
+| Tray icon | PySide6 `QSystemTrayIcon` (StatusNotifierItem over D-Bus) |
 
 The backend is chosen automatically: a Wayland session (`XDG_SESSION_TYPE`)
 whose `XDG_CURRENT_DESKTOP` lists `KDE` gets the Wayland/KDE backend; any other
@@ -28,13 +28,17 @@ desktop, including other Wayland compositors, gets the XWayland backend
 sudo dnf install -y \
     python3 python3-gobject python3-dbus \
     gtk4 libadwaita gtk4-layer-shell \
-    wl-clipboard xdg-desktop-portal-kde
-# optional: OCR + region capture
-sudo dnf install -y tesseract
+    wl-clipboard xdg-desktop-portal-kde python3-pyside6
+# optional: Paste/Cut without the Remote Control prompt (see below)
+sudo dnf install -y ydotool
+# optional: offline AI and screen OCR (OpenVINO, RapidOCR), from the checkout
+pip install --user -r requirements-ai.txt
 ```
 
 `xdg-desktop-portal-kde` is already installed on Fedora KDE; it's listed so
-a minimal install doesn't miss it.
+a minimal install doesn't miss it. `python3-pyside6` is only for the tray
+icon. OCR region capture uses Spectacle, which Fedora KDE ships. `wtype`
+isn't needed: it doesn't work on KWin (see below).
 
 ### Paste, Cut, Select all, Backspace
 
@@ -117,8 +121,8 @@ Logs: `~/.cache/vinopop/vinopop.log`.
 - **Esc-to-dismiss / click-outside** are softer than on X11. The popup
   auto-hides on a timer (and when the pointer leaves), but does not grab the
   keyboard (so it never steals focus from the app you're pasting into).
-- **Active-window blocklist** is disabled on Wayland (no portable way to read
-  the focused window's class yet).
+- **Active-window blocklist** works: the focused window's class and title
+  come from a KWin script, fetched while the selection settles.
 - First popup after a selection has ~100-150 ms extra latency (one cursor-
   position round-trip to KWin). A resident helper to remove this is planned.
 

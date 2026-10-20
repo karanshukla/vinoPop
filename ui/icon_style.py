@@ -25,7 +25,6 @@ _CONCEPT_BY_ICON = {
     "help-faq-symbolic": "stackoverflow",
     "system-search-symbolic": "google",
     "preferences-desktop-locale-symbolic": "translate",
-    "accessories-dictionary-symbolic": "dictionary",
     "package-x-generic-symbolic": "package",
     "vinopop-calculator-symbolic": "calculator",
     "vinopop-clipboard-symbolic": "clipboard",
