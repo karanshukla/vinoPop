@@ -260,7 +260,15 @@ def test_doctor_json_has_group_and_fix(doctor_home):
     assert {"system", "npu", "input"} <= groups
     assert any(c["name"] == "npu" for c in checks)
     # Read-only: nothing under HOME, so no ~/intel and no settings.json.
-    assert list(home.iterdir()) == []
+    # Intel's NPU driver makes its own cache on load, at $HOME/.cache
+    # whatever XDG_CACHE_HOME says, so that one is allowed.
+    npu_cache = home / ".cache" / "ze_intel_npu_cache"
+    written = [
+        p
+        for p in home.rglob("*")
+        if p not in (npu_cache.parent, npu_cache) and npu_cache not in p.parents
+    ]
+    assert written == []
 
 
 def test_doctor_text_prints_fixes(doctor_home, monkeypatch, capsys):

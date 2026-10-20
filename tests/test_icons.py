@@ -35,7 +35,6 @@ SHIPPED_BY_BOTH = {
     "edit-paste-symbolic",
     "edit-select-all-symbolic",
     "emblem-system-symbolic",
-    "emoji-people-symbolic",
     "face-smile-big-symbolic",
     "folder-open-symbolic",
     "folder-pictures-symbolic",
@@ -52,7 +51,6 @@ SHIPPED_BY_BOTH = {
     "input-keyboard-symbolic",
     "input-mouse-symbolic",
     "insert-link-symbolic",
-    "insert-object-symbolic",
     "list-add-symbolic",
     "mail-send-symbolic",
     "mark-location-symbolic",
@@ -72,7 +70,6 @@ SHIPPED_BY_BOTH = {
     "user-trash-symbolic",
     "view-fullscreen-symbolic",
     "view-grid-symbolic",
-    "view-list-symbolic",
     "view-more-symbolic",
     "view-refresh-symbolic",
     "view-sort-ascending-symbolic",
@@ -117,8 +114,9 @@ def test_declared_icons_exist_on_both_desktops():
 
 
 def test_fallback_targets_are_themselves_safe():
+    bundled = {p.stem for p in ICONS.glob("*.svg")}
     for name, alternatives in icon_style._FALLBACKS.items():
-        assert any(alt in SHIPPED_BY_BOTH for alt in alternatives), name
+        assert any(alt in SHIPPED_BY_BOTH | bundled for alt in alternatives), name
 
 
 def test_bundled_icons_come_in_colour_and_glyph_pairs():
@@ -150,6 +148,19 @@ def test_available_leaves_present_and_unknown_names_alone():
     assert icon_style.available("some-custom-icon", theme) == "some-custom-icon"
     assert icon_style.available("vinopop-maps", theme) == "vinopop-maps"
     assert icon_style.available("", theme) == ""
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("emoji-people-symbolic", "face-smile-big-symbolic"),
+        ("view-list-symbolic", "view-list-details-symbolic"),
+        ("accessories-calculator-symbolic", "vinopop-calculator-symbolic"),
+    ],
+)
+def test_icons_breeze_6_31_lacks_fall_back(name, expected):
+    breeze = _Theme(*SHIPPED_BY_BOTH, "view-list-details-symbolic", "vinopop-calculator-symbolic")
+    assert icon_style.available(name, breeze) == expected
 
 
 # Adwaita 51 dropped these; it's the icon theme on KDE in dark mode (theme.py)
