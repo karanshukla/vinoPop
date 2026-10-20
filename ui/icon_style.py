@@ -59,7 +59,7 @@ _FALLBACKS = {
     "applications-internet-symbolic": ("network-workgroup-symbolic",),
     "utilities-terminal-symbolic": ("system-run-symbolic", "application-x-executable-symbolic"),
     "accessories-text-editor-symbolic": ("document-edit-symbolic",),
-    "accessories-calculator-symbolic": ("insert-object-symbolic",),
+    "accessories-calculator-symbolic": ("insert-object-symbolic", "vinopop-calculator-symbolic"),
     "applications-development-symbolic": ("emblem-system-symbolic",),
     "applications-engineering-symbolic": ("emblem-system-symbolic",),
     "applications-graphics-symbolic": ("color-select-symbolic",),
@@ -76,6 +76,9 @@ _FALLBACKS = {
     "tag-symbolic": ("text-x-generic-symbolic",),
     "emblem-default-symbolic": ("object-select-symbolic", "starred-symbolic"),
     "emblem-favorite-symbolic": ("starred-symbolic",),
+    # Dropped from Breeze 6.31
+    "emoji-people-symbolic": ("face-smile-big-symbolic",),
+    "view-list-symbolic": ("view-list-details-symbolic", "format-justify-left-symbolic"),
 }
 
 
