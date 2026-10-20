@@ -10,6 +10,15 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-20
+
+### 🔧 Development
+
+- **Release notes read properly on GitHub.** The release workflow joins
+  CHANGELOG.md's wrapped lines back into one line per bullet, since GitHub
+  turned each one into a line break, and titles releases `vinoPop X.Y.Z`
+  ([#116](https://github.com/karanshukla/vinoPop/pull/116)).
+
 ## [1.1.0] - 2026-10-20
 
 ### 🚀 Features
@@ -128,6 +137,7 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/karanshukla/vinoPop/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/karanshukla/vinoPop/compare/v0.9.7...v1.0.0
