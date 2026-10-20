@@ -16,7 +16,8 @@ import re
 import shutil
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -275,9 +276,13 @@ def _load(on_status: Callable[[str], None]):
             if npu_canary.stuck():
                 errors.append(f"NPU: {npu_canary.STUCK}")
                 continue
-        on_status(f"Loading model on {dev}…")
         cache = cache_dir(key, dev)
         cache.mkdir(parents=True, exist_ok=True)
+        if any(cache.iterdir()):
+            msg = f"Loading model on {dev}…"
+        else:
+            msg = f"Compiling the model for {dev}, one time only…"
+            log.info("[vino_ai] no compile cache for %s at %s, compiling", dev, cache)
         props: dict[str, object] = {"CACHE_DIR": str(cache)}
         if dev == "NPU":
             props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=MIN_RESPONSE_LEN)
@@ -286,7 +291,8 @@ def _load(on_status: Callable[[str], None]):
                 cls = ov_genai.LLMPipeline
             else:  # multimodal export (Gemma 4): text-only use of the VLM pipeline
                 cls = ov_genai.VLMPipeline
-            pipe = _construct(cls, path, dev, props, (model.key, dev), timeout, fp)
+            with _ticking(on_status, msg):
+                pipe = _construct(cls, path, dev, props, (model.key, dev), timeout, fp)
         except Exception as exc:  # noqa: BLE001 - try the next device
             log.warning("[vino_ai] LLM on %s failed: %s", dev, exc)
             if not isinstance(exc, TimeoutError) and not failures.is_device_lost(exc):
@@ -304,6 +310,28 @@ def _load(on_status: Callable[[str], None]):
         _prune_after_load(key)
         return pipe
     raise RuntimeError("could not load the model: " + "; ".join(errors))
+
+
+@contextmanager
+def _ticking(on_status: Callable[[str], None], msg: str, every: float = 5.0) -> Iterator[None]:
+    """Show `msg`, then repeat it with the elapsed time until the block
+    ends, so a compile that takes minutes doesn't look hung."""
+    on_status(msg)
+    start = time.monotonic()
+    stop = threading.Event()
+
+    def tick() -> None:
+        while not stop.wait(every):
+            secs = int(time.monotonic() - start)
+            on_status(f"{msg} ({secs // 60}:{secs % 60:02d})")
+
+    ticker = threading.Thread(target=tick, name="vino_ai-load-ticker", daemon=True)
+    ticker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        ticker.join()
 
 
 def _warn_fallback(dev: str, npu_error: str, on_status: Callable[[str], None]) -> None:
