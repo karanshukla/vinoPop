@@ -45,7 +45,7 @@ def _desktop_file_contents(exec_path: str) -> str:
         "Name=vinoPop\n"
         "Comment=PopClip-inspired floating action popup\n"
         f"Exec={exec_path}\n"
-        "Icon=vinopop\n"
+        "Icon=io.github.karanshukla.vinoPop\n"
         "Terminal=false\n"
         "Categories=Utility;\n"
         "X-GNOME-Autostart-enabled=true\n"
