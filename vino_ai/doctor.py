@@ -117,15 +117,52 @@ def _models() -> list[Result]:
     from . import models
 
     model = models.llm_model()
+    path = models.model_dir(model)
     if models.is_downloaded(model):
-        return [Result(OK, "llm model", f"{model.label} at {models.model_dir(model)}")]
-    return [
-        Result(
-            UNKNOWN,
-            "llm model",
-            f"{model.label} not downloaded yet; the first AI action fetches it ({model.size})",
-        )
-    ]
+        results = [Result(OK, "llm model", f"{model.label} at {path}")]
+    elif models.downloaded_revision(path):
+        results = [
+            Result(
+                WARN,
+                "llm model",
+                f"{model.label} at {path} is an older download; the next AI action replaces it",
+            )
+        ]
+    elif path.is_dir():
+        return [
+            Result(
+                UNKNOWN,
+                "llm model",
+                f"{model.label} at {path} is incomplete; the next AI action downloads it again",
+            )
+        ]
+    else:
+        return [
+            Result(
+                UNKNOWN,
+                "llm model",
+                f"{model.label} not downloaded yet; the first AI action fetches it ({model.size})",
+            )
+        ]
+    return results + [_model_files(model, path)]
+
+
+def _model_files(model, path) -> Result:
+    """Every file's sha256 against the pinned digests. Slow on a 4 GB model,
+    which is why only the doctor and a fresh download do it."""
+    from . import integrity, models
+
+    revision = models.downloaded_revision(path) or model.revision
+    result = integrity.verify(path, model.repo_id, revision, model.revision)
+    status = {
+        integrity.VERIFIED: OK,
+        integrity.UNPINNED: UNKNOWN,
+        integrity.DRIFT: WARN,
+    }.get(result.status, FAIL)
+    detail = result.summary()
+    if result.severe:
+        detail += f"; delete {path} and the next AI action downloads it again"
+    return Result(status, "llm model files", detail)
 
 
 def _failures() -> list[Result]:

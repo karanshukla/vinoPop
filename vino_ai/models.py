@@ -7,13 +7,17 @@ for accuracy. Both are multimodal exports, so the language model is split
 out as openvino_language_model.xml.
 
 Models land in $XDG_DATA_HOME/vinopop/models/<name>/ and are reused from
-there; nothing is fetched again once a model's folder is complete.
+there. A download goes into a staging folder next to it, is checked
+against the pinned per-file sha256 (integrity.py), gets a revision and a
+.complete marker, and only then replaces the old folder. Bumping a
+model's revision therefore re-downloads it for everyone.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -21,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.xdg_paths import DATA_DIR
+
+from . import integrity
 
 # The xet transfer backend can hang for good on a multi-GB model with no
 # error. Plain HTTPS resumes, and the timeout turns a stall into an
@@ -44,9 +50,9 @@ class LlmModel:
     label: str
     size: str  # rough download size, shown before the first download
     # Pinned commit, so a changed or compromised upstream repo can't swap
-    # the files under us. Bump deliberately (Hugging Face "sha"). "main"
-    # means not pinned yet.
-    revision: str = "main"
+    # the files under us. Bump deliberately (Hugging Face "sha"), then run
+    # scripts/update_digests.py.
+    revision: str
 
 
 LLM_MODELS = {
@@ -66,6 +72,7 @@ LLM_MODELS = {
             "OpenVINO/gemma-4-E4B-it-int4-ov",
             "Gemma 4 E4B (more accurate, more RAM)",
             "5 GB",
+            revision="9e0659b961752791d2d1325ddb1edf35057c3d2d",
         ),
     )
 }
@@ -88,10 +95,8 @@ def model_dir(model: LlmModel) -> Path:
     return MODELS_DIR / model.repo_id.split("/", 1)[1]
 
 
-def _complete(path: Path) -> bool:
-    """True once every file GenAI needs is fully on disk. The small XMLs
-    land long before the weights, so the weights' .bin and the absence of
-    in-flight .incomplete files are what mean "done"."""
+def _has_ir(path: Path) -> bool:
+    """True when the files GenAI needs to load are there."""
     main_xml = next(
         (
             path / n
@@ -102,14 +107,90 @@ def _complete(path: Path) -> bool:
     )
     if main_xml is None or not main_xml.with_suffix(".bin").is_file():
         return False
-    if not (path / "openvino_tokenizer.xml").is_file():
-        return False
-    in_flight = path / ".cache" / "huggingface" / "download"
-    return not any(in_flight.glob("*.incomplete")) if in_flight.is_dir() else True
+    return (path / "openvino_tokenizer.xml").is_file()
+
+
+# Written into a model folder once snapshot_download has returned and the
+# files matched their digests: the commit it was downloaded at, then an
+# empty .complete. A folder without both, or at another commit, is not
+# downloaded, and is replaced by a fresh download.
+REVISION_MARKER = ".vinopop-revision"
+COMPLETE_MARKER = ".complete"
+
+
+def downloaded_revision(path: Path) -> str | None:
+    try:
+        return (path / REVISION_MARKER).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _marked(path: Path, model: LlmModel) -> bool:
+    return downloaded_revision(path) == model.revision and (path / COMPLETE_MARKER).is_file()
+
+
+def _mark(path: Path, model: LlmModel) -> None:
+    (path / REVISION_MARKER).write_text(model.revision + "\n", encoding="utf-8")
+    (path / COMPLETE_MARKER).touch()
 
 
 def is_downloaded(model: LlmModel) -> bool:
-    return _complete(model_dir(model))
+    """True when the pinned revision is fully on disk. Cheap: reads the
+    markers, hashes nothing."""
+    return _marked(model_dir(model), model)
+
+
+def _staging_dir(model: LlmModel) -> Path:
+    # Per revision, so an interrupted download resumes, and a pin bump in
+    # between doesn't resume into the wrong commit.
+    return MODELS_DIR / f".{model_dir(model).name}.{model.revision[:12]}.partial"
+
+
+def _old_dir(model: LlmModel) -> Path:
+    return MODELS_DIR / f".{model_dir(model).name}.old"
+
+
+def _clear_leftovers(model: LlmModel) -> None:
+    """Remove what an earlier run left: a swapped-out folder, and staging
+    folders for revisions that aren't pinned any more."""
+    keep = _staging_dir(model)
+    stale = [_old_dir(model)]
+    if MODELS_DIR.is_dir():
+        stale += [p for p in MODELS_DIR.glob(f".{model_dir(model).name}.*.partial") if p != keep]
+    for p in stale:
+        if p.exists():
+            log.info("[vino_ai] removing leftover %s", p)
+            shutil.rmtree(p, ignore_errors=True)
+
+
+def _swap_in(model: LlmModel, staging: Path) -> None:
+    """Put a verified staging folder in place of the model folder and delete
+    the old one. The old folder is moved aside first, so an interrupted
+    swap leaves either the old folder or a marked staging folder, which
+    the next ensure_llm finishes swapping."""
+    path, old = model_dir(model), _old_dir(model)
+    if old.exists():
+        shutil.rmtree(old)
+    if path.exists():
+        path.rename(old)
+    staging.rename(path)
+    shutil.rmtree(old, ignore_errors=True)
+
+
+def _check_download(model: LlmModel, staging: Path) -> None:
+    """Raise unless the finished download is whole and matches its digests.
+    Files that differ are deleted, so the next attempt fetches just them."""
+    if not _has_ir(staging):
+        raise RuntimeError(f"{model.repo_id} downloaded but has no OpenVINO IR")
+    _emit(f"Checking the {model.label} files…")
+    result = integrity.verify(staging, model.repo_id, model.revision, model.revision)
+    if result.status == integrity.UNPINNED:
+        log.warning("[vino_ai] %s", result.summary())
+    elif result.status != integrity.VERIFIED:
+        for name in result.differing:
+            (staging / name).unlink(missing_ok=True)
+        log.error("[vino_ai] %s: %s", model.repo_id, result.summary())
+        raise RuntimeError(f"{model.label} failed its integrity check: {result.summary()}")
 
 
 _listeners: set[Callable[[str], None]] = set()
@@ -169,7 +250,7 @@ def ensure_llm(
     including when another thread is already doing the download. Stalled
     or dropped transfers resume up to `attempts` times. Raises on failure."""
     path = model_dir(model)
-    if _complete(path):
+    if is_downloaded(model):
         return path
     if on_status:
         with _listeners_lock:
@@ -178,18 +259,23 @@ def ensure_llm(
             on_status(_last_status)
     try:
         with _download_lock:
-            if _complete(path):
+            if is_downloaded(model):
+                return path
+            _clear_leftovers(model)
+            staging = _staging_dir(model)
+            if _marked(staging, model):  # a swap interrupted last time
+                _swap_in(model, staging)
                 return path
             from huggingface_hub import snapshot_download
 
-            log.info("[vino_ai] downloading %s to %s", model.repo_id, path)
-            path.mkdir(parents=True, exist_ok=True)
+            log.info("[vino_ai] downloading %s@%s to %s", model.repo_id, model.revision, staging)
+            staging.mkdir(parents=True, exist_ok=True)
             for attempt in range(1, attempts + 1):
                 try:
                     snapshot_download(
                         repo_id=model.repo_id,
                         revision=model.revision,
-                        local_dir=str(path),
+                        local_dir=str(staging),
                         tqdm_class=_progress_class(model.label),
                     )
                     break
@@ -199,9 +285,10 @@ def ensure_llm(
                         raise RuntimeError(f"download of {model.label} failed: {exc}") from exc
                     _emit(f"Download interrupted, retrying ({attempt}/{attempts - 1})…")
                     time.sleep(2 * attempt)
-            if not _complete(path):
-                raise RuntimeError(f"{model.repo_id} downloaded but has no OpenVINO IR")
-            log.info("[vino_ai] downloaded %s", model.repo_id)
+            _check_download(model, staging)
+            _mark(staging, model)
+            _swap_in(model, staging)
+            log.info("[vino_ai] downloaded %s@%s", model.repo_id, model.revision)
     finally:
         if on_status:
             with _listeners_lock:

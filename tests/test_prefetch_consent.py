@@ -55,14 +55,10 @@ def start_app(monkeypatch, tmp_path):
 
 
 def _complete_model(key):
-    path = models.model_dir(models.LLM_MODELS[key])
+    model = models.LLM_MODELS[key]
+    path = models.model_dir(model)
     path.mkdir(parents=True)
-    for name in (
-        "openvino_language_model.xml",
-        "openvino_language_model.bin",
-        "openvino_tokenizer.xml",
-    ):
-        (path / name).write_text("")
+    models._mark(path, model)
 
 
 def test_fresh_config_does_not_download(start_app):

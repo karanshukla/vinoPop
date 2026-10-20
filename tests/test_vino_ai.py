@@ -127,28 +127,8 @@ def test_models_registry():
     assert models.DEFAULT_LLM in models.LLM_MODELS
     for m in models.LLM_MODELS.values():
         assert m.repo_id.split("/")[0] in ("OpenVINO", "arankays") and m.repo_id.endswith("-ov")
-        # a full commit sha, or "main" until one is pinned
-        assert m.revision == "main" or (len(m.revision) == 40 and int(m.revision, 16) >= 0)
-
-
-def test_model_completeness(tmp_path, monkeypatch):
-    monkeypatch.setattr(models, "MODELS_DIR", tmp_path)
-    model = models.LLM_MODELS[models.DEFAULT_LLM]
-    assert not models.is_downloaded(model)
-    path = models.model_dir(model)
-    path.mkdir(parents=True)
-    (path / "openvino_language_model.xml").write_text("")
-    (path / "openvino_tokenizer.xml").write_text("")
-    assert not models.is_downloaded(model)  # weights still missing
-    (path / "openvino_language_model.bin").write_text("")
-    assert models.is_downloaded(model)
-    in_flight = path / ".cache" / "huggingface" / "download"
-    in_flight.mkdir(parents=True)
-    (in_flight / "x.incomplete").write_text("")
-    assert not models.is_downloaded(model)  # a transfer is still running
-    (in_flight / "x.incomplete").unlink()
-    assert models.is_downloaded(model)
-    assert models.ensure_llm(model) == path  # no download when complete
+        # a full commit sha: never a branch that moves under us
+        assert len(m.revision) == 40 and int(m.revision, 16) >= 0
 
 
 # ---- llm.run with a fake pipeline -----------------------------------------
@@ -172,6 +152,9 @@ def _llm_state(monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "_told_stuck", False)
     monkeypatch.setattr(llm, "_special_cache", {})
     monkeypatch.setattr(llm.models, "model_dir", lambda _m: tmp_path / "model")
+    monkeypatch.setattr(llm, "_ov_version", lambda: "2026.4.1")
+    monkeypatch.setattr(llm, "OV_CACHE", tmp_path / "ov-cache")
+    monkeypatch.setattr(llm, "LLM_CACHE", tmp_path / "ov-cache" / "llm")
 
 
 class _FakeTokenizer:
