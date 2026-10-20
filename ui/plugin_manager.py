@@ -16,7 +16,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-from ui import gtk4_app  # noqa: E402
+from ui import gtk4_app, sidebar_window  # noqa: E402
 
 # libhandy needed two tree-walking hacks here (_unwrap_subtitle_labels and
 # _unellipsize_tab_labels) because HdyActionRow ellipsised subtitles and
@@ -49,6 +49,24 @@ def _icon_button(icon_name: str, tooltip: str | None = None) -> Gtk.Button:
     if tooltip:
         btn.set_tooltip_text(tooltip)
     return btn
+
+
+#: The window's pages, in sidebar order: (id, title, icon). The ids are what
+#: show(tab=...) takes (the tray, the popup's overflow menu and the Settings
+#: window's Plugins page all open a specific one).
+TABS = (
+    ("available", "Available", "system-software-install-symbolic"),
+    ("installed", "Installed", "emblem-default-symbolic"),
+    ("custom", "Custom", "document-new-symbolic"),
+    ("order", "Order", "view-sort-ascending-symbolic"),
+)
+
+
+def _tabs() -> list[tuple[str, str, str]]:
+    """TABS with each icon swapped for one the icon theme has."""
+    from ui import icon_style
+
+    return [(name, title, icon_style.available(icon)) for name, title, icon in TABS]
 
 
 REPO_DIR = Path(__file__).resolve().parent.parent / "plugins_repo"
@@ -122,7 +140,9 @@ class PluginManagerDialog:
     def __init__(self, on_changed: Callable[[], None] | None = None) -> None:
         gtk4_app.init()
         self._on_changed = on_changed
-        self._window: Adw.PreferencesWindow | None = None
+        self._window: Adw.Window | None = None
+        # Shows a page by id; set by show() for as long as the window is up.
+        self._select_tab: Callable[[str], None] | None = None
         self._catalog_group: Adw.PreferencesGroup | None = None
         self._catalog_groups: list[Adw.PreferencesGroup] = []
         self._catalog_page: Adw.PreferencesPage | None = None
@@ -142,95 +162,79 @@ class PluginManagerDialog:
             group.remove(row)
 
     def show(self, tab: str | None = None) -> None:
-        """Open the Plugin Manager. tab may be one of 'available',
-        'installed', 'custom', 'order' to land on a specific page;
-        defaults to 'available'."""
+        """Open the Plugin Manager. tab may be one of the TABS ids
+        ('available', 'installed', 'custom', 'order') to land on a specific
+        page; defaults to 'available'."""
         if self._window is not None and self._window.get_visible():
             if tab:
                 self._switch_to_tab(tab)
             _force_to_front(self._window)
             return
 
-        win = Adw.PreferencesWindow()
-        win.set_title("vinoPop - Plugins")
-        win.set_search_enabled(False)
-        win.set_default_size(780, 620)
+        win = Adw.Window()
+        win.set_title("vinoPop Plugins")
+        win.set_default_size(860, 640)
+        win.set_size_request(360, 360)
         win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
         # GTK 4 may keep the destroyed window alive while Python holds a
         # ref, so drop our references on close-request as well.
         win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
+        # Set before the pages are built: the recipe wizard uses it as its
+        # parent.
+        self._window = win
 
-        # Tab 1: catalog. Built as one PreferencesGroup per category so
-        # the user sees Productivity / Web / AI / Developer separately
-        # rather than one undifferentiated flat list. _catalog_group is
-        # tracked as a reference to the *first* group purely so the
-        # parent-page lookup in _rebuild_catalog_buttons still works.
-        from ui import icon_style
-
+        # Catalogue: one PreferencesGroup per category so the user sees
+        # Productivity / Web / AI / Developer separately rather than one
+        # undifferentiated flat list. _catalog_group is the *first* group.
         catalog_page = Adw.PreferencesPage()
-        catalog_page.set_title("Available")
-        catalog_page.set_icon_name(icon_style.available("system-software-install-symbolic"))
         self._catalog_groups = []
         for group in self._build_catalog_groups():
             catalog_page.add(group)
             self._catalog_groups.append(group)
         self._catalog_group = self._catalog_groups[0] if self._catalog_groups else None
         self._catalog_page = catalog_page
-        win.add(catalog_page)
 
-        # Tab 2: installed
         installed_page = Adw.PreferencesPage()
-        installed_page.set_title("Installed")
-        installed_page.set_icon_name(icon_style.available("emblem-default-symbolic"))
         self._installed_group = self._build_installed_group()
         installed_page.add(self._installed_group)
-        win.add(installed_page)
 
-        # Tab 3: custom actions (recipes)
         custom_page = Adw.PreferencesPage()
-        custom_page.set_title("Custom")
-        custom_page.set_icon_name("document-new-symbolic")
         self._custom_group = self._build_custom_group()
         custom_page.add(self._custom_group)
-        win.add(custom_page)
 
-        # Tab 4: order
         order_page = Adw.PreferencesPage()
-        order_page.set_title("Order")
-        order_page.set_icon_name("view-sort-ascending-symbolic")
         self._order_group = self._build_order_group()
         order_page.add(self._order_group)
-        win.add(order_page)
 
-        self._window = win
-        # Remember the pages we created so we can switch tabs later.
-        self._pages_by_tab = {
+        widgets = {
             "available": catalog_page,
             "installed": installed_page,
             "custom": custom_page,
             "order": order_page,
         }
-        if tab:
-            self._switch_to_tab(tab)
+        self._select_tab = sidebar_window.build(
+            win,
+            "Plugins",
+            [(name, title, icon, widgets[name]) for name, title, icon in _tabs()],
+            tab or "available",
+        )
         _force_to_front(win)
 
     def _switch_to_tab(self, tab: str) -> None:
-        """Activate one of the PreferencesWindow's tabs by name. Names
-        match the keys of _pages_by_tab. No-op for unknown tabs."""
-        if not hasattr(self, "_pages_by_tab"):
+        """Show one of the window's pages by name (a TABS id). No-op for
+        unknown tabs or when the window isn't open."""
+        if self._select_tab is None or self._window is None:
             return
-        page = self._pages_by_tab.get(tab)
-        if page is None or self._window is None:
-            return
-        self._window.set_visible_page(page)
+        self._select_tab(tab)
 
     def _on_destroy(self, win=None, *_):
         # Ignore a late signal from a window we already replaced.
         if win is not None and self._window is not None and win is not self._window:
             return
         self._window = None
+        self._select_tab = None
         self._catalog_group = None
         self._catalog_groups = []
         self._catalog_page = None
@@ -732,14 +736,7 @@ class PluginManagerDialog:
             row = _plain(Adw.ActionRow())
             row.set_title(plugin.tooltip or plugin.name)
             row.set_subtitle(plugin.name)
-            try:
-                from ui import icon_style
-
-                img = Gtk.Image.new_from_icon_name(icon_style.resolve(plugin.icon))
-                img.set_pixel_size(20)
-                row.add_prefix(img)
-            except Exception:
-                pass
+            row.add_prefix(self._badge(plugin.icon, plugin.tooltip or plugin.name))
 
             up_btn = _icon_button("go-up-symbolic", "Move up")
             up_btn.add_css_class("flat")
