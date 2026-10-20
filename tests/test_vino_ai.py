@@ -38,6 +38,7 @@ def fake_devices(monkeypatch):
         monkeypatch.setattr(devices, "available_devices", lambda: tuple(found))
         monkeypatch.setattr(devices, "_setting", lambda: setting.upper())
         monkeypatch.setattr(devices, "_log_npu_notes", lambda: None)
+        monkeypatch.setattr(devices, "_log_npu_missing", lambda: None)
         monkeypatch.setattr(ovfetch, "warnings", lambda _v: list(warnings))
 
     return use
