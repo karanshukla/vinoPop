@@ -20,6 +20,8 @@ dist/
 
 # Local
 *.log
+# `uv run` writes one; CI and the docs install with `uv pip`
+uv.lock
 
 .env
 .envrc

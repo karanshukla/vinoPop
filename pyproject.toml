@@ -1,14 +1,19 @@
 [project]
 name = "vinopop"
-dynamic = ["version"]
+# Placeholder: nothing builds a wheel (tool.uv.package = false), and the app
+# reads its version from the git tag (core/version.py)
+version = "0.0.0"
 description = "A PopClip-style action popup for Linux, with offline AI on OpenVINO"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Karan Shukla" }]
 requires-python = ">=3.11"
-# The app itself runs on the distro's PyGObject/GTK (system packages, see
-# README), so only pure-pip runtime deps are listed here.
+# The app itself runs on the distro's PyGObject/GTK, pycairo and dbus-python
+# (system packages, see README). That's the only supported setup: a venv has
+# to be made with --system-site-packages on the distro's own python3, e.g.
+# `uv venv --python /usr/bin/python3 --system-site-packages`. Only pure-pip
+# runtime deps are listed here.
 dependencies = [
     "python-xlib>=0.33",
 ]
@@ -24,9 +29,14 @@ ai = [
     "openvino-tokenizers==2026.4.1.0",
     "rapidocr>=3.10",
     "huggingface_hub>=0.30",
+    "tqdm>=4.66",  # vino_ai/models.py imports it for the download progress bar
 ]
 
 # ── uv ────────────────────────────────────────────────────────────────────────
+
+[tool.uv]
+# An app run from its checkout, not a wheel: `uv run` must not try to build it
+package = false
 
 [dependency-groups]
 # Installable alone, so CI never downloads OpenVINO or needs GTK
