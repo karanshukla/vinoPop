@@ -10,3 +10,4 @@ openvino-genai==2026.4.1.0
 openvino-tokenizers==2026.4.1.0
 rapidocr>=3.10
 huggingface_hub>=0.30
+tqdm>=4.66

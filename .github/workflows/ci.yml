@@ -8,8 +8,10 @@ on:
 permissions:
   contents: read
 
-# The dev group only: no job here has GTK or OpenVINO, so the tests cover
-# the GTK-free modules and plugins (CONTRIBUTING.md).
+# The lint job and the test matrix use the dev group only, so they cover the
+# GTK-free modules and plugins on every Python. test-gtk runs the whole suite
+# on the runner's own python3 with the distro's PyGObject/GTK, the setup the
+# app supports (pyproject.toml).
 
 jobs:
   lint:
@@ -34,6 +36,32 @@ jobs:
       - run: uv venv --python ${{ matrix.python-version }}
       - run: uv pip install --group dev
       - run: .venv/bin/python -m pytest --cov=. --cov-report=term-missing
+
+  test-gtk:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: GTK 4, libadwaita, pycairo, dbus-python, python-xlib
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
+            python3-dbus python3-xlib xvfb
+      # The distro's python3, or the venv can't see its PyGObject
+      - run: uv venv --python /usr/bin/python3 --system-site-packages
+      - run: uv pip install --group dev
+      # GTK needs a display to import its widgets
+      - run: xvfb-run -a .venv/bin/python -m pytest -rs
+
+  uv-run:
+    # What CONTRIBUTING.md tells contributors to run, from a fresh checkout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv run poe check
 
   shell:
     runs-on: ubuntu-latest

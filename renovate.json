@@ -5,9 +5,10 @@
   ],
   "packageRules": [
     {
-      "description": "Runtime dependencies (OpenVINO and friends) are bumped by hand: a version change can break the NPU path, which no CI runner can catch.",
+      "description": "Runtime dependencies (OpenVINO and friends) are bumped by hand: a version change can break the NPU path, which no CI runner can catch. requirements-ai.txt carries the same pins.",
       "matchManagers": [
-        "pep621"
+        "pep621",
+        "pip_requirements"
       ],
       "enabled": false
     },
