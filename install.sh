@@ -64,34 +64,77 @@ if [[ "${1:-}" == "--uninstall" || "${1:-}" == "-u" ]]; then
     exit 0
 fi
 
+# Which backend this session will get; same rule as platform_backend.detect().
+# "unknown" when run with no desktop session (e.g. over ssh).
+session_backend() {
+    local forced="${VINOPOP_BACKEND:-}" session="${XDG_SESSION_TYPE:-}" desktop="${XDG_CURRENT_DESKTOP:-}"
+    forced="${forced,,}"
+    if [[ "$forced" == "x11" || "$forced" == "wayland_kde" ]]; then
+        echo "$forced"
+    elif [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
+        echo "unknown"
+    elif [[ -n "${WAYLAND_DISPLAY:-}" && ( -z "${DISPLAY:-}" || "${session,,}" == "wayland" ) \
+            && ":${desktop^^}:" == *":KDE:"* ]]; then
+        echo "wayland_kde"
+    else
+        echo "x11"
+    fi
+}
+has() { command -v "$1" >/dev/null 2>&1; }
+
 # Verify dependencies
 echo "[install] checking dependencies..."
+backend="$(session_backend)"
 missing=()
+notes=()
 [[ -x "$PYTHON" ]] || missing+=("python3")
-command -v xdg-open >/dev/null 2>&1 || missing+=("xdg-open")
-# Clipboard tool: xclip on X11, wl-clipboard on Wayland (KDE Plasma)
-if ! command -v xclip >/dev/null 2>&1 && ! command -v wl-copy >/dev/null 2>&1; then
-    missing+=("xclip")
-fi
+has xdg-open || missing+=("xdg-utils")
+case "$backend" in
+    x11)
+        # The XWayland backend (GNOME, sway, Hyprland ...): the whole process
+        # runs on XWayland, so selection and clipboard go through xclip and
+        # the compositor's X selection bridge (not wl-clipboard: mutter has
+        # no data-control protocol). Keystrokes use the X server's XTEST.
+        has xclip || missing+=("xclip")
+        has xdotool || notes+=("xdotool is not installed (optional): the clipboard picker pastes short text with Ctrl+V instead of typing it, which some Electron editors ignore")
+        if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+            notes+=("this is a plain Xorg session: vinoPop runs on it best-effort; GNOME, sway and other Wayland desktops (through XWayland) and KDE Plasma Wayland are the supported targets")
+        fi
+        ;;
+    wayland_kde)
+        { has wl-copy && has wl-paste; } || missing+=("wl-clipboard")
+        ;;
+    *)
+        echo "[install] no desktop session found, so checking for either clipboard tool"
+        if ! has xclip && ! has wl-copy; then
+            missing+=("xclip (GNOME, sway and other desktops through XWayland, or Xorg) or wl-clipboard (KDE Plasma Wayland)")
+        fi
+        ;;
+esac
 if [[ ${#missing[@]} -gt 0 ]]; then
     echo "[install] missing: ${missing[*]}"
-    echo "[install] install with: sudo apt-get install -y ${missing[*]/xdg-open/xdg-utils}"
+    echo "[install] install them with your package manager (see README.md), e.g. sudo apt-get install -y ..."
     exit 1
 fi
 
 "$PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
     || { echo "[install] missing GTK 4 / libadwaita for python3-gi: sudo apt-get install -y python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1"; exit 1; }
 "$PYTHON" -c "import PySide6" 2>/dev/null \
-    || echo "[install] note: PySide6 is not installed, so there will be no tray icon (pip install --user PySide6, or your distro's python3-pyside6)"
+    || notes+=("PySide6 is not installed, so there will be no tray icon (pip install --user PySide6, or your distro's python3-pyside6)")
 if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
-    # Only the X11 backend needs it; a pure-Wayland (KDE Plasma) session runs without
-    if [[ -n "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
-        echo "[install] note: python-xlib is not installed (not needed on a pure Wayland session)"
+    # The X11 backend can't run without it. On KDE Plasma Wayland only the
+    # popup's XWayland fallback (no gtk4-layer-shell) needs it.
+    if [[ "$backend" == "wayland_kde" ]] \
+        && "$PYTHON" -c "import gi; gi.require_version('Gtk4LayerShell', '1.0')" 2>/dev/null; then
+        notes+=("python-xlib is not installed (optional on KDE Plasma Wayland with gtk4-layer-shell)")
     else
-        echo "[install] missing python-xlib: pip3 install python-xlib --break-system-packages"
+        echo "[install] missing python-xlib: your distro's python3-xlib, or pip3 install python-xlib --break-system-packages"
         exit 1
     fi
 fi
+for note in "${notes[@]}"; do
+    echo "[install] note: $note"
+done
 
 # Launchers run the vinopop script, not main.py, so the process is named
 # vinopop.

@@ -18,7 +18,6 @@ pipeline lights up automatically.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -30,15 +29,19 @@ log = logging.getLogger("vinopop")
 
 
 def _stage_text(text: str) -> None:
-    """Put `text` on the clipboard (and PRIMARY) with the right tool for the
-    session: wl-copy on Wayland, xclip on X11. The old code only knew xclip,
-    which isn't installed on a Wayland box - so OCR'd text silently never
-    reached the clipboard."""
+    """Put `text` on the clipboard (and PRIMARY) with the backend's tool:
+    wl-copy on KDE Wayland, xclip on the XWayland backend (GNOME, sway ...).
+    Not wl-copy whenever WAYLAND_DISPLAY is set: mutter has no data-control
+    protocol, so wl-copy there steals focus or fails silently, while xclip
+    goes through the compositor's X selection bridge (see
+    platform_backend/x11.py's read_selection)."""
     data = text.encode("utf-8")
     # No gesture behind this PRIMARY change, and CLIPBOARD gets the same text
     # first, which the copy-button filter would otherwise swallow.
     expect_selection(text)
-    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+    from platform_backend import detect
+
+    if detect() == "wayland_kde" and shutil.which("wl-copy"):
         for extra in ([], ["--primary"]):
             try:
                 subprocess.run(["wl-copy", *extra], input=data, check=False, timeout=2.0)

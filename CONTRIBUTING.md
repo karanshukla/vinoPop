@@ -80,9 +80,10 @@ text → popup shows your new button.
   loop. Spawn a `threading.Thread` for HTTP requests, subprocess calls that
   may hang, etc. Use `actions.notify(title, body, icon)` to communicate
   results: it shows the notification as vinoPop's, not as `notify-send`'s.
-- **Copy results to the clipboard** with
-  `subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode())`
-  so the user can paste them.
+- **Copy results to the clipboard** with `actions.copy_to_clipboard(text)`
+  (`from actions import copy_to_clipboard`) so the user can paste them. It
+  uses the backend's tool (xclip on the XWayland backend, wl-copy on KDE
+  Wayland); calling either yourself picks the wrong one somewhere.
 - **Use existing icons** - most desktops ship the [hicolor / Adwaita icon
   themes](https://developer.gnome.org/hig/reference/icons.html). Use
   `-symbolic` suffix for monochrome icons that pick up theme colors.

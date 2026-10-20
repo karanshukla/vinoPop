@@ -2,11 +2,13 @@
 
 `get_backend()` returns a cached PlatformBackend chosen by detect():
   - KDE Plasma Wayland  -> WaylandKdeBackend
-  - everything else      -> X11Backend (the original behaviour; on other
-    Wayland compositors - GNOME, sway, Hyprland - it runs under XWayland)
+  - everything else      -> X11Backend, the XWayland backend: GNOME, sway,
+    Hyprland and other Wayland compositors run it under XWayland, and a
+    plain Xorg session (best-effort) on its X server. The "x11" name stays
+    for compatibility.
 
 main.py's _choose_gdk_backend() uses detect() too, so GDK runs on XWayland
-whenever the X11 backend is chosen inside a Wayland session.
+whenever the XWayland (x11) backend is chosen inside a Wayland session.
 
 The package is named `platform_backend`, not `platform`, to avoid shadowing
 Python's stdlib `platform` module (imported by gi and others).
@@ -41,8 +43,9 @@ def detect() -> str:
 
     Wayland KDE is chosen only in a Wayland session (see is_wayland_session)
     whose XDG_CURRENT_DESKTOP lists KDE: the backend needs KWin scripting and
-    KGlobalAccel. Every other desktop, Wayland or not, gets the X11 backend,
-    which on a non-KDE Wayland compositor runs under XWayland.
+    KGlobalAccel. Every other desktop, Wayland or not, gets the XWayland
+    ('x11') backend, which on a non-KDE Wayland compositor runs under
+    XWayland (a plain Xorg session is best-effort).
     Override with VINOPOP_BACKEND=x11|wayland_kde.
     """
     forced = (os.environ.get("VINOPOP_BACKEND") or "").strip().lower()
