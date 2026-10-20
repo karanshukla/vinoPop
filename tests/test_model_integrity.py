@@ -3,7 +3,10 @@ snapshot_download is faked and every path is under tmp_path, so nothing
 touches the network or the real model folder."""
 
 import hashlib
+import re
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -338,6 +341,56 @@ def test_load_uses_a_per_device_cache_and_prunes_stale_ones(monkeypatch, tmp_pat
     key = llm.cache_key(models.llm_model(), "2026.4.1")
     assert seen["CPU"] == str(ov_cache / "llm" / key / "CPU")
     assert sorted(p.name for p in (ov_cache / "llm").iterdir()) == [key]
+
+
+def test_load_says_compiling_only_when_there_is_no_cache(monkeypatch, tmp_path, ov_cache):
+    class _Genai(types.ModuleType):
+        def LLMPipeline(self, path, dev, **props):
+            return dev
+
+        VLMPipeline = LLMPipeline
+
+    monkeypatch.setitem(sys.modules, "openvino_genai", _Genai("openvino_genai"))
+    monkeypatch.setattr(llm, "_pipe", None)
+    monkeypatch.setattr(llm, "_pipe_key", None)
+    monkeypatch.setattr(llm, "_inflight", set())
+    monkeypatch.setattr(llm, "_schedule_unload", lambda: None)
+    monkeypatch.setattr(llm, "_ov_version", lambda: "2026.4.1")
+    monkeypatch.setattr(llm.failures, "PATH", tmp_path / "device-failures.json")
+    monkeypatch.setattr(llm.failures, "fingerprint", lambda key, rev: {"model": key})
+    monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
+    monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
+    monkeypatch.setattr(llm.devices, "candidates", lambda order: ["CPU"])
+
+    first: list[str] = []
+    llm._load(first.append)
+    assert "Compiling the model for CPU, one time only…" in first
+
+    llm._drop_pipe()
+    key = llm.cache_key(models.llm_model(), "2026.4.1")
+    _blob(llm.cache_dir(key, "CPU") / "x.blob")
+    second: list[str] = []
+    llm._load(second.append)
+    assert "Loading model on CPU…" in second
+    assert not any("Compiling" in m for m in second)
+
+
+def test_ticking_repeats_the_status_with_elapsed_time():
+    seen: list[str] = []
+    ticked = threading.Event()
+
+    def status(msg):
+        seen.append(msg)
+        if len(seen) > 1:
+            ticked.set()
+
+    with llm._ticking(status, "Compiling…", every=0.01):
+        assert ticked.wait(2)
+    after = len(seen)
+    assert seen[0] == "Compiling…"
+    assert re.fullmatch(r"Compiling… \(0:\d\d\)", seen[1])
+    time.sleep(0.05)
+    assert len(seen) == after  # stops with the block
 
 
 def test_prune_waits_for_background_compiles(monkeypatch, ov_cache):
