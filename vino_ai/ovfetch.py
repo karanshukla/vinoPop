@@ -1,9 +1,11 @@
-"""NPU diagnosis through ovfetch, the vino apps' version authority.
+"""NPU diagnosis through ovfetch.
 
-ovfetch pins the OpenVINO release the vino apps share (vinoPop's `ai`
-extra matches it), so apps on one NPU never run mismatched runtimes. Its
-`detect` also reports the OpenVINO range Intel records as working with
-this machine's NPU driver. Like vinoWhisper's doctor, vinoPop only
+ovfetch resolves and installs onnxruntime-openvino builds (vinoAuthFace
+uses it). It does not pin vinoPop's OpenVINO: that pin is copied from
+vinoWhisper's uv.lock (see requirements-ai.txt), so apps on one NPU don't
+run mismatched runtimes.
+ovfetch's `detect` reports the OpenVINO range Intel records as working
+with this machine's NPU driver. Like vinoWhisper's doctor, vinoPop only
 reports that range: the bounds are pessimistic on purpose ("untested",
 not "known to fail"), so nothing here stops the NPU from being tried, and
 a real compile failure still falls back to GPU/CPU in llm.py.

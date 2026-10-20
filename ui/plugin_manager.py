@@ -257,7 +257,7 @@ class PluginManagerDialog:
     _CATEGORY_DESCRIPTIONS = {
         "Snippets & Clipboard": "The picker that remembers what you've copied and the snippets "
         "you save for reuse. The core of what vinoPop is for.",
-        "Productivity": "Everyday actions - math, counts, speech, formatting.",
+        "Productivity": "Everyday actions - editing, math, counts, formatting.",
         "Web shortcuts": "Open the selection in a search engine or web service.",
         "AI": "Summarize, rewrite, explain and translate offline, on your NPU, GPU or CPU.",
         "Developer": "Encoders, hashes and converters for technical text.",

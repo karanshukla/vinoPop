@@ -164,6 +164,16 @@ def test_every_catalogue_entry_and_its_file_carry_the_same_version():
         assert version == entry["version"], entry["file"]
 
 
+def test_every_bundled_plugin_and_recipe_is_in_the_catalogue():
+    # A file missing from the manifest can't be installed from Plugin Manager.
+    # Recipes that only tests use live in tests/fixtures/recipes/ instead.
+    listed = {("recipes/" if e.get("kind") == "recipe" else "") + e["file"] for e in _manifest()}
+    shipped = {p.name for p in PLUGINS.glob("*.py")}
+    shipped |= {f"recipes/{p.name}" for p in (PLUGINS / "recipes").glob("*.json")}
+    assert shipped - listed == set()
+    assert listed - shipped == set()
+
+
 def test_retired_files_are_not_in_the_catalogue():
     from plugin_system import plugin_loader
 

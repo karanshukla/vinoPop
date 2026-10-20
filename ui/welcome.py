@@ -82,9 +82,9 @@ def show_welcome_dialog(
         (
             4,
             "Starter plugins are pre-installed",
-            "Clipboard history, translate, word count, transforms, offline AI actions, and "
-            "search shortcuts. Open Plugin Manager to add more (developer tools, code "
-            "formatters, QR, large type, etc.).",
+            "Editing buttons, clipboard history, word count, text transforms, and offline "
+            "translate and AI actions, plus Google, Wikipedia and YouTube search. Open "
+            "Plugin Manager to add more (developer tools, calculator, QR, etc.).",
         ),
     ]:
         row = Adw.ActionRow(title=head, subtitle=body)

@@ -33,7 +33,7 @@ _ACTIONS = [
         title="Open a web page",
         icon="web-browser-symbolic",
         blurb="Search a site, look up a word, open a map.",
-        example="Look up a selected word in the dictionary.",
+        example="Search Wikipedia for the selected word.",
         # Detail page wording
         detail_prompt="What's the address of the page to open?",
         # Placeholder is a complete working URL with {text_url} visible
@@ -47,9 +47,7 @@ _ACTIONS = [
             ("Google", "https://www.google.com/search?q={text_url}"),
             ("Wikipedia", "https://en.wikipedia.org/wiki/Special:Search?search={text_url}"),
             ("YouTube", "https://www.youtube.com/results?search_query={text_url}"),
-            ("Translate", "https://translate.google.com/?op=translate&text={text_url}"),
             ("Maps", "https://www.google.com/maps/search/{text_url}"),
-            ("Dictionary", "https://www.google.com/search?q=define+{text_url}"),
         ],
     ),
     dict(
@@ -74,7 +72,6 @@ _ACTIONS = [
             ("Show notification", "notify-send 'You selected' {text}"),
             ("Open in VS Code", "code {text}"),
             ("Open folder in Files", 'xdg-open "$(dirname {text})"'),
-            ("Speak aloud", "spd-say {text}"),
             (
                 "Count characters",
                 "echo -n {text} | wc -c | xargs -I N notify-send 'Length' 'N characters'",

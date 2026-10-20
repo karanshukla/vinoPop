@@ -69,12 +69,15 @@ def test_save_recipe_refuses_names_that_escape_the_recipes_dir(tmp_path, monkeyp
     assert path.parent == tmp_path / "recipes"
 
 
+def _bundled_and_fixture_recipes():
+    root = recipe_loader.Path(recipe_loader.__file__).parent.parent
+    return [*root.glob("plugins_repo/recipes/*.json"), *root.glob("tests/fixtures/recipes/*.json")]
+
+
 def test_bundled_recipes_validate():
     import json
 
-    for path in recipe_loader.Path(recipe_loader.__file__).parent.parent.glob(
-        "plugins_repo/recipes/*.json"
-    ):
+    for path in _bundled_and_fixture_recipes():
         assert recipe_loader.validate(json.loads(path.read_text())) == [], path.name
 
 
@@ -444,9 +447,7 @@ def test_editing_a_recipe_still_overwrites_its_own_file(tmp_path, monkeypatch):
 def test_bundled_recipes_are_shell_safe():
     import json
 
-    for path in recipe_loader.Path(recipe_loader.__file__).parent.parent.glob(
-        "plugins_repo/recipes/*.json"
-    ):
+    for path in _bundled_and_fixture_recipes():
         assert recipe_loader.safety_errors(json.loads(path.read_text())) == [], path.name
 
 
@@ -553,3 +554,14 @@ def test_b64_decode_leaves_words_that_only_look_like_base64(word):
 def test_b64_decode_still_decodes_real_base64():
     assert recipe_loader._render("{text_b64_decode}", "aHR0cHM6Ly94Lnk=") == "https://x.y"
     assert recipe_loader._render("{text_b64_decode}", "aHR0cHM6\nLy94Lnk") == "https://x.y"
+
+
+def test_wizard_presets_skip_what_the_plugin_trim_removed():
+    # 3c01e65 dropped speak.py, define and google-translate: the wizard
+    # shouldn't offer them back as one-click presets.
+    pytest.importorskip("gi")
+    from ui import recipe_wizard
+
+    templates = [t for a in recipe_wizard._ACTIONS for _, t in a["examples"]]
+    for gone in ("spd-say", "translate.google", "q=define"):
+        assert not [t for t in templates if gone in t], gone

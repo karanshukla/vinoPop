@@ -16,7 +16,7 @@
     "file": "translate.py",
     "version": 1,
     "title": "Translate",
-    "description": "Translate the selection in a bubble with a language picker, offline on a local OpenVINO model.",
+    "description": "Translate the selection in a bubble with a language picker, offline on a local OpenVINO model. Nothing leaves your machine; the model downloads once on first use.",
     "category": "AI",
     "tags": [
       "ai",
