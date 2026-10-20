@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Enable with: git config core.hooksPath .githooks
+# Skip once with: git commit --no-verify
+grep -v '^#' "$1" | head -1 | "$(git rev-parse --show-toplevel)/scripts/check_commits.sh"

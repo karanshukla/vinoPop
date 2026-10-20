@@ -145,8 +145,9 @@ uv run poe check    # ruff, ruff format --check, mypy, pytest
 `uv run poe fix` applies ruff's fixes and formatting, and
 `uv run poe security` runs the same Bandit scan as CI.
 
-Turn on the pre-commit hook so a commit can't fail CI's lint job. It runs
-`scripts/lint.sh` (ruff, ruff format --check, mypy), the same script CI
+Turn on the hooks so a commit can't fail CI's lint or commits job. The
+pre-commit hook runs `scripts/lint.sh` (ruff, ruff format --check, mypy) and
+the commit-msg hook runs `scripts/check_commits.sh`, the same scripts CI
 runs:
 
 ```bash
@@ -160,7 +161,26 @@ git config core.hooksPath .githooks
 - Tests cover what runs without a display. If a change can only be
   verified on a desktop or on the NPU, say so in the PR instead of faking
   a test
-- Commits are conventional (`feat:`, `fix:`, `docs:`, ...); the changelog
-  is generated from them with git-cliff (`cliff.toml`)
+- Commits are conventional (`feat:`, `fix:`, `docs:`, ...), checked by CI;
+  the changelog is generated from them with git-cliff (`cliff.toml`)
 - Don't add user-facing strings in languages other than English
 - For new top-level features, update README.md
+
+## Releasing
+
+1. `git cliff --unreleased` lists what's changed. Turn it into user-facing
+   entries under `## [Unreleased]` in CHANGELOG.md, if they aren't there yet.
+2. Rename that heading to `## [X.Y.Z] - YYYY-MM-DD`, add a new empty
+   `## [Unreleased]` above it, and update the compare links at the bottom.
+3. Commit it as `docs(changelog): vX.Y.Z` (git-cliff skips that subject) and
+   merge the PR.
+4. Tag the merge on main and push the tag:
+
+   ```bash
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+
+   `.github/workflows/release.yml` creates the GitHub release with the
+   `## [X.Y.Z]` section as its notes, plus install steps and a compare link.
+   It fails if CHANGELOG.md has no section for the tag. The app reads its
+   version from the tag (`core/version.py`), so there's nothing to bump.

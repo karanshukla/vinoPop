@@ -68,4 +68,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: shellcheck
-        run: shellcheck install.sh
+        run: shellcheck install.sh scripts/*.sh .githooks/*
+
+  commits:
+    # git-cliff builds CHANGELOG.md from commit subjects (cliff.toml)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Conventional commit subjects
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git log --no-merges --format=%s "origin/${BASE_REF}..HEAD" | scripts/check_commits.sh
