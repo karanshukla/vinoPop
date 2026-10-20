@@ -2,7 +2,7 @@
 
 One OpenVINO GenAI pipeline is loaded on first use and kept until it has
 been idle for `ai_idle_unload_minutes` (compiled blobs are cached under
-$XDG_CACHE_HOME/vinopop/ov-cache, so a reload is quick). Generation is
+$XDG_CACHE_HOME/vinopop/ov-cache/llm, so a reload is quick). Generation is
 serialised with a lock: two clicks in a row queue instead of fighting
 over the device.
 """
@@ -13,6 +13,7 @@ import gc
 import json
 import logging
 import re
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -175,6 +176,65 @@ def _adopt_late(model_key: str, order: list[str]) -> None:
     gc.collect()
 
 
+OV_CACHE = CACHE_DIR / "ov-cache"
+# One folder per model, revision and OpenVINO build, with a folder per
+# device inside. Anything else under it is a compile nothing will load
+# again (a 2+ GB blob each on the NPU), so a successful load prunes it.
+# The OCR engine keeps its own cache in OV_CACHE / "ocr".
+LLM_CACHE = OV_CACHE / "llm"
+
+
+def _ov_version() -> str:
+    import openvino
+
+    return str(getattr(openvino, "__version__", "") or openvino.get_version())
+
+
+def cache_key(model: models.LlmModel, ov_version: str) -> str:
+    raw = f"{model.key}@{model.revision[:12]}-ov{ov_version}"
+    return re.sub(r"[^A-Za-z0-9@._-]+", "_", raw)
+
+
+def cache_dir(key: str, dev: str) -> Path:
+    return LLM_CACHE / key / re.sub(r"[^A-Za-z0-9._-]+", "_", dev)
+
+
+def prune_cache(key: str) -> list[Path]:
+    """Delete LLM compile caches for any other key, and the blobs older
+    versions wrote straight into ov-cache (LLM and OCR mixed). Leaves the
+    OCR cache alone. Returns what was removed."""
+    removed: list[Path] = []
+    if LLM_CACHE.is_dir():
+        for child in LLM_CACHE.iterdir():
+            if child.name == key:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+            removed.append(child)
+    if OV_CACHE.is_dir():
+        for child in OV_CACHE.iterdir():
+            if child.is_file():
+                child.unlink(missing_ok=True)
+                removed.append(child)
+    return removed
+
+
+def _prune_after_load(key: str) -> None:
+    with _state_lock:
+        # A background compile may still be writing a cache for another key
+        if _inflight:
+            return
+    try:
+        removed = prune_cache(key)
+    except OSError as exc:
+        log.warning("[vino_ai] couldn't prune the compile cache: %s", exc)
+        return
+    if removed:
+        log.info("[vino_ai] removed %d stale compile cache entries", len(removed))
+
+
 def _load(on_status: Callable[[str], None]):
     global _pipe, _pipe_key, _told_stuck
     model = models.llm_model()
@@ -189,8 +249,7 @@ def _load(on_status: Callable[[str], None]):
     telemetry.prepare()
     import openvino_genai as ov_genai
 
-    cache = CACHE_DIR / "ov-cache"
-    cache.mkdir(parents=True, exist_ok=True)
+    key = cache_key(model, _ov_version())
     errors = []
     timeout = _load_timeout()
     fp = failures.fingerprint(model.key, model.revision)
@@ -217,6 +276,8 @@ def _load(on_status: Callable[[str], None]):
                 errors.append(f"NPU: {npu_canary.STUCK}")
                 continue
         on_status(f"Loading model on {dev}…")
+        cache = cache_dir(key, dev)
+        cache.mkdir(parents=True, exist_ok=True)
         props: dict[str, object] = {"CACHE_DIR": str(cache)}
         if dev == "NPU":
             props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=MIN_RESPONSE_LEN)
@@ -240,6 +301,7 @@ def _load(on_status: Callable[[str], None]):
         if warn and not (_told_stuck and npu_canary.STUCK in errors[0]):
             _warn_fallback(dev, errors[0], on_status)
         _pipe, _pipe_key = pipe, (model.key, dev)
+        _prune_after_load(key)
         return pipe
     raise RuntimeError("could not load the model: " + "; ".join(errors))
 

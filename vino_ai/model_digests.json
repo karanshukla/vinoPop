@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "generated_by": "scripts/update_digests.py, generated data, do not edit by hand",
+  "models": {
+    "OpenVINO/gemma-4-E4B-it-int4-ov": {
+      "9e0659b961752791d2d1325ddb1edf35057c3d2d": {
+        "recorded": "2026-10-20",
+        "files": {
+          ".gitattributes": {
+            "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+            "size": 1570
+          },
+          "README.md": {
+            "sha256": "9632bb8b01c2b9c3838a2d161ae30ce27256e39cd3ea49e9febc0d643b620ee1",
+            "size": 3798
+          },
+          "chat_template.jinja": {
+            "sha256": "0a2c8073c878ab1da004bee933a998606537bbb62016310352c7285c3f01c5b5",
+            "size": 18569
+          },
+          "config.json": {
+            "sha256": "4861dd6c98eeea978f97d871ffc5313eafd456d663b2c4f723b5fa9373914c4d",
+            "size": 5174
+          },
+          "generation_config.json": {
+            "sha256": "4c2d18c072dc54cc2ee8f4a29e63525f56bc97a14a0e93c9a30755ba7b6b9014",
+            "size": 203
+          },
+          "openvino_config.json": {
+            "sha256": "451fc3603d08c3a1fb00bb42ffab4e00fc8e6e6b6621e60be883e8113712ea66",
+            "size": 1160
+          },
+          "openvino_detokenizer.bin": {
+            "sha256": "461919bda7b546453e903052588c578e3e94e9e8215b7cec07cb00cb97459d13",
+            "size": 4413547
+          },
+          "openvino_detokenizer.xml": {
+            "sha256": "fd0aa647e2acce4e54c01128a03f99e4a2840f52efe8a3ab5454aa5803c745ab",
+            "size": 29792
+          },
+          "openvino_language_model.bin": {
+            "sha256": "ad62540973a8d53e853e68bfb3f6bf6d917893d1612b9c67b2612d8d6e55067d",
+            "size": 2815657513
+          },
+          "openvino_language_model.xml": {
+            "sha256": "754b7572bbec879afb3098423ddf021ebbf292f45b75cb3fe10ac87c90d9811d",
+            "size": 5142009
+          },
+          "openvino_text_embeddings_model.bin": {
+            "sha256": "f4ba107d403f58e4190d0bfef396c9e4eda6762021e4f429c10a53bb4f87aee2",
+            "size": 671612936
+          },
+          "openvino_text_embeddings_model.xml": {
+            "sha256": "03ffa3e546653e344394a04688456c7fc3036919d0340ad07ff2e0463c8d7a54",
+            "size": 7079
+          },
+          "openvino_text_embeddings_per_layer_model.bin": {
+            "sha256": "e666691fa271c8b6e26aa6eff33f3030148c0bfe43d3a1514b9b997a9a594c5e",
+            "size": 2819096656
+          },
+          "openvino_text_embeddings_per_layer_model.xml": {
+            "sha256": "310e3a42d76f726145871fed9ff8ed8c1bc6ff85e3ba8d205a3351b7a9a5ee7b",
+            "size": 17900
+          },
+          "openvino_tokenizer.bin": {
+            "sha256": "72cc61385a142c29a1ea37125b9d7a4c5775fe8386a5f6db1dd1108ea5ec1361",
+            "size": 17270350
+          },
+          "openvino_tokenizer.xml": {
+            "sha256": "fdd24f36dd1604fd646586edee1daee4f62916dadcdf2d267446f93a707d4b47",
+            "size": 46761
+          },
+          "openvino_vision_embeddings_model.bin": {
+            "sha256": "6c7609d984db75c39461f74b418cf3eac65b90da8678a08bc4e158e2f4524c3d",
+            "size": 169812532
+          },
+          "openvino_vision_embeddings_model.xml": {
+            "sha256": "4120821825d31bb690c2ddeb4e39c961a4a1b0a395160a326bbaf03e67cc3c17",
+            "size": 1932063
+          },
+          "preprocessor_config.json": {
+            "sha256": "12476d626b89e273a9b2c6a493a6319ab02427ebfcd3635d92b29584b27c7249",
+            "size": 403
+          },
+          "processor_config.json": {
+            "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c",
+            "size": 1689
+          },
+          "tokenizer.json": {
+            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+            "size": 32169626
+          },
+          "tokenizer_config.json": {
+            "sha256": "aa2f4089111e7c2f23ee3064153267ad8d72bf67378bed3d89c62b20a0c96f88",
+            "size": 3700
+          }
+        }
+      }
+    },
+    "arankays/gemma-4-E2B-it-int4-cw-ov": {
+      "8eb2f833845d0b56bc701b0ac8fff54c8e8a31d6": {
+        "recorded": "2026-10-20",
+        "files": {
+          ".gitattributes": {
+            "sha256": "34448b82c17d60fec9b65b1f093c115ddbaadc04beb1b0140b6bfed2e012a930",
+            "size": 1570
+          },
+          "README.md": {
+            "sha256": "cc9bb44d31838a0297eb5be782a179b4d4f5d840203e6b3505709afc44331785",
+            "size": 2139
+          },
+          "chat_template.jinja": {
+            "sha256": "33204f1acb5bd0002713e16a593847f24ceeafe711ed88bda2a352dc996a3373",
+            "size": 16804
+          },
+          "config.json": {
+            "sha256": "c303b11bd96ddb3d54c9ba7233dc729af75da0f79ef31655bad014e5277538b7",
+            "size": 4983
+          },
+          "generation_config.json": {
+            "sha256": "4c2d18c072dc54cc2ee8f4a29e63525f56bc97a14a0e93c9a30755ba7b6b9014",
+            "size": 203
+          },
+          "openvino_config.json": {
+            "sha256": "ac71643b0e7a98844585442221374c959f0485f00daec54b953c5646e9d68668",
+            "size": 1187
+          },
+          "openvino_detokenizer.bin": {
+            "sha256": "461919bda7b546453e903052588c578e3e94e9e8215b7cec07cb00cb97459d13",
+            "size": 4413547
+          },
+          "openvino_detokenizer.xml": {
+            "sha256": "d51a045ca85019d3608e91af83a8c61aad9af6ba906c52ac8c05d7dcc3062fd6",
+            "size": 27924
+          },
+          "openvino_language_model.bin": {
+            "sha256": "3ca882df6bcb94fef27d2b4b2b0064088f6786e8231c51673b7226a5be1b03ae",
+            "size": 1536918537
+          },
+          "openvino_language_model.xml": {
+            "sha256": "fec69f064f81931fb89385337106749f57518dcd8ae8128eb3adf7871d5a1985",
+            "size": 3826270
+          },
+          "openvino_text_embeddings_model.bin": {
+            "sha256": "b20cc0dcc75b63fcf23004a756891545a258f8a58060391695a552f114cb9ca9",
+            "size": 403177480
+          },
+          "openvino_text_embeddings_model.xml": {
+            "sha256": "5f7f1c11201daaa7e7671007e03caf19ccc4fbb53fe1ff3e7f490292f8598827",
+            "size": 7118
+          },
+          "openvino_text_embeddings_per_layer_model.bin": {
+            "sha256": "b07a583a8f4c57d06e538015c6000818bc28ce85679d7f388317594f7771d915",
+            "size": 2349334608
+          },
+          "openvino_text_embeddings_per_layer_model.xml": {
+            "sha256": "c42515cb95a47614c5739da577bfe2a9d8cbffafb3077826ba0105ada0c0e3d9",
+            "size": 17926
+          },
+          "openvino_tokenizer.bin": {
+            "sha256": "72cc61385a142c29a1ea37125b9d7a4c5775fe8386a5f6db1dd1108ea5ec1361",
+            "size": 17270350
+          },
+          "openvino_tokenizer.xml": {
+            "sha256": "6943d74daef1a985c7a66fe2c027e9a019dad87cde785d782effeb57587dec68",
+            "size": 44893
+          },
+          "openvino_vision_embeddings_model.bin": {
+            "sha256": "1e067fb34e4c29047c2169d594ef151127cbb87860f6e7bc7a673852ab82112e",
+            "size": 169024052
+          },
+          "openvino_vision_embeddings_model.xml": {
+            "sha256": "a2bcd50032766d8638becdef98bc0a29351055ae65b1f2ca2b5369c7caec179d",
+            "size": 1932102
+          },
+          "preprocessor_config.json": {
+            "sha256": "12476d626b89e273a9b2c6a493a6319ab02427ebfcd3635d92b29584b27c7249",
+            "size": 403
+          },
+          "processor_config.json": {
+            "sha256": "32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c",
+            "size": 1689
+          },
+          "tokenizer.json": {
+            "sha256": "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+            "size": 32169626
+          },
+          "tokenizer_config.json": {
+            "sha256": "a649af5e5f6c0b830dd2d65b25ef41e670ecb0431c711b0ab7bffa29756001b0",
+            "size": 2712
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # vinoPop installer - sets up autostart for the current user.
-# Usage: bash install.sh           # install
-#        bash install.sh --uninstall
+# Usage: bash install.sh                          # install
+#        bash install.sh --uninstall              # remove launchers, list what's left
+#        bash install.sh --uninstall --purge      # and delete that too (asks first;
+#                                                 # --yes to skip the question)
 
 set -euo pipefail
 
@@ -9,6 +11,10 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_ID="io.github.karanshukla.vinoPop"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+SHORTCUTS_FILE="$CONFIG_HOME/kglobalshortcutsrc"
+INTEL_DIR="$HOME/intel"
 AUTOSTART_DIR="$CONFIG_HOME/autostart"
 AUTOSTART_FILE="$AUTOSTART_DIR/vinopop.desktop"
 APPS_DIR="$DATA_HOME/applications"
@@ -36,6 +42,7 @@ elif [[ -x "$REPO_DIR/.venv/bin/python" ]]; then
 else
     PYTHON="$(command -v python3 || true)"
 fi
+has() { command -v "$1" >/dev/null 2>&1; }
 
 uninstall() {
     if [[ -f "$AUTOSTART_FILE" ]]; then
@@ -60,9 +67,103 @@ uninstall() {
     echo "[install] any running instances stopped"
 }
 
-if [[ "${1:-}" == "--uninstall" || "${1:-}" == "-u" ]]; then
+# The keys of the [vinopop] group in kglobalshortcutsrc (KDE's global
+# shortcuts), one per line; nothing when there's no such group.
+shortcut_keys() {
+    [[ -f "$SHORTCUTS_FILE" ]] || return 0
+    awk -F= '/^\[/ { in_group = ($0 == "[vinopop]"); next }
+             in_group && NF > 1 { print $1 }' "$SHORTCUTS_FILE"
+}
+
+# ~/intel is OpenVINO's, shared with every OpenVINO tool. It's only ours to
+# delete when all it holds is the telemetry files OpenVINO writes there.
+intel_is_telemetry_only() {
+    local f
+    [[ -d "$INTEL_DIR" ]] || return 1
+    for f in "$INTEL_DIR"/* "$INTEL_DIR"/.[!.]*; do
+        [[ -e "$f" ]] || continue
+        case "${f##*/}" in
+            openvino_telemetry | openvino_ga_cid | openvino_ga_uid | stats) [[ -f "$f" ]] || return 1 ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+# What --uninstall leaves: settings, plugins, snippets, clipboard history,
+# the AI model and its compile cache. Prints them; with --purge, deletes them.
+leftovers() {
+    local purge="$1" assume_yes="$2" found=() dir keys key answer
+    for dir in "$CONFIG_HOME/vinopop" "$CACHE_HOME/vinopop" "$DATA_HOME/vinopop" "$STATE_HOME/vinopop"; do
+        [[ -e "$dir" ]] && found+=("$dir")
+    done
+    intel_is_telemetry_only && found+=("$INTEL_DIR")
+    keys="$(shortcut_keys)"
+    if [[ ${#found[@]} -eq 0 && -z "$keys" ]]; then
+        echo "[install] nothing else of vinoPop's is left"
+        return 0
+    fi
+    echo "[install] left behind (settings, snippets, clipboard history, the AI model):"
+    for dir in "${found[@]}"; do
+        echo "[install]   $(du -sh -- "$dir" 2>/dev/null | cut -f1)	$dir"
+    done
+    if [[ -n "$keys" ]]; then
+        echo "[install]   the [vinopop] shortcuts in $SHORTCUTS_FILE"
+    fi
+    if [[ "$purge" != true ]]; then
+        echo "[install] to delete them too: bash $0 --uninstall --purge"
+        return 0
+    fi
+    if [[ "$assume_yes" != true ]]; then
+        if [[ ! -t 0 ]]; then
+            echo "[install] not deleting without a terminal to confirm; add --yes"
+            return 1
+        fi
+        read -r -p "[install] delete all of this? [y/N] " answer
+        if [[ "${answer,,}" != y && "${answer,,}" != yes ]]; then
+            echo "[install] kept"
+            return 0
+        fi
+    fi
+    for dir in "${found[@]}"; do
+        rm -rf -- "$dir"
+        echo "[install] removed $dir"
+    done
+    if [[ -n "$keys" ]]; then
+        # A running kglobalaccel holds them in memory and would write them
+        # back, so unregister them there first.
+        if has gdbus; then
+            while IFS= read -r key; do
+                [[ "$key" == _k_friendly_name ]] && continue
+                gdbus call --session --dest org.kde.kglobalaccel --object-path /kglobalaccel \
+                    --method org.kde.KGlobalAccel.unregister vinopop "$key" >/dev/null 2>&1 || true
+            done <<<"$keys"
+        fi
+        if has kwriteconfig6; then
+            while IFS= read -r key; do
+                kwriteconfig6 --file "$SHORTCUTS_FILE" --group vinopop --key "$key" --delete
+            done <<<"$keys"
+            echo "[install] removed the [vinopop] shortcuts from $SHORTCUTS_FILE"
+        else
+            echo "[install] no kwriteconfig6: delete the [vinopop] group from $SHORTCUTS_FILE by hand"
+        fi
+    fi
+}
+
+mode=install purge=false assume_yes=false
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall | -u) mode=uninstall ;;
+        --purge) purge=true ;;
+        --yes | -y) assume_yes=true ;;
+    esac
+done
+if [[ "$mode" == uninstall ]]; then
     uninstall
+    leftovers "$purge" "$assume_yes" || exit 1
     exit 0
+elif $purge || $assume_yes; then
+    echo "[install] --purge and --yes only go with --uninstall"
+    exit 2
 fi
 
 # Which backend this session will get; same rule as platform_backend.detect().
@@ -81,7 +182,6 @@ session_backend() {
         echo "x11"
     fi
 }
-has() { command -v "$1" >/dev/null 2>&1; }
 
 # fedora, arch, debian or other, from /etc/os-release; picks the install hints.
 distro_family() {
@@ -268,4 +368,4 @@ case ":$PATH:" in
     *":$(dirname "$BIN_FILE"):"*) echo "[install] to start now: vinopop" ;;
     *) echo "[install] to start now: $BIN_FILE ($(dirname "$BIN_FILE") is not on your PATH)" ;;
 esac
-echo "[install] uninstall: bash $0 --uninstall"
+echo "[install] uninstall: bash $0 --uninstall (add --purge to delete settings and the AI model too)"

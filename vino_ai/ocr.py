@@ -26,6 +26,9 @@ from .llm import IDLE_UNLOAD_MINUTES, _setting
 
 log = logging.getLogger("vinopop")
 
+# Its own folder: the LLM prunes its siblings under ov-cache/llm.
+_CACHE = CACHE_DIR / "ov-cache" / "ocr"
+
 _lock = threading.Lock()
 _engine = None
 _device = None
@@ -40,7 +43,7 @@ def _patch_device(dev: str) -> None:
     from openvino import Core
     from rapidocr.inference_engine.openvino import main as ov_main
 
-    cache = str(CACHE_DIR / "ov-cache")
+    cache = str(_CACHE)
 
     class _DeviceCore(Core):
         def compile_model(self, model, device_name="CPU", config=None):  # noqa: ARG002
@@ -58,7 +61,7 @@ def _load():
     telemetry.prepare()
     from rapidocr import EngineType, RapidOCR
 
-    (CACHE_DIR / "ov-cache").mkdir(parents=True, exist_ok=True)
+    _CACHE.mkdir(parents=True, exist_ok=True)
     params = {f"{stage}.engine_type": EngineType.OPENVINO for stage in ("Det", "Cls", "Rec")}
     params["Global.log_level"] = "warning"
     errors = []
