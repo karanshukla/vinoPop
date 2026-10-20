@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Generate a QR code for the selected text and show it.
 
 Uses a rolling cache directory under ~/.cache/vinopop/qr/ - keeps the
@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import time
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 from xdg_paths import CACHE_DIR
@@ -34,19 +35,7 @@ def _cleanup_cache() -> None:
 
 
 def _error(title: str, body: str) -> None:
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "3000",
-            "-i",
-            "dialog-error",
-            title,
-            body[:200],
-        ],
-        check=False,
-    )
+    actions.notify(title, body[:200], "dialog-error")
 
 
 def _install_hint() -> str:
@@ -80,9 +69,9 @@ def _qr(text: str) -> None:
         subprocess.Popen(["xdg-open", str(out_path)], start_new_session=True)
     except subprocess.CalledProcessError as exc:
         reason = exc.stderr.decode("utf-8", "replace").strip() if exc.stderr else ""
-        _error("QR error", reason or str(exc))
+        _error("QR code failed", reason or str(exc))
     except OSError as exc:
-        _error("QR error", str(exc))
+        _error("QR code failed", str(exc))
 
 
 def register(register_plugin) -> None:

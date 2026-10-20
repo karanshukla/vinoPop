@@ -1,12 +1,12 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """URL-encode and decode selected text."""
 
 from __future__ import annotations
 
 import re
-import subprocess
 import urllib.parse
 
+import actions
 from classifier import ContentType  # noqa: E402
 from plugin_base import Plugin  # noqa: E402
 
@@ -45,22 +45,8 @@ def _has_chars_needing_url_encode(text: str) -> bool:
 
 
 def _copy_and_notify(label: str, text: str) -> None:
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "applications-internet",
-            label,
-            text[:200],
-        ],
-        check=False,
-    )
+    actions.notify(label, text[:200], "applications-internet", 2500)
 
 
 _HAS_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")

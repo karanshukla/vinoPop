@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """A bundle of small text-transform actions: reverse, sort lines, dedupe,
 trim per line, strip HTML, remove diacritics, ASCII-only, swap case.
 Each transforms the selection and copies the result to the clipboard.
@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import html
 import re
-import subprocess
 import unicodedata
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -21,22 +21,8 @@ def _copy(text: str, label: str) -> None:
     user still gets the transformed text, they just have to paste it
     themselves. Imported from actions so all transformers share the
     same paste-over-selection behaviour."""
-    import actions
-
     actions.replace_selection(text)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "accessories-text-editor",
-            label,
-            text[:200],
-        ],
-        check=False,
-    )
+    actions.notify(label, text[:200], "accessories-text-editor", 2500)
 
 
 # Code points that attach to the character before them. A stand-in for the

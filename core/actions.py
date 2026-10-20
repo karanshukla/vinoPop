@@ -12,6 +12,10 @@ import urllib.parse
 from core.classifier import _normalize as _strip_invisible
 from core.classifier import strip_shell_prompts
 
+# Re-exported: plugins and the rest of the app notify through actions.notify.
+from core.notify import notify
+from core.notify import notify_argv as notify_argv
+
 # Thread-local 'force copy only' flag. When set, replace_selection
 # writes to the clipboard but skips the Ctrl+V step - the popup uses
 # this to honour Shift-click on a transform action: result lands on the
@@ -19,26 +23,6 @@ from core.classifier import strip_shell_prompts
 # selection. Mirrors PopClip's Shift-modifier behaviour where Shift
 # forces a copy instead of a paste.
 _local = threading.local()
-
-
-def notify(title: str, body: str, icon: str = "vinopop", timeout_ms: int = 3000) -> None:
-    """Best-effort desktop notification; a missing notify-send is not an error."""
-    try:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                str(timeout_ms),
-                "-i",
-                icon,
-                title,
-                body,
-            ],
-            check=False,
-        )
-    except FileNotFoundError:
-        pass
 
 
 def force_copy_active() -> bool:
@@ -74,18 +58,10 @@ def pin_as_snippet(text: str) -> None:
 
     ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get("clipboard_history")
     if ch is None or not hasattr(ch, "_create_snippet"):
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "dialog-warning",
-                "vinoPop",
-                "Snippets need the Clipboard history plugin enabled.",
-            ],
-            check=False,
+        notify(
+            "Snippets unavailable",
+            "Snippets need the Clipboard history plugin enabled.",
+            "dialog-warning",
         )
         return
 
@@ -159,19 +135,7 @@ def pin_as_snippet(text: str) -> None:
             # literal: the selection is someone else's text, so a {shell:...}
             # or {clipboard} in it is pasted as written, never expanded (#86).
             ch._create_snippet(name=name, text=text, trigger=trig, category=category, literal=True)
-            subprocess.run(
-                [
-                    "notify-send",
-                    "--hint=byte:transient:1",
-                    "-t",
-                    "2000",
-                    "-i",
-                    "vinopop",
-                    "vinoPop",
-                    f"Saved snippet: {name or text[:40]}",
-                ],
-                check=False,
-            )
+            notify("Snippet saved", name or text[:40], timeout_ms=2000)
         except Exception as exc:
             print(f"[actions] pin_as_snippet save failed: {exc}")
 
@@ -218,18 +182,10 @@ def replace_selection(new_text: str) -> None:
     if not backend.can_paste():
         # The result is on the clipboard but wasn't pasted in place. Tell the
         # user so they aren't left wondering why nothing changed.
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "edit-paste",
-                "Copied to clipboard",
-                "Auto-paste isn't available here - press Ctrl+V to paste.",
-            ],
-            check=False,
+        notify(
+            "Copied to clipboard",
+            "Auto-paste isn't available here - press Ctrl+V to paste.",
+            "edit-paste",
         )
 
 
@@ -268,7 +224,7 @@ def open_web_url(url: str) -> bool:
     if scheme not in _WEB_SCHEMES:
         shown = f"{scheme}:" if scheme else "a link without a scheme"
         print(f"[actions] refused to open {shown} link")
-        notify("vinoPop", f"Not opening {shown}: only web links open from here")
+        notify("Link not opened", f"Not opening {shown}: only web links open from here")
         return False
     from platform_backend import get_backend
 
@@ -283,7 +239,7 @@ def _open_file_url(url: str) -> None:
     path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
     folder = path if os.path.isdir(path) else os.path.dirname(path)
     if not folder or not os.path.isdir(folder):
-        notify("vinoPop", f"No such folder: {folder or path}")
+        notify("Folder not found", f"No such folder: {folder or path}")
         return
     try:
         subprocess.Popen(["xdg-open", folder], start_new_session=True, env=_desktop_env())

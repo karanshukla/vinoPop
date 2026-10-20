@@ -252,19 +252,14 @@ class Tray:
 
     @staticmethod
     def _notify_gave_up() -> None:
-        try:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "-i",
-                    "vinopop",
-                    "vinoPop tray icon unavailable",
-                    f"The tray process keeps exiting. To get the tray icon, {_PYSIDE_HINT}.",
-                ],
-                check=False,
-            )
-        except OSError:
-            pass
+        from core import actions
+
+        actions.notify(
+            "Tray icon unavailable",
+            f"The tray process keeps exiting. To get the tray icon, {_PYSIDE_HINT}.",
+            timeout_ms=None,
+            transient=False,
+        )
 
     def _on_no_tray_host(self) -> None:
         """The desktop has no tray to show our icon in, so Settings and
@@ -277,20 +272,15 @@ class Tray:
 
     @staticmethod
     def _notify_no_host() -> None:
-        try:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "-i",
-                    "vinopop",
-                    "vinoPop has no tray icon",
-                    "This desktop has no system tray, so vinoPop opened Settings "
-                    "instead. On GNOME, the AppIndicator extension adds one.",
-                ],
-                check=False,
-            )
-        except OSError:
-            pass
+        from core import actions
+
+        actions.notify(
+            "No tray icon",
+            "This desktop has no system tray, so vinoPop opened Settings "
+            "instead. On GNOME, the AppIndicator extension adds one.",
+            timeout_ms=None,
+            transient=False,
+        )
 
     def _dispatch(self, event: str, value: object) -> None:
         """Route an event from the tray subprocess to the right callback."""

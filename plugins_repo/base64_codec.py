@@ -1,12 +1,12 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Base64 encode/decode: writes result to clipboard and shows a notification."""
 
 from __future__ import annotations
 
 import base64
 import re
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -42,22 +42,7 @@ def _looks_like_base64(text: str) -> bool:
 
 
 def _notify(title: str, body: str) -> None:
-    try:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "accessories-character-map",
-                title,
-                body[:300],
-            ],
-            check=False,
-        )
-    except FileNotFoundError:
-        print(f"[{title}] {body}")
+    actions.notify(title, body[:300], "accessories-character-map")
 
 
 def _to_clipboard(text: str) -> None:
@@ -65,8 +50,6 @@ def _to_clipboard(text: str) -> None:
     original 'just copy' behaviour left the user having to manually paste;
     transformation plugins should swap text in-place - clipboard fallback
     still works when the focus is read-only."""
-    import actions
-
     actions.replace_selection(text)
 
 

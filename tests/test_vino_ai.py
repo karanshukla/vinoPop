@@ -249,7 +249,7 @@ def test_llm_warns_when_npu_fails_and_another_device_loads(monkeypatch, tmp_path
     monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
     monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
     monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
-    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: notes.append(cmd))
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: notes.append(cmd))
     llm._load(seen.append)
     assert any("running on GPU" in m for m in seen)
     assert notes and notes[0][0] == "notify-send"
@@ -274,7 +274,7 @@ def test_llm_falls_back_when_npu_compile_times_out_then_moves_back(monkeypatch, 
     monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
     monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
     monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU"])
-    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: None)
     assert llm._load(seen.append) == "GPU"
     assert any("still compiling" in m for m in seen)
 
@@ -423,7 +423,7 @@ def loader(monkeypatch, tmp_path):
     monkeypatch.setattr(llm.models, "ensure_llm", lambda m, s=None: tmp_path)
     monkeypatch.setattr(llm.models, "is_downloaded", lambda m: True)
     monkeypatch.setattr(llm.devices, "candidates", lambda order: ["NPU", "GPU", "CPU"])
-    monkeypatch.setattr(llm.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: None)
     return monkeypatch
 
 
@@ -496,7 +496,7 @@ def test_stuck_npu_is_skipped_and_reported_once_until_it_recovers(loader):
     stuck = [True]
     _genai(loader, lambda dev: tried.append(dev) or dev)
     loader.setattr(llm.npu_canary, "stuck", lambda: stuck[0])
-    loader.setattr(llm.subprocess, "run", lambda cmd, **kw: notes.append(cmd))
+    loader.setattr(subprocess, "run", lambda cmd, **kw: notes.append(cmd))
 
     assert llm._load(seen.append) == "GPU"
     assert tried == ["GPU"]

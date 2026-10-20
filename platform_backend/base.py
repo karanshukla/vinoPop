@@ -23,7 +23,6 @@ and `hotkey.Hotkey` already had, so callers barely change.
 from __future__ import annotations
 
 import abc
-import subprocess
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -74,22 +73,9 @@ def _warn_missing_injector(backend_name: str, message: str) -> None:
     if backend_name in _missing_injector_warned:
         return
     _missing_injector_warned.add(backend_name)
-    try:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "6000",
-                "-i",
-                "dialog-warning",
-                "vinoPop",
-                message,
-            ],
-            check=False,
-        )
-    except Exception:
-        pass
+    from core import actions
+
+    actions.notify("Keystroke actions unavailable", message, "dialog-warning", 6000)
 
 
 class SelectionWatcher(Protocol):

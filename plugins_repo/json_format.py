@@ -1,11 +1,11 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Pretty-print JSON: copies formatted result to clipboard."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 
+import actions
 from classifier import ContentType
 from plugin_base import Plugin
 
@@ -90,35 +90,14 @@ def _format(text: str) -> None:
     try:
         pretty = _pretty(text)
     except ValueError as exc:
-        subprocess.run(
-            [
-                "notify-send",
-                "--hint=byte:transient:1",
-                "-t",
-                "3000",
-                "-i",
-                "dialog-error",
-                "JSON error",
-                str(exc)[:300],
-            ],
-            check=False,
-        )
+        actions.notify("JSON error", str(exc)[:300], "dialog-error")
         return
-    import actions
-
     actions.replace_selection(pretty)
-    subprocess.run(
-        [
-            "notify-send",
-            "--hint=byte:transient:1",
-            "-t",
-            "2500",
-            "-i",
-            "accessories-text-editor",
-            "JSON formatted",
-            f"Replaced selection ({len(pretty)} chars)",
-        ],
-        check=False,
+    actions.notify(
+        "JSON formatted",
+        f"Replaced selection ({len(pretty)} chars)",
+        "accessories-text-editor",
+        2500,
     )
 
 

@@ -262,27 +262,15 @@ class Hotkey:
         # instead of silently doing nothing.
         if not self._grabbed_combos:
             print(f"[hotkey] '{self._hotkey_str}' could not be grabbed - already in use")
-            try:
-                import subprocess
+            from core import actions
 
-                subprocess.run(
-                    [
-                        "notify-send",
-                        "--hint=byte:transient:1",
-                        "-t",
-                        "3000",
-                        "-u",
-                        "critical",
-                        "-i",
-                        "dialog-warning",
-                        "vinoPop hotkey conflict",
-                        f"'{self._hotkey_str}' is already bound by another app. "
-                        "Pick a different combination in Settings.",
-                    ],
-                    check=False,
-                )
-            except Exception:
-                pass
+            actions.notify(
+                "Hotkey conflict",
+                f"'{self._hotkey_str}' is already bound by another app. "
+                "Pick a different combination in Settings.",
+                "dialog-warning",
+                urgency="critical",
+            )
             return
         if grab_failed:
             print(f"[hotkey] {grab_failed} lock-variant grab(s) refused (non-fatal)")
