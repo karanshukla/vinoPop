@@ -10,6 +10,8 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-20
+
 ### 🚀 Features
 
 - **The AI bubble says when the model is compiling.** A load with no compile
@@ -57,7 +59,7 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 - Tagging `v*` publishes a GitHub release with its notes from this file, a
   weekly canary installs the AI stack fresh, a test checks
   `install.sh --uninstall --purge` leaves nothing behind, and commit subjects
-  have to be conventional.
+  have to be conventional ([#114](https://github.com/karanshukla/vinoPop/pull/114)).
 - The XWayland backend sends keystrokes over XTEST with python-xlib; xdotool
   is only a fallback ([#106](https://github.com/karanshukla/vinoPop/pull/106)).
 - Modules are grouped into packages
@@ -126,5 +128,6 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/karanshukla/vinoPop/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/karanshukla/vinoPop/compare/v0.9.7...v1.0.0
