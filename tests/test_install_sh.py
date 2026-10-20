@@ -80,3 +80,27 @@ def test_sh_launcher_runs_from_the_odd_path(installed):
         text=True,
     )
     assert out.stdout.startswith("vinoPop ")
+
+
+def test_uninstall_purge_leaves_nothing_behind(installed):
+    checkout, home, stubs = installed
+    env = {
+        "HOME": str(home),
+        "PATH": f"{stubs}:{os.environ['PATH']}",
+        "VINOPOP_PYTHON": "vinopop-test-python",
+    }
+    subprocess.run(
+        ["bash", str(checkout / "install.sh"), "--uninstall", "--purge", "--yes"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    # update-desktop-database's index of every app's launchers isn't ours to
+    # delete, but it mustn't still point at vinoPop
+    mime_cache = home / ".local/share/applications/mimeinfo.cache"
+    if mime_cache.exists():
+        assert APP_ID not in mime_cache.read_text()
+    leftover = sorted(
+        str(p.relative_to(home)) for p in home.rglob("*") if not p.is_dir() and p != mime_cache
+    )
+    assert leftover == []

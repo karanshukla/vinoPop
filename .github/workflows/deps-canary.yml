@@ -1,0 +1,57 @@
+name: Dependency canary
+
+# The offline-AI stack, which PR CI never installs (ci.yml uses the dev group
+# only). Resolved fresh each week, so a broken upstream wheel shows up here
+# before a user's install.sh run hits it.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays, 07:00 UTC
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "pyproject.toml"
+      - "requirements-ai.txt"
+      - ".github/workflows/deps-canary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ai-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      # What README tells users to install, resolved from today's indexes
+      - run: uv venv --python 3.13
+      - run: uv pip install -r requirements-ai.txt
+
+      - name: Import the stack the AI actions need
+        run: |
+          .venv/bin/python - <<'PY'
+          import huggingface_hub, openvino, openvino_genai, openvino_tokenizers, rapidocr, tqdm
+          print("openvino", openvino.__version__)
+          print("openvino-genai", openvino_genai.__version__)
+          print("huggingface_hub", huggingface_hub.__version__)
+          # Enumeration only; the runner has no NPU or GPU
+          print("devices:", openvino.Core().available_devices)
+          PY
+
+      # The packages rows are what `vinopop --doctor` checks on a user's machine;
+      # the NPU and model rows can't pass on a runner, so they're ignored
+      - name: vinopop --doctor finds every AI package
+        run: |
+          .venv/bin/python vinopop --doctor --json > doctor.json
+          .venv/bin/python - <<'PY'
+          import json, sys
+          rows = [c for c in json.load(open("doctor.json"))["checks"] if c["group"] == "packages"]
+          for c in rows:
+              print(f"{c['status']:>4} {c['name']}: {c['detail']}")
+          if not rows or any(c["status"] != "ok" for c in rows):
+              sys.exit("::error::an AI package is missing or broken")
+          PY
