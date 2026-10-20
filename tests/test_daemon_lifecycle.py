@@ -43,7 +43,7 @@ def test_ocr_hotkey_drops_triggers_while_a_capture_runs(main_mod, monkeypatch):
         release.wait(5)
 
     monkeypatch.setitem(
-        sys.modules, "screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=fake_capture)
+        sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=fake_capture)
     )
     app = types.SimpleNamespace()
     for _ in range(3):  # autorepeat on a held chord
@@ -68,7 +68,9 @@ def test_ocr_lock_released_when_the_capture_raises(main_mod, monkeypatch):
     def boom():
         raise RuntimeError("no screenshot portal")
 
-    monkeypatch.setitem(sys.modules, "screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=boom))
+    monkeypatch.setitem(
+        sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=boom)
+    )
     main_mod.App._on_ocr_hotkey(types.SimpleNamespace())
     for t in threading.enumerate():
         if t.name == "ocr-capture":
