@@ -177,6 +177,22 @@ def _swap_in(model: LlmModel, staging: Path) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _adopt_unmarked(model: LlmModel) -> bool:
+    """Mark a folder from before the markers existed, if every file matches
+    its pinned digest, so an upgrade doesn't fetch the same 4 GB again."""
+    path = model_dir(model)
+    if downloaded_revision(path) is not None or not _has_ir(path):
+        return False
+    _emit(f"Checking the {model.label} files…")
+    result = integrity.verify(path, model.repo_id, model.revision, model.revision)
+    if result.status != integrity.VERIFIED:
+        log.info("[vino_ai] not adopting %s: %s", path, result.summary())
+        return False
+    _mark(path, model)
+    log.info("[vino_ai] adopted %s: %s", path, result.summary())
+    return True
+
+
 def _check_download(model: LlmModel, staging: Path) -> None:
     """Raise unless the finished download is whole and matches its digests.
     Files that differ are deleted, so the next attempt fetches just them."""
@@ -222,7 +238,9 @@ def _progress_class(label: str):
         def __init__(self, *a, **kw):
             kw["disable"] = False
             super().__init__(*a, **kw)
-            if self.unit == "B":
+            # snapshot_download counts the same bytes twice, once as
+            # transferred and once as written; keep the written ones
+            if self.unit == "B" and not str(self.desc).startswith("Downloading bytes"):
                 bars.add(self)
 
         def update(self, n=1):
@@ -260,6 +278,11 @@ def ensure_llm(
     try:
         with _download_lock:
             if is_downloaded(model):
+                return path
+            if _adopt_unmarked(model):
+                _clear_leftovers(model)
+                # a re-download an earlier run started for this folder
+                shutil.rmtree(_staging_dir(model), ignore_errors=True)
                 return path
             _clear_leftovers(model)
             staging = _staging_dir(model)
