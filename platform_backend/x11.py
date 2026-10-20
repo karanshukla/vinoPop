@@ -1,10 +1,13 @@
-"""X11 platform backend - the original vinoPop behaviour.
+"""The XWayland backend: how vinoPop runs on GNOME, sway, Hyprland and every
+other Wayland desktop except KDE Plasma (which has wayland_kde.py). The whole
+process, GTK included, runs on XWayland inside the Wayland session. A plain
+Xorg session takes the same path, best-effort. The module and the
+VINOPOP_BACKEND value keep the name "x11" for compatibility.
 
-Wraps xclip (selection/clipboard), Xlib (pointer, popup placement), xdotool
-(keystrokes / active window) and the existing X11 watcher / hotkey /
+Wraps xclip (selection/clipboard; see read_selection for why not
+wl-clipboard), Xlib (pointer, popup placement, active window, keystrokes over
+XTEST, with xdotool as the fallback) and the X11 watcher / hotkey /
 double-click modules.
-Behaviour here must stay byte-for-byte what vinoPop did before the
-platform_backend refactor, so X11 users see no change.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 from .base import PlatformBackend
 
@@ -31,9 +35,10 @@ class X11Backend(PlatformBackend):
 
     # ---- session ---------------------------------------------------------
     def check_session(self) -> None:
-        """Pure X11 fully supported; XWayland warns but starts; pure Wayland
-        is handled by the wayland_kde backend, so reaching here without a
-        DISPLAY is fatal."""
+        """XWayland (GNOME, sway ...) is the main path and warns about its
+        limits; a plain Xorg session works best-effort. Without a DISPLAY
+        there is no XWayland to run on, which is fatal (KDE Plasma Wayland
+        gets the wayland_kde backend instead)."""
         has_x11 = bool(os.environ.get("DISPLAY"))
         has_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
         if not has_x11:
@@ -41,11 +46,10 @@ class X11Backend(PlatformBackend):
             sys.exit(2)
         if has_wayland and has_x11:
             warning = (
-                "Running under XWayland: PRIMARY-selection auto-popup will only "
-                "fire for legacy X11 apps. The global hotkey still works "
-                "everywhere the X11 grab is honoured. For full functionality, "
-                "use an Xorg session - or a KDE Plasma Wayland session, which "
-                "vinoPop now supports natively."
+                "Running under XWayland: depending on the compositor, the "
+                "auto-popup may only fire for selections in X11 apps. The "
+                "global hotkey works everywhere the X11 grab is honoured. "
+                "KDE Plasma Wayland has a native backend."
             )
             print(f"[vinopop] WARNING: {warning}", file=sys.stderr)
             from core import actions
@@ -53,6 +57,15 @@ class X11Backend(PlatformBackend):
             actions.notify("Limited under XWayland", warning, timeout_ms=6000, urgency="normal")
 
     # ---- selection / clipboard ------------------------------------------
+    # xclip, not wl-clipboard, even with a WAYLAND_DISPLAY: don't "fix" this.
+    # wl-copy/wl-paste only work cleanly on a compositor with a data-control
+    # protocol (zwlr_data_control_manager_v1 or ext_data_control_manager_v1).
+    # Mutter (GNOME) has neither: there wl-copy falls back to a focus-stealing
+    # popup surface that flashes a window or fails silently, and
+    # wl-paste --primary can hang. This process runs on XWayland, and the
+    # compositor bridges the X selections to Wayland apps both ways, so xclip
+    # reaches native Wayland apps too. sway and KWin do have data-control,
+    # which is why wl-clipboard looks fine there; wayland_kde.py uses it.
     def read_selection(self, source: str) -> str:
         sel = "primary" if source.lower() == "primary" else "clipboard"
         try:
@@ -108,15 +121,17 @@ class X11Backend(PlatformBackend):
 
     # ---- keystroke injection --------------------------------------------
     def send_key(self, combo: str) -> None:
+        if send_keys(combo):
+            return
         import shutil
 
         if not shutil.which("xdotool"):
-            print("[x11] xdotool missing - cannot send key")
+            print(f"[x11] cannot send {combo!r}: no XTEST and xdotool missing")
             from .base import _warn_missing_injector
 
             _warn_missing_injector(
                 "x11",
-                "Cut/Paste/Backspace needs xdotool. Install it to enable keystroke actions.",
+                "Cut/Paste/Backspace needs the X server's XTEST extension or xdotool.",
             )
             return
         subprocess.run(
@@ -127,19 +142,18 @@ class X11Backend(PlatformBackend):
     def can_paste(self) -> bool:
         import shutil
 
-        return bool(shutil.which("xdotool"))
+        return xtest_available() or bool(shutil.which("xdotool"))
 
     def type_text(self, text: str) -> None:
+        # Stays on xdotool: typing a character the keyboard layout lacks
+        # means remapping a spare keycode first, which XTEST alone can't do.
         import shutil
 
         if not shutil.which("xdotool"):
             print("[x11] xdotool missing - cannot type text")
             from .base import _warn_missing_injector
 
-            _warn_missing_injector(
-                "x11",
-                "Cut/Paste/Backspace needs xdotool. Install it to enable keystroke actions.",
-            )
+            _warn_missing_injector("x11", "Typing text needs xdotool. Install it to enable it.")
             return
         subprocess.run(
             ["xdotool", "type", "--clearmodifiers", "--", text],
@@ -232,6 +246,236 @@ class X11Backend(PlatformBackend):
 
     def move_popup_window(self, win, x: int, y: int) -> None:
         x11_move_popup_window(win, x, y)
+
+
+# ---------------------------------------------------------------------------
+# Keystrokes and window activation in python-xlib, in place of xdotool and
+# xprop. Keys go over XTEST, which is what `xdotool key` uses too: let go of
+# the modifiers the user is still holding (--clearmodifiers), press the chord,
+# then put the held ones back, so a hotkey's Super/Shift doesn't turn Ctrl+V
+# into something else. Like xdotool, the events reach X11 clients only
+# (XWayland ones on a Wayland desktop). Everything here runs on the shared
+# _pointer_dpy connection under _pointer_lock.
+# ---------------------------------------------------------------------------
+
+# xdotool's modifier spellings -> X keysym names
+_MODIFIER_NAMES = {
+    "ctrl": "Control_L",
+    "control": "Control_L",
+    "shift": "Shift_L",
+    "alt": "Alt_L",
+    "super": "Super_L",
+    "win": "Super_L",
+    "meta": "Super_L",
+}
+_xtest_ok: bool | None = None
+
+
+def _on_shared_display(fn, default):
+    """fn(dpy) on the shared connection, or `default` if there's no X
+    display or python-xlib, or the connection broke (it's reopened next
+    time)."""
+    global _pointer_dpy
+    with _pointer_lock:
+        try:
+            from Xlib import display
+
+            if _pointer_dpy is None:
+                _pointer_dpy = display.Display()
+            return fn(_pointer_dpy)
+        except Exception as exc:  # noqa: BLE001
+            if _is_xerror(exc):  # e.g. BadWindow: the connection is fine
+                return default
+            print(f"[x11] Xlib request failed: {exc}")
+            try:
+                if _pointer_dpy is not None:
+                    _pointer_dpy.close()
+            except Exception:
+                pass
+            _pointer_dpy = None
+            return default
+
+
+def _is_xerror(exc: Exception) -> bool:
+    try:
+        from Xlib.error import XError
+    except ImportError:
+        return False
+    return isinstance(exc, XError)
+
+
+def _keysym(name: str) -> int:
+    from Xlib import XK
+
+    if len(name) == 1 and name.isascii() and name.isprintable():
+        # 'V' -> 'v' so a chord never asks for an implicit Shift.
+        name = name.lower()
+        return XK.string_to_keysym(name) or ord(name)
+    return XK.string_to_keysym(_MODIFIER_NAMES.get(name.lower(), name))
+
+
+def _held_modifiers(dpy) -> list[int]:
+    """Keycodes of modifier keys (not Caps or Num Lock) that are down now."""
+    from Xlib import X
+
+    keymap = dpy.query_keymap()
+    held: list[int] = []
+    for index, keycodes in enumerate(dpy.get_modifier_mapping()):
+        if index in (X.LockMapIndex, X.Mod2MapIndex):  # Caps Lock, Num Lock
+            continue
+        for kc in keycodes:
+            if kc and keymap[kc // 8] & (1 << (kc % 8)) and kc not in held:
+                held.append(kc)
+    return held
+
+
+def xtest_send_key(
+    dpy, combo: str, repeat: int = 1, delay_s: float = 0.0, clear_modifiers: bool = True
+) -> bool:
+    """Press and release `combo` ('ctrl+v', 'BackSpace', 'ctrl+shift+v')
+    `repeat` times, `delay_s` apart, with XTEST on `dpy`. Returns False,
+    having sent nothing, when the server has no XTEST or a key isn't in the
+    current keymap (xdotool remaps a spare keycode for those, so callers
+    fall back to it)."""
+    from Xlib import X
+    from Xlib.ext import xtest
+
+    if not dpy.has_extension("XTEST"):
+        return False
+    parts = [p for p in combo.split("+") if p]
+    if not parts:
+        return False
+    chord: list[int] = []
+    for name in parts:
+        ks = _keysym(name)
+        kc = dpy.keysym_to_keycode(ks) if ks else 0
+        if not kc:
+            return False
+        if kc not in chord:
+            chord.append(kc)
+    # A key on the Shift level (e.g. 'plus' on a US layout) needs Shift held.
+    ks = _keysym(parts[-1])
+    if dpy.keycode_to_keysym(chord[-1], 0) != ks and dpy.keycode_to_keysym(chord[-1], 1) == ks:
+        shift = dpy.keysym_to_keycode(_keysym("shift"))
+        if shift and shift not in chord:
+            chord.insert(0, shift)
+    held = [kc for kc in _held_modifiers(dpy) if kc not in chord] if clear_modifiers else []
+    for kc in held:
+        xtest.fake_input(dpy, X.KeyRelease, kc)
+    for i in range(max(1, repeat)):
+        if i and delay_s > 0:
+            dpy.sync()
+            time.sleep(delay_s)
+        for kc in chord:
+            xtest.fake_input(dpy, X.KeyPress, kc)
+        for kc in reversed(chord):
+            xtest.fake_input(dpy, X.KeyRelease, kc)
+    for kc in held:
+        xtest.fake_input(dpy, X.KeyPress, kc)
+    dpy.sync()
+    return True
+
+
+def send_keys(
+    combo: str, repeat: int = 1, delay_s: float = 0.0, clear_modifiers: bool = True
+) -> bool:
+    """xtest_send_key on the shared connection; False when it can't."""
+    return _on_shared_display(
+        lambda dpy: xtest_send_key(dpy, combo, repeat, delay_s, clear_modifiers), False
+    )
+
+
+def release_keys(names: list[str]) -> bool:
+    """Send a key release for each key name, held or not (`xdotool keyup`):
+    insurance against a modifier left logically down after injected keys."""
+
+    def run(dpy) -> bool:
+        from Xlib import X
+        from Xlib.ext import xtest
+
+        if not dpy.has_extension("XTEST"):
+            return False
+        for name in names:
+            ks = _keysym(name)
+            kc = dpy.keysym_to_keycode(ks) if ks else 0
+            if kc:
+                xtest.fake_input(dpy, X.KeyRelease, kc)
+        dpy.sync()
+        return True
+
+    return _on_shared_display(run, False)
+
+
+def xtest_available() -> bool:
+    """Whether the X server offers XTEST (checked once)."""
+    global _xtest_ok
+    if _xtest_ok is None:
+        _xtest_ok = bool(_on_shared_display(lambda dpy: dpy.has_extension("XTEST"), False))
+    return _xtest_ok
+
+
+def _active_window(dpy) -> int:
+    from Xlib import X
+
+    prop = dpy.screen().root.get_full_property(
+        dpy.intern_atom("_NET_ACTIVE_WINDOW"), X.AnyPropertyType
+    )
+    return int(prop.value[0]) if prop is not None and len(prop.value) else 0
+
+
+def active_window_id() -> int:
+    """The window manager's active window (EWMH _NET_ACTIVE_WINDOW), 0 when
+    there is none or no X display (`xdotool getactivewindow`)."""
+    return _on_shared_display(_active_window, 0)
+
+
+def activate_window(wid: int | str, timeout_s: float = 1.0) -> bool:
+    """Ask the window manager to activate `wid` and wait up to timeout_s for
+    it to become the active window (`xdotool windowactivate --sync`). True
+    once it is."""
+    wid = int(wid)
+
+    def ask(dpy) -> bool:
+        from Xlib import X
+        from Xlib.protocol import event
+
+        root = dpy.screen().root
+        msg = event.ClientMessage(
+            window=dpy.create_resource_object("window", wid),
+            client_type=dpy.intern_atom("_NET_ACTIVE_WINDOW"),
+            # source 2 = pager: WMs honour it without focus-stealing checks
+            data=(32, [2, X.CurrentTime, _active_window(dpy), 0, 0]),
+        )
+        root.send_event(msg, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+        dpy.sync()
+        return True
+
+    if not _on_shared_display(ask, False):
+        return False
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if active_window_id() == wid:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
+def window_wm_class(wid: int | str) -> str:
+    """WM_CLASS of X window `wid` in xprop's shape, lowercased
+    (`wm_class(string) = "instance", "class"`), or "" when it has none or is
+    gone. For callers that used to spawn `xprop -id <wid> WM_CLASS`."""
+
+    try:
+        xid = int(wid)
+    except ValueError:
+        return ""
+
+    def run(dpy) -> str:
+        cls = dpy.create_resource_object("window", xid).get_wm_class()
+        return f'wm_class(string) = "{cls[0]}", "{cls[1]}"'.lower() if cls else ""
+
+    return _on_shared_display(run, "")
 
 
 # ---------------------------------------------------------------------------

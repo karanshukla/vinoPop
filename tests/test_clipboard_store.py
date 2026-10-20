@@ -649,3 +649,42 @@ def test_trigger_still_expands_a_user_snippet(store, monkeypatch):
     monkeypatch.setattr(store, "_read_clipboard_text", lambda: "CLIP")
     store._create_snippet("mine", "got {clipboard}", trigger=";t")
     assert _expand_by_trigger(store, monkeypatch, store._snippets[0]) == ["got CLIP"]
+
+
+@pytest.mark.parametrize(
+    "wm_class, key",
+    [
+        ('wm_class(string) = "gnome-terminal-server", "gnome-terminal-server"', "ctrl+shift+v"),
+        ('wm_class(string) = "navigator", "firefox"', "ctrl+v"),
+        ("", "ctrl+v"),  # window gone, or no python-xlib
+    ],
+)
+def test_picker_paste_key_follows_the_target_window_class(ch, monkeypatch, wm_class, key):
+    # WM_CLASS comes from Xlib now, not an `xprop -id` spawn
+    monkeypatch.setattr("platform_backend.x11.window_wm_class", lambda wid: wm_class)
+    assert ch._paste_keystroke_for_window("12345") == key
+    assert ch._paste_keystroke_for_window(None) == "ctrl+v"
+
+
+def test_trigger_blocklist_asks_the_backend_for_the_active_window(ch, monkeypatch):
+    backend = types.SimpleNamespace(active_window_haystacks=lambda: ["KeePassXC", "wm_class"])
+    monkeypatch.setattr("platform_backend.get_backend", lambda: backend)
+    assert ch._active_window_haystacks() == ["keepassxc", "wm_class"]
+
+
+@pytest.mark.parametrize(
+    "backend, argv",
+    [
+        ("x11", ["xclip", "-selection", "clipboard"]),
+        ("wayland_kde", ["wl-copy"]),
+    ],
+)
+def test_history_uses_the_backends_clipboard_tool(ch, monkeypatch, backend, argv):
+    # A WAYLAND_DISPLAY alone (GNOME, sway) doesn't mean wl-clipboard: mutter
+    # has no data-control protocol, so the XWayland backend stays on xclip
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr("platform_backend.get_backend", lambda: types.SimpleNamespace(name=backend))
+    runs = []
+    monkeypatch.setattr(ch.subprocess, "run", lambda args, **_k: runs.append(args))
+    ch._write_clipboard("text", b"hi")
+    assert runs == [argv]

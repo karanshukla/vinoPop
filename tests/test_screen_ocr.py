@@ -79,3 +79,19 @@ def test_offer_describes_only_on_click(monkeypatch, tmp_path, stdout, described)
     screen_ocr._offer_describe("OCR captured", "5 chars", image, "hello")
     assert (seen == [(image, "hello")]) is described
     assert image.exists() is described
+
+
+@pytest.mark.parametrize(
+    "backend, tool",
+    [("x11", "xclip"), ("wayland_kde", "wl-copy")],
+)
+def test_ocr_text_is_staged_with_the_backends_clipboard_tool(monkeypatch, backend, tool):
+    # GNOME has a WAYLAND_DISPLAY too, but mutter has no data-control
+    # protocol, so the XWayland backend must stay on xclip (#95)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr("platform_backend.detect", lambda: backend)
+    monkeypatch.setattr(screen_ocr.shutil, "which", lambda name: f"/usr/bin/{name}")
+    runs = []
+    monkeypatch.setattr(screen_ocr.subprocess, "run", lambda args, **_k: runs.append(args[0]))
+    screen_ocr._stage_text("hello")
+    assert runs == [tool, tool]  # CLIPBOARD and PRIMARY

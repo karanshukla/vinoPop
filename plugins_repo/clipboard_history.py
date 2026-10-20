@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 2
+# vinopop-plugin-version: 3
 """Clipboard history + snippets picker.
 
 Two backing stores:
@@ -7,7 +7,7 @@ Two backing stores:
 
 The picker dialog has Recent + Snippets tabs, a search box, and pastes
 the chosen entry at the cursor of whichever app had focus when the
-picker was summoned (via xdotool windowactivate + ctrl+v).
+picker was summoned (activates it over EWMH, then Ctrl+V over XTEST).
 
 Activated either from the popup ("Clipboard…" plugin button) or from
 the global clipboard_hotkey (default Super+Shift+V).
@@ -887,44 +887,16 @@ def _propagate_case(typed: str, output: str) -> str:
 
 def _active_window_haystacks() -> list[str]:
     """Lower-cased window title + WM_CLASS of the focused window. Used
-    by the trigger blocklist to decide whether to expand here. xprop
-    rather than xdotool getwindowclassname because the latter is missing
-    on Mint/Debian builds."""
-    out: list[str] = []
+    by the trigger blocklist to decide whether to expand here. Asks the
+    platform backend (Xlib on X11, KWin on KDE Wayland), the same lookup
+    the popup's blocklist uses; this used to spawn xdotool and xprop."""
     try:
-        wid = subprocess.run(
-            ["xdotool", "getactivewindow"],
-            capture_output=True,
-            text=True,
-            timeout=0.3,
-        ).stdout.strip()
-        if not wid:
-            return out
-        try:
-            name = subprocess.run(
-                ["xdotool", "getwindowname", wid],
-                capture_output=True,
-                text=True,
-                timeout=0.3,
-            ).stdout.strip()
-            if name:
-                out.append(name.lower())
-        except (OSError, subprocess.SubprocessError):
-            pass
-        try:
-            klass = subprocess.run(
-                ["xprop", "-id", wid, "WM_CLASS"],
-                capture_output=True,
-                text=True,
-                timeout=0.3,
-            ).stdout.strip()
-            if klass:
-                out.append(klass.lower())
-        except (OSError, subprocess.SubprocessError):
-            pass
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return out
+        from platform_backend import get_backend
+
+        return [h.lower() for h in get_backend().active_window_haystacks()]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[triggers] active-window check failed: {exc}")
+        return []
 
 
 # ----- Wayland trigger watcher (evdev + libxkbcommon + ydotool) ----------
@@ -946,7 +918,87 @@ _kbd_suppress_until = 0.0
 
 
 def _is_wayland() -> bool:
+    """A Wayland session: picks the trigger watcher's input path (evdev +
+    ydotool), not the clipboard tool - see _wl_clipboard."""
     return bool(os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _wl_clipboard() -> bool:
+    """Read and write the clipboard with wl-clipboard (else xclip). Only on
+    the KDE Wayland backend, not whenever WAYLAND_DISPLAY is set: mutter
+    (GNOME) has no data-control protocol, so wl-copy there steals focus with
+    a popup surface or fails silently and wl-paste --primary can hang. On
+    the XWayland backend (GNOME, sway ...) xclip goes through the
+    compositor's X selection bridge instead. Same rule as
+    platform_backend/x11.py's read_selection."""
+    try:
+        from platform_backend import get_backend
+
+        return get_backend().name == "wayland_kde"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---- X11 keystrokes and windows: python-xlib (platform_backend.x11), with
+# xdotool only as the fallback when XTEST or python-xlib isn't there.
+
+
+def _x11():
+    try:
+        from platform_backend import x11
+
+        return x11
+    except Exception:  # noqa: BLE001 - no python-xlib
+        return None
+
+
+def _x_key(combo: str, repeat: int = 1, delay_s: float = 0.0, clear: bool = True) -> None:
+    """`xdotool key [--clearmodifiers] [--repeat N --delay MS] combo`."""
+    x11 = _x11()
+    if x11 is not None and x11.send_keys(combo, repeat, delay_s, clear):
+        return
+    if not shutil.which("xdotool"):
+        print(f"[clipboard] cannot send {combo!r}: no XTEST and no xdotool")
+        return
+    args = ["xdotool", "key"]
+    if clear:
+        args.append("--clearmodifiers")
+    if repeat > 1:
+        args += ["--repeat", str(repeat), "--delay", str(int(delay_s * 1000))]
+    subprocess.run([*args, combo], check=False)
+
+
+def _x_keyup(*names: str) -> None:
+    x11 = _x11()
+    if x11 is not None and x11.release_keys(list(names)):
+        return
+    if shutil.which("xdotool"):
+        subprocess.run(["xdotool", "keyup", *names], check=False)
+
+
+def _x_activate(wid: str) -> bool:
+    """`xdotool windowactivate --sync wid`; True once it's the active window."""
+    x11 = _x11()
+    if x11 is not None and x11.activate_window(wid):
+        return True
+    if not shutil.which("xdotool"):
+        return False
+    try:
+        res = subprocess.run(
+            ["xdotool", "windowactivate", "--sync", wid],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0
+
+
+def _x_can_inject() -> bool:
+    x11 = _x11()
+    return bool((x11 is not None and x11.xtest_available()) or shutil.which("xdotool"))
 
 
 def _ydotool_env() -> dict:
@@ -1165,7 +1217,7 @@ def _snapshot_clipboard() -> tuple[str, bytes] | None:
 
 def _write_clipboard(kind: str, data: bytes, primary: bool = False) -> None:
     """Put `data` on CLIPBOARD (or PRIMARY). `kind` is "text" or a MIME type."""
-    if _is_wayland():
+    if _wl_clipboard():
         args = ["wl-copy", "--primary"] if primary else ["wl-copy"]
     else:
         args = ["xclip", "-selection", "primary" if primary else "clipboard"]
@@ -1239,29 +1291,26 @@ def _fire_trigger_expansion(
     def worker_x11():
         # Check every tool up front: bailing out after the BackSpaces below
         # would leave the user with neither their trigger nor the expansion.
-        if not shutil.which("xdotool") or not shutil.which("xclip"):
-            print("[triggers] xdotool/xclip not found - cannot expand")
+        if not _x_can_inject() or not shutil.which("xclip"):
+            print("[triggers] no XTEST/xdotool or no xclip - cannot expand")
             return
         # Wait for the user to physically release the boundary key
         # (space/tab/enter) before we start synthesising keystrokes.
-        # Without this, xdotool's --clearmodifiers reads the live key
-        # state mid-press and leaves modifiers like Ctrl in a "stuck"
+        # Without this, clearing modifiers reads the live key state
+        # mid-press and leaves modifiers like Ctrl in a "stuck"
         # logical state in the receiving app (scroll-zooms instead of
         # scroll, etc.). 60 ms is generous; humans don't tap-release
         # that fast.
         time.sleep(0.06)
         # Delete the typed shortcode + the boundary char.
-        # --delay 0 drops events in Electron/Chrome targets that filter
+        # No delay drops events in Electron/Chrome targets that filter
         # for human-rate key timing; 16 ms (~1 frame at 60 Hz) is fast
         # enough that the user never sees the typed chars, but slow
-        # enough that every BackSpace lands. --clearmodifiers is
+        # enough that every BackSpace lands. Clearing modifiers is
         # unnecessary here - Backspace doesn't care about modifier
         # state, and the modifier dance occasionally leaves Ctrl wedged.
         n_delete = len(trigger) + 1
-        subprocess.run(
-            ["xdotool", "key", "--repeat", str(n_delete), "--delay", "16", "BackSpace"],
-            check=False,
-        )
+        _x_key("BackSpace", repeat=n_delete, delay_s=0.016, clear=False)
         # Give the receiving app a moment to settle before we move on
         # to clipboard staging + paste.
         time.sleep(0.08)
@@ -1273,42 +1322,25 @@ def _fire_trigger_expansion(
             _write_clipboard("text", rendered.encode("utf-8"))
         except (OSError, subprocess.SubprocessError):
             return
-        subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
-            check=False,
-        )
+        _x_key("ctrl+v")
         if cursor_left > 0:
             time.sleep(0.05)
-            subprocess.run(
-                [
-                    "xdotool",
-                    "key",
-                    "--clearmodifiers",
-                    "--repeat",
-                    str(cursor_left),
-                    "--delay",
-                    "0",
-                    "Left",
-                ],
-                check=False,
-            )
+            _x_key("Left", repeat=cursor_left)
         # Defensive: force-release every modifier we might have nudged.
-        # xdotool's --clearmodifiers is supposed to restore modifier
-        # state, but the restoration races with the user's own key-up
-        # event for the boundary key and sometimes leaves Ctrl/Shift
-        # logically stuck (Firefox starts zooming on scroll, etc.).
-        # Cheap insurance: explicit keyups on the usual suspects.
+        # Clearing modifiers puts the held ones back afterwards, but that
+        # races with the user's own key-up event for the boundary key and
+        # sometimes leaves Ctrl/Shift logically stuck (Firefox starts
+        # zooming on scroll, etc.). Cheap insurance: explicit keyups on the
+        # usual suspects.
         time.sleep(0.02)
-        subprocess.run(
-            ["xdotool", "keyup", "ctrl", "shift", "alt", "super", "Control_L", "Control_R"],
-            check=False,
-        )
+        _x_keyup("ctrl", "shift", "alt", "super", "Control_L", "Control_R")
         time.sleep(_RESTORE_DELAY)
         _restore_clipboard(saved, rendered)
 
     def worker_wayland():
-        if not shutil.which("ydotool") or not shutil.which("wl-copy"):
-            print("[triggers] ydotool/wl-copy not found - cannot expand on Wayland")
+        clip_tool = "wl-copy" if _wl_clipboard() else "xclip"
+        if not shutil.which("ydotool") or not shutil.which(clip_tool):
+            print(f"[triggers] ydotool/{clip_tool} not found - cannot expand on Wayland")
             return
         global _kbd_suppress_until
         env = _ydotool_env()
@@ -1375,14 +1407,16 @@ def _maybe_start_trigger_watcher() -> None:
 
 # ----- clipboard reading -------------------------------------------------
 
-# Clipboard reads must be backend-aware. xclip only sees the X11 (XWayland)
-# clipboard, so on a native Wayland session it silently misses everything
-# copied from native-Wayland apps - the history then "doesn't record" most
-# copies. On Wayland we read via wl-paste (wl-clipboard); on X11 via xclip.
+# Clipboard reads must be backend-aware. On the KDE Wayland backend vinoPop
+# is a native Wayland client, and xclip would only see the XWayland clipboard
+# KWin hands over lazily - the history then "doesn't record" most copies - so
+# it reads via wl-paste. On the XWayland backend (GNOME, sway ...) it reads
+# via xclip, through the compositor's X selection bridge; _wl_clipboard says
+# why wl-clipboard is wrong there.
 
 
 def _read_clipboard_targets() -> list[str]:
-    if _is_wayland():
+    if _wl_clipboard():
         try:
             out = subprocess.run(
                 ["wl-paste", "--list-types"],
@@ -1405,7 +1439,7 @@ def _read_clipboard_targets() -> list[str]:
 
 def _read_clipboard_target(target: str) -> bytes | None:
     """Raw bytes of one clipboard target, or None if it can't be read."""
-    if _is_wayland():
+    if _wl_clipboard():
         args = ["wl-paste", "-n", "-t", target]
     else:
         args = ["xclip", "-selection", "clipboard", "-t", target, "-o"]
@@ -1471,7 +1505,7 @@ def _skip_capture(targets: list[str]) -> bool:
 
 
 def _read_clipboard_text() -> str:
-    if _is_wayland():
+    if _wl_clipboard():
         # Prefer plain text; fall back to whatever wl-paste offers. -n so we
         # don't pick up wl-paste's appended trailing newline (xclip is raw).
         for args in (["wl-paste", "-n", "-t", "text/plain"], ["wl-paste", "-n"]):
@@ -1494,7 +1528,7 @@ def _read_clipboard_text() -> str:
 
 
 def _read_clipboard_image() -> bytes | None:
-    if _is_wayland():
+    if _wl_clipboard():
         try:
             out = subprocess.run(
                 ["wl-paste", "-t", "image/png"],
@@ -1802,6 +1836,12 @@ def _start_watcher_once() -> None:
 
 
 def _get_active_window() -> str | None:
+    """The active X window's id as a decimal string (what `xdotool
+    getactivewindow` printed), or None."""
+    x11 = _x11()
+    if x11 is not None:
+        wid = x11.active_window_id()
+        return str(wid) if wid else None
     if not shutil.which("xdotool"):
         return None
     try:
@@ -1818,7 +1858,7 @@ def _get_active_window() -> str | None:
 
 # Terminal WM_CLASS values that use Ctrl+Shift+V for paste instead of
 # the standard Ctrl+V. Match is case-insensitive substring against
-# WM_CLASS pulled via xprop.
+# the window's WM_CLASS.
 _TERMINAL_CLASSES = (
     "gnome-terminal",
     "konsole",
@@ -1837,17 +1877,13 @@ def _paste_keystroke_for_window(wid: str | None) -> str:
     """Most apps paste with Ctrl+V; terminals want Ctrl+Shift+V. Detect
     the target's WM_CLASS so the picker pastes correctly into a terminal
     too."""
-    if not wid or not shutil.which("xprop"):
+    if not wid:
         return "ctrl+v"
     try:
-        out = subprocess.run(
-            ["xprop", "-id", wid, "WM_CLASS"],
-            capture_output=True,
-            text=True,
-            timeout=0.5,
-        )
-        wm_class = out.stdout.lower()
-    except (OSError, subprocess.SubprocessError):
+        from platform_backend.x11 import window_wm_class
+
+        wm_class = window_wm_class(wid)
+    except Exception:  # noqa: BLE001 - no python-xlib
         return "ctrl+v"
     for term in _TERMINAL_CLASSES:
         if term in wm_class:
@@ -1866,7 +1902,7 @@ def _paste_to_window(
     caret lands where a {cursor} placeholder was rendered out.
     """
     if entry.kind == "text":
-        if _is_wayland():
+        if _wl_clipboard():
             subprocess.run(
                 ["wl-copy"],
                 input=entry.text.encode("utf-8"),
@@ -1883,7 +1919,7 @@ def _paste_to_window(
     elif entry.kind == "image":
         if not Path(entry.image_path).is_file():
             return
-        if _is_wayland():
+        if _wl_clipboard():
             try:
                 with open(entry.image_path, "rb") as fh:
                     subprocess.run(
@@ -1911,55 +1947,40 @@ def _paste_to_window(
     )
 
     def worker():
-        if not (target_window and shutil.which("xdotool")):
-            _log.warning("[clipboard.paste] skipped - no target or no xdotool")
+        if not (target_window and _x_can_inject()):
+            _log.warning("[clipboard.paste] skipped - no target, or no XTEST/xdotool")
             return
         paste_key = _paste_keystroke_for_window(target_window)
         is_terminal = paste_key == "ctrl+shift+v"
         # The hotkey (e.g. super+shift+v) leaves modifiers logically held
         # in X until the user releases them. Without an explicit keyup,
-        # xdotool's --clearmodifiers races with the real key-up events
-        # and the paste lands as garbage (or not at all). Mirror what
-        # the snippet trigger expansion does.
+        # clearing modifiers races with the real key-up events and the
+        # paste lands as garbage (or not at all). Mirror what the snippet
+        # trigger expansion does.
         time.sleep(0.06)
-        subprocess.run(
-            [
-                "xdotool",
-                "keyup",
-                "ctrl",
-                "shift",
-                "alt",
-                "super",
-                "Control_L",
-                "Control_R",
-                "Super_L",
-                "Super_R",
-                "Shift_L",
-                "Shift_R",
-                "Alt_L",
-                "Alt_R",
-            ],
-            check=False,
+        _x_keyup(
+            "ctrl",
+            "shift",
+            "alt",
+            "super",
+            "Control_L",
+            "Control_R",
+            "Super_L",
+            "Super_R",
+            "Shift_L",
+            "Shift_R",
+            "Alt_L",
+            "Alt_R",
         )
         # Activate twice via two different paths. muffin / gnome-terminal-
-        # server is finicky: xdotool windowactivate alone sometimes returns
-        # before the focus has actually transferred (the `_NET_ACTIVE_WINDOW`
+        # server is finicky: activating alone sometimes returns before the
+        # focus has actually transferred (the `_NET_ACTIVE_WINDOW`
         # round-trip races the compositor's redraw). wmctrl -ia goes
         # through EWMH directly and is what actions._focus_via_wmctrl uses
         # as the primary path. Belt + braces here because the picker has
         # already stolen focus, unlike the no-focus-steal popup.
-        act_x = subprocess.run(
-            ["xdotool", "windowactivate", "--sync", target_window],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if act_x.returncode != 0:
-            _log.warning(
-                "[clipboard.paste] windowactivate failed rc=%d %s",
-                act_x.returncode,
-                act_x.stderr.strip(),
-            )
+        if not _x_activate(target_window):
+            _log.warning("[clipboard.paste] activating %s timed out", target_window)
         if shutil.which("wmctrl"):
             try:
                 hex_id = f"0x{int(target_window):08x}"
@@ -1975,16 +1996,7 @@ def _paste_to_window(
         time.sleep(0.30 if is_terminal else 0.18)
         # Confirm focus before we fire so a missed activation is loud in
         # the log instead of just a silent no-paste.
-        try:
-            cur = subprocess.run(
-                ["xdotool", "getactivewindow"],
-                capture_output=True,
-                text=True,
-                timeout=0.5,
-            )
-            active = cur.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            active = ""
+        active = _get_active_window() or ""
         _log.info(
             "[clipboard.paste] active=%s target=%s sending=%s",
             active or "?",
@@ -1993,11 +2005,7 @@ def _paste_to_window(
         )
         if active and active != target_window:
             # Try one more time before giving up - some WMs need a poke.
-            subprocess.run(
-                ["xdotool", "windowactivate", "--sync", target_window],
-                check=False,
-                timeout=1.0,
-            )
+            _x_activate(target_window)
             time.sleep(0.12)
         # Type the text directly instead of sending a paste accelerator
         # for short single-line text. Two wins:
@@ -2013,7 +2021,15 @@ def _paste_to_window(
         # Multi-line / long text still uses the paste accelerator
         # because typing N newlines would execute N commands in a
         # shell, and typing kilobytes char-by-char is too slow.
-        use_type = entry.kind == "text" and "\n" not in entry.text and len(entry.text) <= 2048
+        # Typing stays on xdotool: it remaps a spare keycode for characters
+        # the keyboard layout doesn't have, which XTEST alone can't. Without
+        # xdotool the paste accelerator is used for everything.
+        use_type = (
+            entry.kind == "text"
+            and "\n" not in entry.text
+            and len(entry.text) <= 2048
+            and bool(shutil.which("xdotool"))
+        )
         if use_type:
             _log.info("[clipboard.paste] using xdotool type (%d chars)", len(entry.text))
             ks = subprocess.run(
@@ -2022,48 +2038,17 @@ def _paste_to_window(
                 capture_output=True,
                 text=True,
             )
+            if ks.returncode != 0:
+                _log.warning("[clipboard.paste] paste rc=%d %s", ks.returncode, ks.stderr.strip())
         else:
-            ks = subprocess.run(
-                ["xdotool", "key", "--clearmodifiers", paste_key],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        if ks.returncode != 0:
-            _log.warning("[clipboard.paste] paste rc=%d %s", ks.returncode, ks.stderr.strip())
+            _x_key(paste_key)
         if cursor_left > 0:
             # Give the paste a tick to land before we move the caret.
             time.sleep(0.05)
-            subprocess.run(
-                [
-                    "xdotool",
-                    "key",
-                    "--clearmodifiers",
-                    "--repeat",
-                    str(cursor_left),
-                    "--delay",
-                    "0",
-                    "Left",
-                ],
-                check=False,
-            )
+            _x_key("Left", repeat=cursor_left)
         # Defensive: clear any modifier the WM might have re-asserted
         # while we activated the window.
-        subprocess.run(
-            [
-                "xdotool",
-                "keyup",
-                "ctrl",
-                "shift",
-                "alt",
-                "super",
-                "Control_L",
-                "Control_R",
-                "Super_L",
-                "Super_R",
-            ],
-            check=False,
-        )
+        _x_keyup("ctrl", "shift", "alt", "super", "Control_L", "Control_R", "Super_L", "Super_R")
 
     threading.Thread(target=worker, daemon=True, name="clipboard-paste").start()
 

@@ -6,11 +6,11 @@ The detail that used to live in the README: which backend runs on which desktop,
 
 vinoPop picks a backend at startup:
 
-- **X11** (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE): selection through `xclip`, keystrokes through `xdotool`, cursor position through Xlib.
+- **XWayland** (GNOME, sway, Hyprland and every other Wayland desktop except KDE Plasma): the whole process runs on XWayland. Selection and clipboard through `xclip` and the compositor's X selection bridge, keystrokes through the X server's XTEST extension, cursor position, popup placement and the active window through Xlib. `wl-clipboard` is deliberately not used here: GNOME's mutter has no data-control protocol, so `wl-copy` steals focus or fails and `wl-paste --primary` can hang. `xdotool` is optional; with it the clipboard picker types short text instead of pasting it. The native backend needs KWin's scripting API for the cursor position, which is why only KDE has one.
 - **KDE Plasma 6 / Wayland**: selection through `wl-clipboard`, popup placement through `gtk4-layer-shell` (XWayland when it isn't installed), cursor position through KWin's scripting API.
-- **Every other Wayland desktop** (GNOME, sway, Hyprland) runs the X11 path under XWayland. The native backend needs KWin's scripting API for the cursor position.
+- **Plain Xorg** (Cinnamon, XFCE, MATE): the XWayland backend's code on a real X server. Best-effort.
 
-`VINOPOP_BACKEND=x11` or `=wayland_kde` overrides the choice.
+`VINOPOP_BACKEND=x11` (the XWayland backend; the name predates it) or `=wayland_kde` overrides the choice.
 
 On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bound under System Settings, Shortcuts), Paste/Cut press keys through the desktop's Remote Control portal (KDE asks once; `ydotool` + `ydotoold` is the fallback), and modifier+double-click needs your user in the `input` group. Popup placement, hover persistence, click-outside dismissal and the app blocklist all work natively. You can anchor the popup to the selected text instead of the mouse if you turn on desktop accessibility (AT-SPI). There's more in [FEDORA-KDE.md](FEDORA-KDE.md).
 

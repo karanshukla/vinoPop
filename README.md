@@ -14,7 +14,7 @@ Select some text and a little bar shows up right over it. Copy it, search it, tr
 - **Plugins are just `.py` files**, and the recipe builder makes web searches, commands and transforms without code. Base64, JSON, hashes, timestamps, colours, a calculator, case conversion, QR codes and more ship in the box.
 - **Private.** Your text stays on your machine unless you click something that obviously goes online, like web search or opening a link. Nothing phones home.
 
-Runs natively on KDE Plasma 6 / Wayland, and on X11 (Cinnamon, GNOME-on-X11, KDE, XFCE, MATE). Other Wayland desktops run under XWayland.
+Runs natively on KDE Plasma 6 / Wayland, and through XWayland on GNOME, sway, Hyprland and other Wayland desktops. A plain Xorg session (Cinnamon, XFCE, MATE ...) works best-effort.
 
 ## Requirements
 
@@ -28,18 +28,22 @@ System packages first:
 ```sh
 # Ubuntu / Linux Mint / Debian
 sudo apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
-    gir1.2-adw-1 xclip xdotool xdg-utils python3-xlib python3-pyside6.qtwidgets
+    gir1.2-adw-1 xdg-utils python3-pyside6.qtwidgets
 
 # Fedora
-sudo dnf install -y python3 python3-gobject gtk4 libadwaita \
-    xclip xdotool xdg-utils python3-xlib python3-pyside6
+sudo dnf install -y python3 python3-gobject gtk4 libadwaita xdg-utils python3-pyside6
 
 # Arch
-sudo pacman -S python python-gobject gtk4 libadwaita \
-    xclip xdotool xdg-utils python-xlib pyside6
+sudo pacman -S python python-gobject gtk4 libadwaita xdg-utils pyside6
 ```
 
-On KDE Plasma Wayland also install `wl-clipboard`, plus `gtk4-layer-shell` for native popup placement (`gir1.2-gtk4layershell-1.0` on Debian 13 / Ubuntu 24.10+) and `ydotool` if you want Paste/Cut without KDE's Remote Control prompt.
+Then the packages for your desktop (same names on all three, except `python3-xlib` is `python-xlib` on Arch):
+
+| Desktop | Install | Why |
+|---|---|---|
+| GNOME, sway, Hyprland and other Wayland desktops except KDE | `xclip python3-xlib`; `xdotool` is optional | vinoPop runs on XWayland. Selection and clipboard go through `xclip` and the compositor's X selection bridge (`wl-clipboard` isn't used: GNOME's mutter has no data-control protocol for it); keystrokes and window focus through Xlib. With `xdotool`, the clipboard picker types short text instead of pasting it, which some Electron editors need |
+| KDE Plasma Wayland | `wl-clipboard`, plus `gtk4-layer-shell` for native popup placement (`gir1.2-gtk4layershell-1.0` on Debian 13 / Ubuntu 24.10+) and `ydotool` if you want Paste/Cut without KDE's Remote Control prompt | Native Wayland; `xclip` and `xdotool` aren't used. `python3-xlib` only matters without `gtk4-layer-shell` |
+| Plain Xorg (Cinnamon, XFCE, MATE ...), best-effort | same as the first row | Same code path as XWayland, less tested |
 
 Then vinoPop:
 
@@ -103,8 +107,8 @@ def register(register_plugin) -> None:
 
 ## Known rough edges
 
-- **X11 has had less recent testing** than KDE Plasma 6 / Wayland. If you hit a glitch on Cinnamon, GNOME-on-X11, XFCE or MATE, please [open an issue](https://github.com/karanshukla/vinoPop/issues).
-- **Native Wayland means KDE Plasma for now.** GNOME, sway and Hyprland run the X11 path under XWayland. [How it works](docs/how-it-works.md#backends) has the details.
+- **Plain Xorg is best-effort.** It shares the XWayland backend's code but gets less testing. If you hit a glitch on Cinnamon, XFCE or MATE, please [open an issue](https://github.com/karanshukla/vinoPop/issues).
+- **Native Wayland means KDE Plasma for now.** GNOME, sway and Hyprland run the XWayland backend. [How it works](docs/how-it-works.md#backends) has the details.
 - **HiDPI** works, but has mostly been tested at 2× scaling.
 - **The odd input grab.** If another app holds an X11 input grab (an open menu, say), the popup might not catch your outside-click right away.
 
