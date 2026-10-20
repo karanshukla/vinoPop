@@ -254,11 +254,12 @@ def _models() -> list[Result]:
             )
         ]
     elif path.is_dir():
-        return [
+        results = [
             Result(
                 UNKNOWN,
                 "llm model",
-                f"{model.label} at {path} is incomplete; the next AI action downloads it again",
+                f"{model.label} at {path} has no download markers; the next AI action "
+                "keeps it if every file matches, else downloads it again",
             )
         ]
     else:

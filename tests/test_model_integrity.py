@@ -118,6 +118,23 @@ def test_folder_without_markers_is_not_downloaded(hub, model):
     assert (models.model_dir(model) / "openvino_detokenizer.xml").is_file()
 
 
+def test_verified_folder_from_before_markers_is_adopted(hub, model):
+    _folder(model)
+    staging = models._staging_dir(model)
+    staging.mkdir(parents=True)  # a re-download an earlier run started
+    models.ensure_llm(model)
+    assert hub.calls == []
+    assert models.is_downloaded(model)
+    assert _leftovers() == []
+
+
+def test_unmarked_folder_that_differs_is_downloaded_again(hub, model):
+    _folder(model, files={**FILES, "openvino_tokenizer.xml": b"<bad/>"})
+    models.ensure_llm(model)
+    assert len(hub.calls) == 1
+    assert (models.model_dir(model) / "openvino_tokenizer.xml").read_bytes() == b"<tok/>"
+
+
 def test_hash_mismatch_is_reported_and_not_marked(hub, model):
     hub.serve["openvino_language_model.bin"] = b"tampered" * 100
     with pytest.raises(RuntimeError, match="integrity check"):
@@ -207,6 +224,45 @@ def test_doctor_checks_the_files(hub, model, monkeypatch):
     (models.model_dir(model) / "openvino_tokenizer.xml").write_bytes(b"<bad/>")
     rows = {r.label: r for r in doctor._models()}
     assert rows["llm model files"].status == doctor.FAIL
+
+
+def test_doctor_checks_an_unmarked_folder(hub, model, monkeypatch):
+    monkeypatch.setattr(models, "llm_model", lambda: model)
+    _folder(model)
+    rows = {r.label: r for r in doctor._models()}
+    assert rows["llm model"].status == doctor.UNKNOWN
+    assert rows["llm model files"].status == doctor.OK
+
+
+class _FakeTqdm:
+    def __init__(self, *a, desc="", total=None, unit="it", **kw):
+        self.desc, self.total, self.unit, self.n = desc, total, unit, 0
+
+    def update(self, n=1):
+        self.n += n
+
+    def close(self):
+        pass
+
+
+def test_progress_counts_written_bytes_once(monkeypatch):
+    # tqdm comes with the AI extras, which CI doesn't install
+    fake = types.ModuleType("tqdm.auto")
+    fake.tqdm = _FakeTqdm  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tqdm", types.ModuleType("tqdm"))
+    monkeypatch.setitem(sys.modules, "tqdm.auto", fake)
+    seen = []
+    monkeypatch.setattr(models, "_emit", seen.append)
+    monkeypatch.setattr(models.time, "monotonic", iter(range(0, 100, 2)).__next__)
+    bar_cls = models._progress_class("M")
+    # the transfer is compressed, so its total is smaller than the files'
+    transfer = bar_cls(desc="Downloading bytes", total=3 * 10**9, unit="B")
+    written = bar_cls(desc="Reconstructing (incomplete total...)", total=4 * 10**9, unit="B")
+    transfer.update(3 * 10**9)
+    written.update(2 * 10**9)
+    assert seen[-1] == "Downloading M: 50% (2.0 of 4.0 GB)"
+    transfer.close()
+    written.close()
 
 
 def test_doctor_reports_an_older_download_as_drift(hub, model, monkeypatch):
