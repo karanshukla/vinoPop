@@ -172,12 +172,12 @@ git config core.hooksPath .githooks
    entries under `## [Unreleased]` in CHANGELOG.md, if they aren't there yet.
 2. Rename that heading to `## [X.Y.Z] - YYYY-MM-DD`, add a new empty
    `## [Unreleased]` above it, and update the compare links at the bottom.
-3. Commit it as `docs(changelog): vX.Y.Z` (git-cliff skips that subject) and
-   merge the PR.
-4. Tag the merge on main and push the tag:
+3. Commit it straight to main as `docs(changelog): vX.Y.Z`, with no PR
+   (git-cliff skips that subject). A PR per release only adds clutter.
+4. Tag that commit and push both:
 
    ```bash
-   git tag vX.Y.Z && git push origin vX.Y.Z
+   git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 
    `.github/workflows/release.yml` creates the GitHub release with the
