@@ -48,6 +48,16 @@ def _log_npu_notes() -> None:
         log.warning("[vino_ai] %s (see `vinopop --doctor`)", warning)
 
 
+@functools.lru_cache(maxsize=1)
+def _log_npu_missing() -> None:
+    """Once per process: why OpenVINO didn't list an NPU the PCI bus has.
+    Nothing on a machine without one."""
+    from . import npu_preflight
+
+    for line in npu_preflight.npu_missing_help():
+        log.warning("[vino_ai] NPU not enumerated: %s", line)
+
+
 def _setting() -> str:
     try:
         from core.settings import get_settings
@@ -73,6 +83,8 @@ def candidates(order: tuple[str, ...]) -> list[str]:
     present = [d for d in order if any(x.split(".")[0] == d for x in devs)]
     if "NPU" in present:
         _log_npu_notes()
+    elif "NPU" in order:
+        _log_npu_missing()
     choice = _setting()
     if choice != "AUTO" and choice in present:
         present.remove(choice)

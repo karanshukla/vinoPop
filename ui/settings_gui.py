@@ -1709,7 +1709,10 @@ class SettingsDialog:
             for check in checks:
                 row = _plain(Adw.ActionRow())
                 row.set_title(check.get("label", ""))
-                row.set_subtitle(check.get("detail", ""))
+                detail = check.get("detail", "")
+                if check.get("fix") and check.get("status") != "ok":
+                    detail += f"\nFix: {check['fix']}"
+                row.set_subtitle(detail)
                 row.set_subtitle_selectable(True)
                 icon, css = status_icons.get(
                     check.get("status", ""), ("dialog-question-symbolic", "dim-label")
@@ -1725,6 +1728,7 @@ class SettingsDialog:
             width = max((len(c.get("label", "")) for c in checks), default=0)
             report["text"] = "\n".join(
                 f"[{c.get('status', ''):>4}] {c.get('label', ''):<{width}}  {c.get('detail', '')}"
+                + (f"\n{'':6} fix: {c['fix']}" if c.get("fix") and c.get("status") != "ok" else "")
                 for c in checks
             )
             rerun.set_sensitive(True)
