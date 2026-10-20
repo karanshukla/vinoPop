@@ -234,7 +234,23 @@ def test_doctor_checks_an_unmarked_folder(hub, model, monkeypatch):
     assert rows["llm model files"].status == doctor.OK
 
 
+class _FakeTqdm:
+    def __init__(self, *a, desc="", total=None, unit="it", **kw):
+        self.desc, self.total, self.unit, self.n = desc, total, unit, 0
+
+    def update(self, n=1):
+        self.n += n
+
+    def close(self):
+        pass
+
+
 def test_progress_counts_written_bytes_once(monkeypatch):
+    # tqdm comes with the AI extras, which CI doesn't install
+    fake = types.ModuleType("tqdm.auto")
+    fake.tqdm = _FakeTqdm  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tqdm", types.ModuleType("tqdm"))
+    monkeypatch.setitem(sys.modules, "tqdm.auto", fake)
     seen = []
     monkeypatch.setattr(models, "_emit", seen.append)
     monkeypatch.setattr(models.time, "monotonic", iter(range(0, 100, 2)).__next__)
