@@ -10,8 +10,14 @@ explicit Accept. This module replaces that with a PopClip-style flow:
   4. on mouse-up we crop the screenshot to that rectangle and hand the PNG
      back - no buttons, no second app window.
 
-`select_and_capture(callback)` MUST run on the GTK main thread. It calls
-`callback(png_path_or_None)` exactly once (None = cancelled / failed).
+The steps are separate functions so a worker thread can drive them and hop
+to the GTK main thread only for the GTK parts (screen_ocr._capture_via_overlay
+does): `monitor_count()` and `pick_monitor()` and `show()` MUST run on the
+GTK main thread; `pointer_hint()` and `grab()` block on a subprocess and
+belong on a worker, or the daemon's main loop freezes for the length of the
+screenshot. `show()` arranges for `callback(png_path_or_None)` to be called
+exactly once (None = cancelled / failed). `select_and_capture(callback)` runs
+all of them on the main thread, for callers that have no worker.
 """
 
 from __future__ import annotations
@@ -39,26 +45,45 @@ def _grabber() -> str | None:
     return None
 
 
-def _target_monitor():
-    """The Gdk.Monitor under the pointer when there's more than one, else
-    None (one screen: grab and overlay the whole desktop as before). The
-    overlay is a single surface on one output, so with several monitors a
-    whole-desktop grab got squashed onto it."""
+def monitor_count() -> int:
+    """How many outputs GDK sees. Main thread only."""
     display = Gdk.Display.get_default()
-    if display is None:
-        return None
-    monitors = display.get_monitors()
-    if monitors.get_n_items() <= 1:
-        return None
+    return display.get_monitors().get_n_items() if display is not None else 0
+
+
+def pointer_hint() -> tuple[int, int, bool] | None:
+    """(x, y, is_logical) of the pointer from the platform backend, or None
+    when it can't say. Any thread; on KDE it's a KWin round-trip, so not the
+    GTK one."""
     try:
         from platform_backend import get_backend
 
         backend = get_backend()
         x, y = backend.pointer_position()
-        return monitor_at(monitors, x, y, backend.pointer_is_logical)
+        return x, y, backend.pointer_is_logical
     except Exception as exc:  # noqa: BLE001
-        print(f"[ocr] no pointer monitor, grabbing the whole desktop: {exc}")
+        print(f"[ocr] no pointer position, grabbing the whole desktop: {exc}")
         return None
+
+
+def pick_monitor(pointer: tuple[int, int, bool] | None):
+    """The Gdk.Monitor under `pointer` when there's more than one, else
+    None (one screen: grab and overlay the whole desktop as before). The
+    overlay is a single surface on one output, so with several monitors a
+    whole-desktop grab got squashed onto it. Main thread only."""
+    display = Gdk.Display.get_default()
+    if display is None or pointer is None:
+        return None
+    monitors = display.get_monitors()
+    if monitors.get_n_items() <= 1:
+        return None
+    x, y, is_logical = pointer
+    return monitor_at(monitors, x, y, is_logical)
+
+
+def _target_monitor():
+    """pick_monitor for the pointer, all on the main thread."""
+    return pick_monitor(pointer_hint()) if monitor_count() > 1 else None
 
 
 def _capture_argv(tool: str, path: str, monitor=None) -> list[str]:
@@ -84,9 +109,11 @@ def _capture_argv(tool: str, path: str, monitor=None) -> list[str]:
     return ["maim", "-g", f"{g.width * s}x{g.height * s}+{g.x * s}+{g.y * s}", path]
 
 
-def _capture_fullscreen(monitor=None) -> str | None:
+def grab(monitor=None) -> str | None:
     """Grab the screen (or just `monitor`) to a temp PNG with no UI.
     spectacle is the KWin-native path; grim covers wlroots; maim covers X11.
+    Blocks for the length of the screenshot (spectacle takes a good part of
+    a second), so call it from a worker thread.
 
     The PNG is written to a temporary file in the user's runtime environment."""
     tool = _grabber()
@@ -267,16 +294,27 @@ class _Selector(Gtk.Window):
             print(f"[ocr] selector callback error: {exc}")
 
 
+def show(shot_path: str, callback, monitor=None) -> None:
+    """Put the overlay for the screenshot at `shot_path` up on `monitor` (or
+    the whole desktop). Main thread only. The overlay deletes the screenshot
+    and calls callback(crop_png_or_None) once the drag ends."""
+    _Selector(shot_path, callback, monitor).present()
+
+
+_capture_fullscreen = grab
+
+
 def select_and_capture(callback) -> bool:
-    """Show the overlay and call callback(crop_png_or_None). Main thread only.
-    Returns True once the overlay is up; False (and never calls back) if we
-    couldn't grab the screen, so the caller can fall back to something else."""
+    """Show the overlay and call callback(crop_png_or_None), all on the main
+    thread (it blocks on the screen grab; workers should drive the steps
+    separately, see the module docstring). Returns True once the overlay is
+    up; False (and never calls back) if we couldn't grab the screen, so the
+    caller can fall back to something else."""
     monitor = _target_monitor()
-    shot = _capture_fullscreen(monitor)
+    shot = grab(monitor)
     if not shot:
         return False
-    sel = _Selector(shot, callback, monitor)
-    sel.present()
+    show(shot, callback, monitor)
     return True
 
 

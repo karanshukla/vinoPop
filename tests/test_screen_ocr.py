@@ -95,3 +95,114 @@ def test_ocr_text_is_staged_with_the_backends_clipboard_tool(monkeypatch, backen
     monkeypatch.setattr(screen_ocr.subprocess, "run", lambda args, **_k: runs.append(args[0]))
     screen_ocr._stage_text("hello")
     assert runs == [tool, tool]  # CLIPBOARD and PRIMARY
+
+
+# ---- the overlay: GTK steps on the main loop, the grab on the worker (#74) --
+
+
+class _FakeSelector:
+    """Records which thread each step ran on. `idle_add` below runs main-loop
+    callbacks on a thread of its own, standing in for the GTK thread."""
+
+    def __init__(self, tmp_path, monitors=1, grab_ok=True, show_error=None, cancel=False):
+        self.tmp_path = tmp_path
+        self.monitors = monitors
+        self.grab_ok = grab_ok
+        self.show_error = show_error
+        self.cancel = cancel
+        self.threads: dict[str, str] = {}
+        self.calls: list = []
+        self.gtk = threading.current_thread().name  # replaced by the fixture
+
+    def _mark(self, step):
+        self.threads[step] = threading.current_thread().name
+
+    def monitor_count(self):
+        self._mark("monitor_count")
+        return self.monitors
+
+    def pointer_hint(self):
+        self._mark("pointer_hint")
+        return (10, 20, False)
+
+    def pick_monitor(self, pointer):
+        self._mark("pick_monitor")
+        self.calls.append(("pick", pointer))
+        return "MON" if pointer else None
+
+    def grab(self, monitor):
+        self._mark("grab")
+        self.calls.append(("grab", monitor))
+        if not self.grab_ok:
+            return None
+        shot = self.tmp_path / "shot.png"
+        shot.write_bytes(b"png")
+        return str(shot)
+
+    def show(self, shot, callback, monitor):
+        self._mark("show")
+        self.calls.append(("show", shot, monitor))
+        if self.show_error:
+            raise self.show_error
+        # The real overlay calls back from the drag-end handler, later.
+        threading.Thread(target=callback, args=(None if self.cancel else "/crop.png",)).start()
+
+
+@pytest.fixture
+def gtk_thread():
+    """An idle_add that runs callbacks on one long-lived 'gtk' thread."""
+    import queue
+
+    q: queue.Queue = queue.Queue()
+
+    def loop():
+        while True:
+            fn = q.get()
+            if fn is None:
+                return
+            fn()
+
+    t = threading.Thread(target=loop, name="gtk", daemon=True)
+    t.start()
+    yield q.put
+    q.put(None)
+
+
+def test_overlay_grabs_on_the_worker_and_shows_on_the_gtk_thread(tmp_path, gtk_thread):
+    sel = _FakeSelector(tmp_path)
+    assert screen_ocr._capture_via_overlay(sel, gtk_thread) == "/crop.png"
+    assert sel.threads["monitor_count"] == "gtk"
+    assert sel.threads["pick_monitor"] == "gtk"
+    assert sel.threads["show"] == "gtk"
+    assert sel.threads["grab"] == threading.current_thread().name
+    # One monitor: no pointer round-trip, whole desktop
+    assert "pointer_hint" not in sel.threads
+    assert sel.calls == [("pick", None), ("grab", None), ("show", str(tmp_path / "shot.png"), None)]
+
+
+def test_overlay_asks_the_pointer_off_the_gtk_thread_with_several_monitors(tmp_path, gtk_thread):
+    sel = _FakeSelector(tmp_path, monitors=2)
+    assert screen_ocr._capture_via_overlay(sel, gtk_thread) == "/crop.png"
+    assert sel.threads["pointer_hint"] == threading.current_thread().name
+    assert sel.calls[0] == ("pick", (10, 20, False)) and sel.calls[1] == ("grab", "MON")
+
+
+def test_overlay_cancel_is_none(tmp_path, gtk_thread):
+    assert screen_ocr._capture_via_overlay(_FakeSelector(tmp_path, cancel=True), gtk_thread) is None
+
+
+def test_overlay_failed_grab_raises_so_the_desktop_tool_takes_over(tmp_path, gtk_thread):
+    with pytest.raises(RuntimeError, match="grab"):
+        screen_ocr._capture_via_overlay(_FakeSelector(tmp_path, grab_ok=False), gtk_thread)
+
+
+def test_overlay_show_error_surfaces_and_deletes_the_shot(tmp_path, gtk_thread):
+    sel = _FakeSelector(tmp_path, show_error=ValueError("no pixbuf"))
+    with pytest.raises(ValueError, match="no pixbuf"):
+        screen_ocr._capture_via_overlay(sel, gtk_thread)
+    assert not (tmp_path / "shot.png").exists()
+
+
+def test_a_frozen_gtk_loop_is_a_timeout_not_a_hang():
+    with pytest.raises(TimeoutError):
+        screen_ocr._on_gtk_thread(lambda: 1, 0.05, idle_add=lambda fn: None)
