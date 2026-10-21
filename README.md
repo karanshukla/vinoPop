@@ -28,7 +28,7 @@ System packages first:
 ```sh
 # Ubuntu / Linux Mint / Debian
 sudo apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 \
-    gir1.2-adw-1 xdg-utils python3-pyside6.qtwidgets
+    gir1.2-adw-1 librsvg2-common xdg-utils python3-pyside6.qtwidgets
 
 # Fedora
 sudo dnf install -y python3 python3-gobject gtk4 libadwaita xdg-utils python3-pyside6

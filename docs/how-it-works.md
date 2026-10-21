@@ -60,6 +60,30 @@ Everything the Settings window sets lives in `~/.config/vinopop/settings.json`.
 | `ai_idle_unload_minutes` | `5` | Unload the model after this long idle. `0` keeps it loaded. |
 | `editable_atspi_listener_enabled` | `false` | Use AT-SPI for editable detection + selection geometry |
 | `popup_anchor_to_selection` | `true` | Anchor popup to the selection rect (needs AT-SPI enabled) |
+| `theme` | `dark` | `dark`, `light`, or `system` (follows the GTK theme) |
+| `popup_button_size` | `22` | Button size in px, 14 to 48. Icons scale with it. |
+| `max_popup_buttons` | `24` | Cap on buttons the popup draws; the rest are dropped |
+| `popup_overflow_mode` | `expand` | When one row is full: `expand` (chevron reveals the rest), `wrap` (second row) or `cap` (a `+N` chip) |
+| `popup_force_all_modifier` | `""` | Hold this key (`alt`/`ctrl`/`shift`/`super`) while selecting to show every plugin regardless of content type. Empty disables. |
+| `selection_debounce_ms` | `150` | Quiet time after the last selection change before the popup shows |
+| `ignore_whitespace_only` | `true` | Don't pop up for whitespace-only selections |
+| `blocklist_patterns` | `[]` | Window title / WM_CLASS substrings (case-insensitive) where the popup never shows: password managers, banking sites |
+| `readonly_app_classes` | `[]` | Extra WM_CLASS substrings treated as read-only, hiding Cut/Paste/Backspace |
+| `hotkey_use_polling` | `true` | Poll the keyboard every 50 ms instead of XGrabKey; dodges WM grab conflicts (Cinnamon eats the first press otherwise) |
+| `clipboard_history_size` | `25` | Entries kept |
+| `clipboard_history_images` | `true` | Keep image copies too |
+| `clipboard_history_max_text_kb` | `1024` | Text copies above this aren't kept |
+| `clipboard_history_max_image_mb` | `20` | Image copies above this aren't kept |
+| `clipboard_poll_interval` | `0.5` | Seconds between polls when XFixes selection events aren't available |
+| `snippet_variables` | `{}` | `{name: value}` pairs snippets use via `{var:NAME}` |
+| `trigger_blocklist_patterns` | `[]` | Like `blocklist_patterns`, for snippet trigger expansion only |
+| `plugin_order` | `[]` | Plugin names shown first, in this order (Plugin Manager > Order) |
+| `disabled_plugins` | `[]` | Plugin names switched off inside a bundled file, e.g. hide `paste-and-enter` but keep `paste` |
+| `ai_prefetch_model` | `false` | Download the ~4 GB LLM at daemon start instead of on the first AI click |
+| `ai_prefetch_asked` | `false` | Set once onboarding or Settings asked about the prefetch; a stored `ai_prefetch_model: true` without it isn't consent |
+| `ai_load_timeout_seconds` | `120` | How long a device may take to load the LLM before the next one (NPU, then GPU, then CPU) is tried |
+| `ocr_describe_images` | `false` | After an OCR capture, offer (or run, if no text was found) a Gemma description of the image |
+| `show_welcome_dialog` | `true` | First-run welcome dialog. `false` skips it (screencasts, tests). |
 | `icon_style` | `color` | Popup buttons for branded and converter actions: `color` (vino tiles) or `glyph` (mono glyphs like the system edit icons) |
 | `tray_icon_style` | `color` | Tray icon: `color` (recoloured by the panel), `light` or `dark` (fixed, for panels that don't recolour it) |
 
