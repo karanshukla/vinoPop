@@ -837,6 +837,17 @@ class SettingsDialog:
             _on_tray_icon_changed,
         )
         group.add(tray_row)
+        group.add(
+            self._spin_row(
+                "Hide tray icon after (minutes)",
+                "Minutes without vinoPop popping up before the tray icon hides. "
+                "The next popup brings it back. 0 keeps it shown.",
+                "tray_idle_minutes",
+                0,
+                1440,
+                1,
+            )
+        )
 
         # Max buttons per popup: how many actions can show before the
         # popup wraps to a second row and (past 2 rows) drops to a

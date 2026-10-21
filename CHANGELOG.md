@@ -10,6 +10,13 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **The tray icon can hide while vinoPop goes unused.** Settings has a new
+  "Hide tray icon after (minutes)" row (`tray_idle_minutes`, default 0 =
+  always shown), as vinoWhisper and vinoWatch do; the next popup, OCR or
+  clipboard hotkey brings it back.
+
 ### 🐛 Bug Fixes
 
 - **The OCR overlay comes up without freezing the app.** The screen grab and

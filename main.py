@@ -400,6 +400,7 @@ class App:
                 rect = None
 
         def _show() -> bool:
+            self._note_use()
             self.popup.show_for(
                 text, x, y, ctype, editable=editable, rect=rect, via_hotkey=via_hotkey
             )
@@ -542,6 +543,7 @@ class App:
                 _send_keys("BackSpace"),
             )
         )
+        self._note_use()
         self.popup.show_actions(items, x, y, via_hotkey=via_hotkey)
         return False
 
@@ -676,6 +678,7 @@ class App:
         log.info("[ocr] hotkey '%s' bound (polling=%s)", hotkey_str, use_polling)
 
     def _on_ocr_hotkey(self) -> None:
+        self._note_use()
         # One capture at a time: KWin passes key autorepeat through to
         # KGlobalAccel and the first capture spends seconds importing the
         # OCR stack, so a held chord used to stack three overlays.
@@ -726,6 +729,7 @@ class App:
         plugin_loader gives every user plugin a sys.modules name of the
         form 'vinopop_user_<stem>', so we look up the picker that way.
         """
+        self._note_use()
         mod = sys.modules.get("vinopop_user_clipboard_history")
         if mod is None or not hasattr(mod, "open_picker"):
             self._off_main(self._clipboard_fallback)
@@ -826,11 +830,18 @@ class App:
             on_open_plugins=self.open_plugins,
             on_open_about=self.open_about,
             on_quit=self.quit,
+            get_hide_after_minutes=lambda: self.settings.get_int("tray_idle_minutes"),
         )
         GLib.timeout_add(200, self._poll_tray)
 
+    def _note_use(self) -> None:
+        """Keeps the tray icon in view, or brings it back (tray_idle_minutes)."""
+        if self.tray is not None:
+            self.tray.note_use()
+
     def open_settings(self) -> None:
         log.info("opening settings dialog…")
+        self._note_use()
         if self._settings_dialog is None:
             try:
                 from ui.settings_gui import SettingsDialog
@@ -882,6 +893,7 @@ class App:
 
     def open_plugins(self, tab: str | None = None) -> None:
         log.info("opening plugin manager…")
+        self._note_use()
         if self._plugin_dialog is None:
             try:
                 from ui.plugin_manager import PluginManagerDialog

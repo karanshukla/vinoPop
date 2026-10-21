@@ -232,6 +232,9 @@ DEFAULTS: dict[str, Any] = {
     #   "light" -> light monochrome glyph; for DARK panels
     #   "dark"  -> dark monochrome glyph; for LIGHT panels
     "tray_icon_style": "color",
+    # Minutes without a popup before the tray icon hides; the next popup
+    # brings it back. 0 keeps it shown.
+    "tray_idle_minutes": 0,
     # If True (default): after the command, drop into an interactive shell so
     #   output stays visible. Close with exit/Ctrl-D/X.
     # If False: terminal closes immediately after the command exits (output lost).

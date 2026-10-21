@@ -122,6 +122,7 @@ class Tray:
         on_open_plugins: Callable[[], None],
         on_open_about: Callable[[], None],
         on_quit: Callable[[], None],
+        get_hide_after_minutes: Callable[[], int] = lambda: 0,
     ) -> None:
         self._on_toggle_watcher = on_toggle_watcher
         self._get_watcher_active = get_watcher_active
@@ -130,6 +131,10 @@ class Tray:
         self._on_open_plugins = on_open_plugins
         self._on_open_about = on_open_about
         self._on_quit = on_quit
+        self._get_hide_after_minutes = get_hide_after_minutes
+        # Set from any thread; poll() on the GTK main loop does the sending.
+        self._used_at = time.monotonic()
+        self._hidden = False
 
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
@@ -208,6 +213,7 @@ class Tray:
                     self._reader = FrameReader()
                     self._connected = True
                     self._restarts = 0
+                    self._hidden = False  # a new tray process starts shown
                     # Sync initial watcher state
                     self.refresh()
                     print("[tray] connected to tray subprocess")
@@ -323,6 +329,19 @@ class Tray:
         except OSError:
             self._connected = False
 
+    def note_use(self) -> None:
+        """vinoPop was just used: show the icon again if it idled out.
+        Safe from any thread."""
+        self._used_at = time.monotonic()
+
+    def _sync_visible(self) -> None:
+        minutes = self._get_hide_after_minutes()
+        hide = minutes > 0 and time.monotonic() - self._used_at >= minutes * 60
+        if hide == self._hidden or self._sock is None:
+            return
+        _send_message(self._sock, {"cmd": "set_visible", "value": not hide})
+        self._hidden = hide
+
     def poll(self) -> None:
         """Read any pending messages from the tray subprocess.
 
@@ -340,6 +359,10 @@ class Tray:
             return
         for msg in messages:
             self._dispatch(msg.get("event", ""), msg.get("value"))
+        try:
+            self._sync_visible()
+        except OSError:
+            self._connected = False
 
     def shutdown(self) -> None:
         """Tell tray subprocess to quit and wait for it."""
