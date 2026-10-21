@@ -98,7 +98,7 @@ def show_welcome_dialog(
     # ---- bottom action row ----
     bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=10)
     if on_open_plugins is not None:
-        plug_btn = Gtk.Button(label="Open Plugin Manager...")
+        plug_btn = Gtk.Button(label="Open Plugin Manager…")
         plug_btn.add_css_class("pill")
         plug_btn.connect("clicked", lambda _b: (dlg.close(), on_open_plugins()))
         bottom.append(plug_btn)
