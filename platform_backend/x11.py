@@ -238,16 +238,24 @@ class X11Backend(PlatformBackend):
 # holding (its --clearmodifiers), press the chord, then put the held ones
 # back, so a hotkey's Super/Shift doesn't turn Ctrl+V into something else. A
 # keysym the current layout lacks (an accented letter on a US layout, an
-# emoji) is bound to a spare keycode for the duration, as xdotool did, and
-# the keycode is given back afterwards. Like xdotool, the events reach X11
-# clients only (XWayland ones on a Wayland desktop). Everything here runs on
-# the shared _pointer_dpy connection under _pointer_lock.
+# emoji) is bound to a spare keycode for the duration, and the keycode is
+# given back afterwards. Unlike xdotool, each missing keysym gets its own
+# spare keycode: rebinding one keycode per character raced the client, which
+# under load read a character against the next one's binding (2026-10-20,
+# Plasma XWayland, all cores busy: 3 of 6 runs mangled). Like xdotool, the
+# events reach X11 clients only (XWayland ones on a Wayland desktop).
+# Everything here runs on the shared _pointer_dpy connection under
+# _pointer_lock.
 # ---------------------------------------------------------------------------
 
-# How long a remapped scratch keycode stays bound after its key events, so
-# the receiving client has seen MappingNotify and the events before the
-# binding changes under it (xdotool's default inter-key delay).
+# How long a scratch keycode stays bound after its key events before it's
+# rebound, when there are more missing keysyms than spare keycodes, so the
+# client has handled the events before the binding changes under it.
 _REMAP_SETTLE_S = 0.012
+# How long the scratch keycodes stay bound after the last key event before
+# they're given back. Longer than the remap: a client still behind on its
+# event queue drops every character it hasn't read yet.
+_RESTORE_SETTLE_S = 0.25
 
 # xdotool's modifier spellings -> X keysym names
 _MODIFIER_NAMES = {
@@ -321,49 +329,72 @@ def _held_modifiers(dpy) -> list[int]:
 
 
 class _Scratch:
-    """A spare keycode (one with no keysyms) that keys missing from the
-    layout are bound to while they're typed. Found on first use, bound to
-    one keysym at a time, and `restore()`d to empty when the caller is done.
-    Clients learn about each rebinding from the server's MappingNotify."""
+    """Spare keycodes (ones with no keysyms) that keys missing from the
+    layout are bound to while they're typed, one keycode per keysym. Found
+    on first use, and all `restore()`d to empty when the caller is done.
+    Only when the missing keysyms outnumber the spare keycodes is one
+    rebound, the least recently used. Clients learn about each binding from
+    the server's MappingNotify."""
 
     def __init__(self, dpy) -> None:
         self._dpy = dpy
-        self._keycode: int | None = None  # None: not looked up yet; 0: none free
-        self._bound = 0
+        self._free: list[int] | None = None  # None: not looked up yet
+        self._bound: dict[int, int] = {}  # keysym -> keycode, least recent first
 
-    def _find(self) -> int:
+    def _find(self) -> list[int]:
         info = self._dpy.display.info
         lo, hi = info.min_keycode, info.max_keycode
         mapping = self._dpy.get_keyboard_mapping(lo, hi - lo + 1)
-        # The high keycodes are the ones the layout leaves unused.
-        for offset in range(len(mapping) - 1, -1, -1):
-            if not any(mapping[offset]):
-                return lo + offset
-        return 0
+        # The high keycodes are the ones the layout leaves unused; the list
+        # is popped from the end, so the highest goes first.
+        return [lo + offset for offset, syms in enumerate(mapping) if not any(syms)]
+
+    def _bind(self, keycode: int, keysym: int) -> None:
+        self._dpy.change_keyboard_mapping(keycode, [(keysym,)])
+        self._dpy.sync()
+        self._bound[keysym] = keycode
+
+    def reserve(self, keysyms) -> None:
+        """Bind `keysyms` up front, while spare keycodes last, so the
+        keymap doesn't change in the middle of what's typed."""
+        if self._free is None:
+            self._free = self._find()
+        for keysym in keysyms:
+            if not self._free:
+                return
+            if keysym not in self._bound:
+                self._bind(self._free.pop(), keysym)
 
     def keycode_for(self, keysym: int) -> int:
-        """Bind `keysym` to the scratch keycode and return it, 0 if the
-        keyboard has no free keycode."""
-        if self._keycode is None:
-            self._keycode = self._find()
-        if not self._keycode:
-            return 0
-        if self._bound != keysym:
-            if self._bound:
-                self._dpy.sync()
-                time.sleep(_REMAP_SETTLE_S)
-            self._dpy.change_keyboard_mapping(self._keycode, [(keysym,)])
-            self._dpy.sync()
-            self._bound = keysym
-        return self._keycode
-
-    def restore(self) -> None:
-        if self._bound and self._keycode:
+        """The scratch keycode bound to `keysym`, binding it if it isn't
+        yet; 0 if the keyboard has no free keycode."""
+        if keysym in self._bound:
+            self._bound[keysym] = self._bound.pop(keysym)  # most recent now
+            return self._bound[keysym]
+        if self._free is None:
+            self._free = self._find()
+        if self._free:
+            self._bind(self._free.pop(), keysym)
+        elif self._bound:
+            oldest = next(iter(self._bound))
+            keycode = self._bound.pop(oldest)
             self._dpy.sync()
             time.sleep(_REMAP_SETTLE_S)
-            self._dpy.change_keyboard_mapping(self._keycode, [(0,)])
-            self._dpy.sync()
-            self._bound = 0
+            self._bind(keycode, keysym)
+        else:
+            return 0
+        return self._bound[keysym]
+
+    def restore(self) -> None:
+        if not self._bound:
+            return
+        self._dpy.sync()
+        time.sleep(_RESTORE_SETTLE_S)
+        for keycode in sorted(self._bound.values()):
+            self._dpy.change_keyboard_mapping(keycode, [(0,)])
+        self._dpy.sync()
+        self._free = (self._free or []) + sorted(self._bound.values())
+        self._bound = {}
 
 
 def _keycode_for(dpy, keysym: int, scratch: _Scratch) -> tuple[int, bool]:
@@ -452,12 +483,14 @@ def xtest_type_text(dpy, text: str, delay_s: float = 0.0) -> bool:
     for kc in held:
         xtest.fake_input(dpy, X.KeyRelease, kc)
     shift = dpy.keysym_to_keycode(_keysym("shift"))
+    keysyms = [xkb.keysym_for_char(ch) for ch in text]
+    scratch.reserve(dict.fromkeys(ks for ks in keysyms if ks and not dpy.keysym_to_keycode(ks)))
     skipped = 0
-    for i, ch in enumerate(text):
+    for i, keysym in enumerate(keysyms):
         if i and delay_s > 0:
             dpy.sync()
             time.sleep(delay_s)
-        kc, shifted = _keycode_for(dpy, xkb.keysym_for_char(ch), scratch)
+        kc, shifted = _keycode_for(dpy, keysym, scratch)
         if not kc:
             skipped += 1
             continue

@@ -200,12 +200,14 @@ def test_typing_lifts_held_modifiers_and_puts_them_back(dpy):
     assert dpy.sent == [("up", 37), ("down", 38), ("up", 38), ("down", 37)]
 
 
-def test_typing_binds_missing_characters_to_one_spare_keycode(dpy):
-    assert x11.xtest_type_text(dpy, "éa€")
+def test_typing_binds_each_missing_character_to_its_own_spare_keycode(dpy):
+    # All bound before the first key, none rebound mid-text, all given back
+    assert x11.xtest_type_text(dpy, "éa€é")
     euro, eacute = 0x20AC, XK.string_to_keysym("eacute")  # EuroSign isn't in Xlib.XK
     assert dpy.remaps == [
         (MAX_KEYCODE, eacute),
-        (MAX_KEYCODE, euro),
+        (MAX_KEYCODE - 1, euro),
+        (MAX_KEYCODE - 1, 0),
         (MAX_KEYCODE, 0),
     ]
     assert dpy.sent == [
@@ -213,9 +215,30 @@ def test_typing_binds_missing_characters_to_one_spare_keycode(dpy):
         ("up", MAX_KEYCODE),
         ("down", 38),
         ("up", 38),
+        ("down", MAX_KEYCODE - 1),
+        ("up", MAX_KEYCODE - 1),
         ("down", MAX_KEYCODE),
         ("up", MAX_KEYCODE),
     ]
+
+
+def test_more_missing_characters_than_spare_keycodes_rebinds_the_oldest(monkeypatch):
+    dpy = FakeDisplay(spare=False)
+    del dpy.keymap[MAX_KEYCODE], dpy.keymap[MAX_KEYCODE - 1]  # two spare
+    monkeypatch.setattr(
+        "Xlib.ext.xtest.fake_input", lambda d, t, detail=0, **_: d.sent.append(detail)
+    )
+    monkeypatch.setattr(x11.time, "sleep", lambda _s: None)
+    assert x11.xtest_type_text(dpy, "éñé€")
+    eacute, ntilde, euro = XK.string_to_keysym("eacute"), XK.string_to_keysym("ntilde"), 0x20AC
+    # é was typed after ñ, so ñ's keycode is the one € takes over
+    assert dpy.remaps[:3] == [
+        (MAX_KEYCODE, eacute),
+        (MAX_KEYCODE - 1, ntilde),
+        (MAX_KEYCODE - 1, euro),
+    ]
+    spare, other = MAX_KEYCODE, MAX_KEYCODE - 1
+    assert dpy.sent == [spare, spare, other, other, spare, spare, other, other]
 
 
 def test_typing_paces_characters_with_the_delay(dpy, monkeypatch):
