@@ -296,6 +296,9 @@ class TrayQt:
                 self._tray.setIcon(self._load_icon())
             except Exception as exc:  # noqa: BLE001
                 print(f"[tray-qt] reload_icon failed: {exc}", flush=True)
+        elif cmd == "set_visible":
+            # The daemon hides the icon after the user's idle minutes.
+            self._tray.setVisible(bool(msg.get("value", True)))
         elif cmd == "quit":
             self._running = False
         elif cmd == "ping" and self._client:

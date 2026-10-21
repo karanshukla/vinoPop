@@ -117,6 +117,40 @@ def test_no_tray_host_warns_once_and_opens_settings(fake_tray, tmp_path, monkeyp
         t.shutdown()
 
 
+def test_the_icon_hides_after_the_idle_minutes_and_comes_back_on_use(fake_tray, tmp_path):
+    # The fake child echoes each set_visible it gets back as an event
+    fake_tray(
+        "import socket, struct, json\n"
+        f"path = {str(tmp_path / 'tray.sock')!r}\n"
+        "s = socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1)\n"
+        "c, _ = s.accept()\n"
+        "while (head := c.recv(4)):\n"
+        "    msg = json.loads(c.recv(struct.unpack('!I', head)[0]))\n"
+        "    if msg['cmd'] == 'set_visible':\n"
+        "        raw = json.dumps({'event': 'visible', 'value': msg['value']}).encode()\n"
+        "        c.sendall(struct.pack('!I', len(raw)) + raw)\n"
+    )
+    minutes = [5]
+    t = tray.Tray(*NOOP, get_hide_after_minutes=lambda: minutes[0])
+    seen = []
+    t._dispatch = lambda event, value: seen.append(value)
+    try:
+        assert t._connected
+        t._used_at -= 4 * 60
+        _poll_until(t, lambda: seen, seconds=0.5)
+        assert seen == []  # four quiet minutes: still shown
+        t._used_at -= 60
+        assert _poll_until(t, lambda: seen == [False], seconds=3)
+        t.note_use()
+        assert _poll_until(t, lambda: seen == [False, True], seconds=3)
+        minutes[0] = 0  # 0 keeps it shown, however long it idles
+        t._used_at -= 24 * 60 * 60
+        _poll_until(t, lambda: len(seen) > 2, seconds=0.5)
+        assert seen == [False, True]
+    finally:
+        t.shutdown()
+
+
 # ---- the real Qt child (offscreen) -------------------------------------------
 
 

@@ -45,7 +45,7 @@ def test_ocr_hotkey_drops_triggers_while_a_capture_runs(main_mod, monkeypatch):
     monkeypatch.setitem(
         sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=fake_capture)
     )
-    app = types.SimpleNamespace()
+    app = types.SimpleNamespace(_note_use=lambda: None)
     for _ in range(3):  # autorepeat on a held chord
         main_mod.App._on_ocr_hotkey(app)
     assert main_mod._ocr_busy.locked()
@@ -71,7 +71,7 @@ def test_ocr_lock_released_when_the_capture_raises(main_mod, monkeypatch):
     monkeypatch.setitem(
         sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=boom)
     )
-    main_mod.App._on_ocr_hotkey(types.SimpleNamespace())
+    main_mod.App._on_ocr_hotkey(types.SimpleNamespace(_note_use=lambda: None))
     for t in threading.enumerate():
         if t.name == "ocr-capture":
             t.join(5)
@@ -123,6 +123,7 @@ def test_prepare_popup_shows_on_the_gtk_thread_with_one_window_lookup(main_mod, 
         ignore_ws=True,
         settings={"blocklist_patterns": ["nomatch"]},
         popup=types.SimpleNamespace(show_for=lambda *a, **kw: shown.append(kw)),
+        _note_use=lambda: None,
     )
     main_mod.App._prepare_popup(app, "hello", 1, 2)
     assert shown == []  # nothing GTK until the idle callback runs
@@ -271,6 +272,7 @@ def test_paste_from_history_goes_through_idle_add(main_mod, monkeypatch):
     app = types.SimpleNamespace(
         settings={"clipboard_history_enabled": True},
         popup=types.SimpleNamespace(show_actions=lambda it, x, y, **_kw: items.extend(it)),
+        _note_use=lambda: None,
     )
     app._on_clipboard_hotkey = lambda: pytest.fail("called on the popup's worker thread")
     assert main_mod.App._show_no_selection_popup(app, 1, 2) is False
