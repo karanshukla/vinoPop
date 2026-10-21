@@ -17,8 +17,8 @@ from plugin_base import Plugin
 
 def _send(combo: str) -> None:
     # Route through the active backend so key injection uses the right tool
-    # for the session: xdotool on X11, ydotool on Wayland/KDE. Calling
-    # xdotool directly does nothing on native Wayland.
+    # for the session: XTEST on X11, the RemoteDesktop portal or ydotool on
+    # KDE Wayland.
     try:
         from platform_backend import get_backend
 

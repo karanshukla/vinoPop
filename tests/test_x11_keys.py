@@ -1,4 +1,7 @@
-"""Keystrokes over XTEST in the X11 backend (what xdotool key did)."""
+"""Keystrokes and typing over XTEST in the X11 backend (what xdotool key
+and xdotool type did)."""
+
+import types
 
 import pytest
 
@@ -21,26 +24,36 @@ KEYMAP = {
     36: ("Return", None),
 }
 MODIFIERS = [[50], [66], [37], [64], [77], [], [133], []]  # Shift, Lock, Control, Mod1..
+MIN_KEYCODE, MAX_KEYCODE = 8, 140
 
 
 class FakeDisplay:
-    def __init__(self, held=(), xtest=True):
+    def __init__(self, held=(), xtest=True, spare=True):
         self.held = set(held)
         self.xtest = xtest
         self.sent = []
         self.synced = False
+        self.remaps = []  # (keycode, keysym) as change_keyboard_mapping saw them
+        self.keymap = dict(KEYMAP)
+        if not spare:
+            # Every keycode taken, like a keyboard with no room to borrow
+            for kc in range(MIN_KEYCODE, MAX_KEYCODE + 1):
+                self.keymap.setdefault(kc, ("F35", None))
+        self.display = types.SimpleNamespace(
+            info=types.SimpleNamespace(min_keycode=MIN_KEYCODE, max_keycode=MAX_KEYCODE)
+        )
 
     def has_extension(self, name):
         return self.xtest and name == "XTEST"
 
     def keysym_to_keycode(self, ks):
-        for kc, syms in KEYMAP.items():
+        for kc, syms in self.keymap.items():
             if any(s and XK.string_to_keysym(s) == ks for s in syms):
                 return kc
         return 0
 
     def keycode_to_keysym(self, kc, index):
-        sym = KEYMAP.get(kc, (None, None))[index]
+        sym = self.keymap.get(kc, (None, None))[index]
         return XK.string_to_keysym(sym) if sym else 0
 
     def get_modifier_mapping(self):
@@ -51,6 +64,15 @@ class FakeDisplay:
         for kc in self.held:
             keys[kc // 8] |= 1 << (kc % 8)
         return keys
+
+    def get_keyboard_mapping(self, first, count):
+        return [
+            tuple(XK.string_to_keysym(s) if s else 0 for s in self.keymap.get(kc, (None, None)))
+            for kc in range(first, first + count)
+        ]
+
+    def change_keyboard_mapping(self, first, keysyms):
+        self.remaps.append((first, keysyms[0][0]))
 
     def sync(self):
         self.synced = True
@@ -64,6 +86,7 @@ def dpy(monkeypatch):
         display.sent.append(("down" if event_type == X.KeyPress else "up", detail))
 
     monkeypatch.setattr("Xlib.ext.xtest.fake_input", fake_input)
+    monkeypatch.setattr(x11.time, "sleep", lambda _s: None)
     return d
 
 
@@ -99,14 +122,11 @@ def test_a_shift_level_key_gets_shift(dpy):
 
 
 def test_held_modifiers_are_lifted_and_put_back(dpy):
-    # Still holding Super+Shift from the popup hotkey, and Caps Lock is on
-    dpy.held = {133, 50, 66}
+    dpy.held = {133, 50, 66}  # Super, Shift, Caps Lock
     assert x11.xtest_send_key(dpy, "ctrl+v")
-    released = [kc for kind, kc in dpy.sent[:2]]
-    assert sorted(released) == [50, 133]
+    assert dpy.sent[:2] == [("up", 50), ("up", 133)] or dpy.sent[:2] == [("up", 133), ("up", 50)]
     assert dpy.sent[2:6] == [("down", 37), ("down", 55), ("up", 55), ("up", 37)]
-    assert sorted(kc for _kind, kc in dpy.sent[6:]) == [50, 133]
-    assert all(kind == "down" for kind, _kc in dpy.sent[6:])
+    assert sorted(dpy.sent[6:]) == [("down", 50), ("down", 133)]
     assert 66 not in [kc for _kind, kc in dpy.sent]  # Caps Lock left alone
 
 
@@ -116,10 +136,25 @@ def test_held_modifier_that_is_part_of_the_chord_is_not_doubled(dpy):
     assert dpy.sent == [("down", 37), ("down", 55), ("up", 55), ("up", 37)]
 
 
-@pytest.mark.parametrize("combo", ["ctrl+eacute", "", "+"])
-def test_unmapped_key_sends_nothing_so_xdotool_takes_over(dpy, combo):
+def test_a_key_the_layout_lacks_borrows_a_spare_keycode(dpy):
+    # The highest free keycode gets the keysym, then goes back to NoSymbol
+    assert x11.xtest_send_key(dpy, "ctrl+eacute")
+    eacute = XK.string_to_keysym("eacute")
+    assert dpy.remaps == [(MAX_KEYCODE, eacute), (MAX_KEYCODE, 0)]
+    assert dpy.sent == [("down", 37), ("down", MAX_KEYCODE), ("up", MAX_KEYCODE), ("up", 37)]
+
+
+@pytest.mark.parametrize("combo", ["", "+", "ctrl+nosuchkeysym"])
+def test_nothing_to_send_sends_nothing(dpy, combo):
     assert not x11.xtest_send_key(dpy, combo)
-    assert dpy.sent == []
+    assert dpy.sent == [] and dpy.remaps == []
+
+
+def test_no_spare_keycode_means_the_key_cannot_be_sent(monkeypatch):
+    dpy = FakeDisplay(spare=False)
+    monkeypatch.setattr("Xlib.ext.xtest.fake_input", lambda *a, **k: dpy.sent.append(a))
+    assert not x11.xtest_send_key(dpy, "ctrl+eacute")
+    assert dpy.sent == [] and dpy.remaps == []
 
 
 def test_repeat_without_clearing_modifiers(dpy, monkeypatch):
@@ -135,21 +170,93 @@ def test_repeat_without_clearing_modifiers(dpy, monkeypatch):
 def test_no_xtest_sends_nothing(dpy):
     dpy.xtest = False
     assert not x11.xtest_send_key(dpy, "ctrl+v")
+    assert not x11.xtest_type_text(dpy, "av")
     assert dpy.sent == []
 
 
-def test_send_key_falls_back_to_xdotool(monkeypatch):
-    calls = []
+# ---- typing (what xdotool type did) -----------------------------------------
+
+
+def test_typing_presses_each_character_with_shift_where_the_layout_needs_it(dpy):
+    assert x11.xtest_type_text(dpy, "aV+")
+    assert dpy.sent == [
+        ("down", 38),
+        ("up", 38),
+        ("down", 50),
+        ("down", 55),
+        ("up", 55),
+        ("up", 50),
+        ("down", 50),
+        ("down", 21),
+        ("up", 21),
+        ("up", 50),
+    ]
+    assert dpy.remaps == []
+
+
+def test_typing_lifts_held_modifiers_and_puts_them_back(dpy):
+    dpy.held = {37}
+    assert x11.xtest_type_text(dpy, "a")
+    assert dpy.sent == [("up", 37), ("down", 38), ("up", 38), ("down", 37)]
+
+
+def test_typing_binds_missing_characters_to_one_spare_keycode(dpy):
+    assert x11.xtest_type_text(dpy, "éa€")
+    euro, eacute = 0x20AC, XK.string_to_keysym("eacute")  # EuroSign isn't in Xlib.XK
+    assert dpy.remaps == [
+        (MAX_KEYCODE, eacute),
+        (MAX_KEYCODE, euro),
+        (MAX_KEYCODE, 0),
+    ]
+    assert dpy.sent == [
+        ("down", MAX_KEYCODE),
+        ("up", MAX_KEYCODE),
+        ("down", 38),
+        ("up", 38),
+        ("down", MAX_KEYCODE),
+        ("up", MAX_KEYCODE),
+    ]
+
+
+def test_typing_paces_characters_with_the_delay(dpy, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(x11.time, "sleep", sleeps.append)
+    assert x11.xtest_type_text(dpy, "aaa", delay_s=0.001)
+    assert sleeps == [0.001, 0.001]
+
+
+def test_typing_skips_what_it_cannot_bind_and_types_the_rest(monkeypatch, capsys):
+    dpy = FakeDisplay(spare=False)
+    monkeypatch.setattr(
+        "Xlib.ext.xtest.fake_input", lambda d, t, detail=0, **_: d.sent.append(detail)
+    )
+    assert x11.xtest_type_text(dpy, "aé")
+    assert dpy.sent == [38, 38] and dpy.remaps == []
+    assert "typed 1 of 2" in capsys.readouterr().out
+
+
+# ---- the backend methods: XTEST or a warning, never a subprocess -------------
+
+
+def test_send_key_warns_when_xtest_cannot(monkeypatch):
+    warned = []
     monkeypatch.setattr(x11, "send_keys", lambda combo: False)
-    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(x11.subprocess, "run", lambda argv, **_: calls.append(argv))
+    monkeypatch.setattr("platform_backend.base._warn_missing_injector", lambda *a: warned.append(a))
+    monkeypatch.setattr(x11.subprocess, "run", lambda *a, **k: pytest.fail("spawned a process"))
     x11.X11Backend().send_key("ctrl+v")
-    assert calls == [["xdotool", "key", "--clearmodifiers", "ctrl+v"]]
+    assert warned and "XTEST" in warned[0][1]
 
 
-def test_send_key_skips_xdotool_when_xtest_worked(monkeypatch):
-    calls = []
-    monkeypatch.setattr(x11, "send_keys", lambda combo: True)
-    monkeypatch.setattr(x11.subprocess, "run", lambda argv, **_: calls.append(argv))
-    x11.X11Backend().send_key("ctrl+v")
-    assert calls == []
+def test_type_text_goes_over_xtest(monkeypatch):
+    typed = []
+    monkeypatch.setattr(x11, "type_text", lambda text, delay_s=0.0: typed.append(text) or True)
+    monkeypatch.setattr(x11.subprocess, "run", lambda *a, **k: pytest.fail("spawned a process"))
+    x11.X11Backend().type_text("hello")
+    assert typed == ["hello"]
+
+
+def test_can_paste_is_xtest(monkeypatch):
+    monkeypatch.setattr(x11, "xtest_available", lambda: False)
+    assert not x11.X11Backend().can_paste()
+    monkeypatch.setattr(x11, "xtest_available", lambda: True)
+    assert x11.X11Backend().can_paste()

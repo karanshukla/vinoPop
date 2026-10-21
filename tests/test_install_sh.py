@@ -31,7 +31,7 @@ def installed(tmp_path):
     # bare name on PATH (VINOPOP_PYTHON=python3.12 style)
     stubs = tmp_path / "stubs"
     stubs.mkdir()
-    for tool in ("xclip", "xdotool", "xdg-open", "wl-copy", "wl-paste"):
+    for tool in ("xclip", "xdg-open", "wl-copy", "wl-paste"):
         (stubs / tool).write_text("#!/bin/sh\n")
         (stubs / tool).chmod(0o755)
     (stubs / "vinopop-test-python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')

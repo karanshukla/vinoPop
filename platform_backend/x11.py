@@ -5,9 +5,8 @@ Xorg session takes the same path, best-effort. The module and the
 VINOPOP_BACKEND value keep the name "x11" for compatibility.
 
 Wraps xclip (selection/clipboard; see read_selection for why not
-wl-clipboard), Xlib (pointer, popup placement, active window, keystrokes over
-XTEST, with xdotool as the fallback) and the X11 watcher / hotkey /
-double-click modules.
+wl-clipboard), Xlib (pointer, popup placement, active window, keystrokes and
+typing over XTEST) and the X11 watcher / hotkey / double-click modules.
 """
 
 from __future__ import annotations
@@ -123,41 +122,25 @@ class X11Backend(PlatformBackend):
     def send_key(self, combo: str) -> None:
         if send_keys(combo):
             return
-        import shutil
+        print(f"[x11] cannot send {combo!r}: no XTEST")
+        from .base import _warn_missing_injector
 
-        if not shutil.which("xdotool"):
-            print(f"[x11] cannot send {combo!r}: no XTEST and xdotool missing")
-            from .base import _warn_missing_injector
-
-            _warn_missing_injector(
-                "x11",
-                "Cut/Paste/Backspace needs the X server's XTEST extension or xdotool.",
-            )
-            return
-        subprocess.run(
-            ["xdotool", "key", "--clearmodifiers", combo],
-            check=False,
+        _warn_missing_injector(
+            "x11",
+            "Cut/Paste/Backspace needs the X server's XTEST extension, which this one lacks.",
         )
 
     def can_paste(self) -> bool:
-        import shutil
-
-        return xtest_available() or bool(shutil.which("xdotool"))
+        return xtest_available()
 
     def type_text(self, text: str) -> None:
-        # Stays on xdotool: typing a character the keyboard layout lacks
-        # means remapping a spare keycode first, which XTEST alone can't do.
-        import shutil
-
-        if not shutil.which("xdotool"):
-            print("[x11] xdotool missing - cannot type text")
-            from .base import _warn_missing_injector
-
-            _warn_missing_injector("x11", "Typing text needs xdotool. Install it to enable it.")
+        if type_text(text):
             return
-        subprocess.run(
-            ["xdotool", "type", "--clearmodifiers", "--", text],
-            check=False,
+        print("[x11] cannot type text: no XTEST")
+        from .base import _warn_missing_injector
+
+        _warn_missing_injector(
+            "x11", "Typing text needs the X server's XTEST extension, which this one lacks."
         )
 
     # ---- opening URLs ----------------------------------------------------
@@ -249,14 +232,22 @@ class X11Backend(PlatformBackend):
 
 
 # ---------------------------------------------------------------------------
-# Keystrokes and window activation in python-xlib, in place of xdotool and
-# xprop. Keys go over XTEST, which is what `xdotool key` uses too: let go of
-# the modifiers the user is still holding (--clearmodifiers), press the chord,
-# then put the held ones back, so a hotkey's Super/Shift doesn't turn Ctrl+V
-# into something else. Like xdotool, the events reach X11 clients only
-# (XWayland ones on a Wayland desktop). Everything here runs on the shared
-# _pointer_dpy connection under _pointer_lock.
+# Keystrokes, typing and window activation in python-xlib, in place of the
+# xdotool and xprop processes this used to spawn. Keys go over XTEST, which is
+# what `xdotool key` used too: let go of the modifiers the user is still
+# holding (its --clearmodifiers), press the chord, then put the held ones
+# back, so a hotkey's Super/Shift doesn't turn Ctrl+V into something else. A
+# keysym the current layout lacks (an accented letter on a US layout, an
+# emoji) is bound to a spare keycode for the duration, as xdotool did, and
+# the keycode is given back afterwards. Like xdotool, the events reach X11
+# clients only (XWayland ones on a Wayland desktop). Everything here runs on
+# the shared _pointer_dpy connection under _pointer_lock.
 # ---------------------------------------------------------------------------
+
+# How long a remapped scratch keycode stays bound after its key events, so
+# the receiving client has seen MappingNotify and the events before the
+# binding changes under it (xdotool's default inter-key delay).
+_REMAP_SETTLE_S = 0.012
 
 # xdotool's modifier spellings -> X keysym names
 _MODIFIER_NAMES = {
@@ -329,14 +320,82 @@ def _held_modifiers(dpy) -> list[int]:
     return held
 
 
+class _Scratch:
+    """A spare keycode (one with no keysyms) that keys missing from the
+    layout are bound to while they're typed. Found on first use, bound to
+    one keysym at a time, and `restore()`d to empty when the caller is done.
+    Clients learn about each rebinding from the server's MappingNotify."""
+
+    def __init__(self, dpy) -> None:
+        self._dpy = dpy
+        self._keycode: int | None = None  # None: not looked up yet; 0: none free
+        self._bound = 0
+
+    def _find(self) -> int:
+        info = self._dpy.display.info
+        lo, hi = info.min_keycode, info.max_keycode
+        mapping = self._dpy.get_keyboard_mapping(lo, hi - lo + 1)
+        # The high keycodes are the ones the layout leaves unused.
+        for offset in range(len(mapping) - 1, -1, -1):
+            if not any(mapping[offset]):
+                return lo + offset
+        return 0
+
+    def keycode_for(self, keysym: int) -> int:
+        """Bind `keysym` to the scratch keycode and return it, 0 if the
+        keyboard has no free keycode."""
+        if self._keycode is None:
+            self._keycode = self._find()
+        if not self._keycode:
+            return 0
+        if self._bound != keysym:
+            if self._bound:
+                self._dpy.sync()
+                time.sleep(_REMAP_SETTLE_S)
+            self._dpy.change_keyboard_mapping(self._keycode, [(keysym,)])
+            self._dpy.sync()
+            self._bound = keysym
+        return self._keycode
+
+    def restore(self) -> None:
+        if self._bound and self._keycode:
+            self._dpy.sync()
+            time.sleep(_REMAP_SETTLE_S)
+            self._dpy.change_keyboard_mapping(self._keycode, [(0,)])
+            self._dpy.sync()
+            self._bound = 0
+
+
+def _keycode_for(dpy, keysym: int, scratch: _Scratch) -> tuple[int, bool]:
+    """(keycode, needs Shift) that produces `keysym` on this keyboard, via
+    the scratch keycode when the layout lacks it. (0, False) when it can't."""
+    if not keysym:
+        return 0, False
+    kc = dpy.keysym_to_keycode(keysym)
+    if kc:
+        shifted = dpy.keycode_to_keysym(kc, 0) != keysym and dpy.keycode_to_keysym(kc, 1) == keysym
+        return kc, shifted
+    return scratch.keycode_for(keysym), False
+
+
+def _press(dpy, chord: list[int]) -> None:
+    from Xlib import X
+    from Xlib.ext import xtest
+
+    for kc in chord:
+        xtest.fake_input(dpy, X.KeyPress, kc)
+    for kc in reversed(chord):
+        xtest.fake_input(dpy, X.KeyRelease, kc)
+
+
 def xtest_send_key(
     dpy, combo: str, repeat: int = 1, delay_s: float = 0.0, clear_modifiers: bool = True
 ) -> bool:
     """Press and release `combo` ('ctrl+v', 'BackSpace', 'ctrl+shift+v')
-    `repeat` times, `delay_s` apart, with XTEST on `dpy`. Returns False,
-    having sent nothing, when the server has no XTEST or a key isn't in the
-    current keymap (xdotool remaps a spare keycode for those, so callers
-    fall back to it)."""
+    `repeat` times, `delay_s` apart, with XTEST on `dpy`. A key the current
+    layout lacks goes through a scratch keycode. Returns False, having sent
+    nothing, when the server has no XTEST, the combo is empty, or a key has
+    no keysym at all."""
     from Xlib import X
     from Xlib.ext import xtest
 
@@ -345,17 +404,18 @@ def xtest_send_key(
     parts = [p for p in combo.split("+") if p]
     if not parts:
         return False
+    scratch = _Scratch(dpy)
     chord: list[int] = []
+    shifted = False
     for name in parts:
-        ks = _keysym(name)
-        kc = dpy.keysym_to_keycode(ks) if ks else 0
+        kc, shifted = _keycode_for(dpy, _keysym(name), scratch)
         if not kc:
+            scratch.restore()
             return False
         if kc not in chord:
             chord.append(kc)
     # A key on the Shift level (e.g. 'plus' on a US layout) needs Shift held.
-    ks = _keysym(parts[-1])
-    if dpy.keycode_to_keysym(chord[-1], 0) != ks and dpy.keycode_to_keysym(chord[-1], 1) == ks:
+    if shifted:
         shift = dpy.keysym_to_keycode(_keysym("shift"))
         if shift and shift not in chord:
             chord.insert(0, shift)
@@ -366,13 +426,48 @@ def xtest_send_key(
         if i and delay_s > 0:
             dpy.sync()
             time.sleep(delay_s)
-        for kc in chord:
-            xtest.fake_input(dpy, X.KeyPress, kc)
-        for kc in reversed(chord):
-            xtest.fake_input(dpy, X.KeyRelease, kc)
+        _press(dpy, chord)
     for kc in held:
         xtest.fake_input(dpy, X.KeyPress, kc)
     dpy.sync()
+    scratch.restore()
+    return True
+
+
+def xtest_type_text(dpy, text: str, delay_s: float = 0.0) -> bool:
+    """Type `text` with XTEST, one press and release per character (what
+    `xdotool type` did), `delay_s` between characters. Characters the layout
+    lacks are typed through a scratch keycode; the modifiers the user is
+    holding are lifted first and put back. False, having typed nothing, when
+    the server has no XTEST."""
+    from Xlib import X
+    from Xlib.ext import xtest
+
+    from . import xkb
+
+    if not dpy.has_extension("XTEST"):
+        return False
+    scratch = _Scratch(dpy)
+    held = _held_modifiers(dpy)
+    for kc in held:
+        xtest.fake_input(dpy, X.KeyRelease, kc)
+    shift = dpy.keysym_to_keycode(_keysym("shift"))
+    skipped = 0
+    for i, ch in enumerate(text):
+        if i and delay_s > 0:
+            dpy.sync()
+            time.sleep(delay_s)
+        kc, shifted = _keycode_for(dpy, xkb.keysym_for_char(ch), scratch)
+        if not kc:
+            skipped += 1
+            continue
+        _press(dpy, [shift, kc] if shifted and shift else [kc])
+    for kc in held:
+        xtest.fake_input(dpy, X.KeyPress, kc)
+    dpy.sync()
+    scratch.restore()
+    if skipped:
+        print(f"[x11] typed {len(text) - skipped} of {len(text)} characters: no free keycode")
     return True
 
 
@@ -383,6 +478,11 @@ def send_keys(
     return _on_shared_display(
         lambda dpy: xtest_send_key(dpy, combo, repeat, delay_s, clear_modifiers), False
     )
+
+
+def type_text(text: str, delay_s: float = 0.0) -> bool:
+    """xtest_type_text on the shared connection; False when it can't."""
+    return _on_shared_display(lambda dpy: xtest_type_text(dpy, text, delay_s), False)
 
 
 def release_keys(names: list[str]) -> bool:

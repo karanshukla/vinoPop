@@ -223,7 +223,7 @@ def _active_window_blocked(
 ) -> bool:
     """Return True if the focused window's title or class matches any of the
     user's block patterns (case-insensitive substring). The backend supplies
-    the haystacks (X11: xdotool+xprop; KDE Wayland: KWin script)."""
+    the haystacks (X11: Xlib; KDE Wayland: KWin script)."""
     if not patterns:
         return False
     haystacks = (haystacks_fn or get_backend().active_window_haystacks)()
@@ -323,7 +323,7 @@ class App:
     # ---- popup invocation ----------------------------------------------------
     #
     # Everything that can block - xclip, the KWin pointer and active-window
-    # helpers (up to 3 s each), xdotool/xprop, AT-SPI - runs on a worker
+    # helpers (up to 3 s each), Xlib, AT-SPI - runs on a worker
     # thread under _popup_prep. Only the final show goes back to the GTK
     # thread, so a slow KWin round-trip can't freeze the UI.
 
@@ -1058,7 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
     # NOTE: previously we set SIGCHLD = SIG_IGN here as a cheap way to
     # auto-reap subprocess zombies. Reverted because it has been observed
     # to interact badly with subprocess.run() on Python 3.12 in this
-    # process layout (background watcher + many short-lived xclip/xdotool
+    # process layout (background watcher + many short-lived xclip
     # calls + GTK main loop), producing intermittent UI freezes when the
     # clipboard picker is opened. Accepting some zombie PIDs over uptime
     # is the lesser evil; a proper periodic reaper can come later.

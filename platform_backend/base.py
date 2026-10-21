@@ -6,7 +6,7 @@ pointer, watching for selection changes, grabbing a global hotkey, injecting
 keystrokes, positioning the popup - goes through a `PlatformBackend`.
 
 Two concrete backends:
-  - `x11.X11Backend`        - the original behaviour (xclip / Xlib / xdotool)
+  - `x11.X11Backend`        - the original behaviour (xclip / Xlib over XTEST)
   - `wayland_kde.WaylandKdeBackend` - KDE Plasma 6 / Wayland (wl-clipboard /
     KWin cursorPos over DBus / gtk4-layer-shell / RemoteDesktop portal or
     ydotool / KGlobalAccel)

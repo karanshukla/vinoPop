@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 3
+# vinopop-plugin-version: 4
 """Clipboard history + snippets picker.
 
 Two backing stores:
@@ -900,7 +900,7 @@ def _active_window_haystacks() -> list[str]:
 
 
 # ----- Wayland trigger watcher (evdev + libxkbcommon + ydotool) ----------
-# XRecord only sees XWayland clients and xdotool can't reach native Wayland
+# XRecord only sees XWayland clients and XTEST can't reach native Wayland
 # windows, so the X watcher is blind on a Wayland session. Here we read the
 # raw keyboard devices via /dev/input (user must be in the 'input' group),
 # translate keycodes through the live xkb layout with libxkbcommon, and
@@ -939,8 +939,8 @@ def _wl_clipboard() -> bool:
         return False
 
 
-# ---- X11 keystrokes and windows: python-xlib (platform_backend.x11), with
-# xdotool only as the fallback when XTEST or python-xlib isn't there.
+# ---- X11 keystrokes and windows: python-xlib (platform_backend.x11) over
+# XTEST. Nothing here spawns a process any more.
 
 
 def _x11():
@@ -953,52 +953,29 @@ def _x11():
 
 
 def _x_key(combo: str, repeat: int = 1, delay_s: float = 0.0, clear: bool = True) -> None:
-    """`xdotool key [--clearmodifiers] [--repeat N --delay MS] combo`."""
+    """Press `combo` `repeat` times, `delay_s` apart, lifting the held
+    modifiers first when `clear` (what `xdotool key --clearmodifiers
+    --repeat N --delay MS` did)."""
     x11 = _x11()
-    if x11 is not None and x11.send_keys(combo, repeat, delay_s, clear):
-        return
-    if not shutil.which("xdotool"):
-        print(f"[clipboard] cannot send {combo!r}: no XTEST and no xdotool")
-        return
-    args = ["xdotool", "key"]
-    if clear:
-        args.append("--clearmodifiers")
-    if repeat > 1:
-        args += ["--repeat", str(repeat), "--delay", str(int(delay_s * 1000))]
-    subprocess.run([*args, combo], check=False)
+    if x11 is None or not x11.send_keys(combo, repeat, delay_s, clear):
+        print(f"[clipboard] cannot send {combo!r}: no XTEST")
 
 
 def _x_keyup(*names: str) -> None:
     x11 = _x11()
-    if x11 is not None and x11.release_keys(list(names)):
-        return
-    if shutil.which("xdotool"):
-        subprocess.run(["xdotool", "keyup", *names], check=False)
+    if x11 is not None:
+        x11.release_keys(list(names))
 
 
 def _x_activate(wid: str) -> bool:
-    """`xdotool windowactivate --sync wid`; True once it's the active window."""
+    """Make `wid` the active window; True once it is."""
     x11 = _x11()
-    if x11 is not None and x11.activate_window(wid):
-        return True
-    if not shutil.which("xdotool"):
-        return False
-    try:
-        res = subprocess.run(
-            ["xdotool", "windowactivate", "--sync", wid],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=1.0,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return res.returncode == 0
+    return x11 is not None and x11.activate_window(wid)
 
 
 def _x_can_inject() -> bool:
     x11 = _x11()
-    return bool((x11 is not None and x11.xtest_available()) or shutil.which("xdotool"))
+    return x11 is not None and x11.xtest_available()
 
 
 def _ydotool_env() -> dict:
@@ -1292,7 +1269,7 @@ def _fire_trigger_expansion(
         # Check every tool up front: bailing out after the BackSpaces below
         # would leave the user with neither their trigger nor the expansion.
         if not _x_can_inject() or not shutil.which("xclip"):
-            print("[triggers] no XTEST/xdotool or no xclip - cannot expand")
+            print("[triggers] no XTEST or no xclip - cannot expand")
             return
         # Wait for the user to physically release the boundary key
         # (space/tab/enter) before we start synthesising keystrokes.
@@ -1836,24 +1813,12 @@ def _start_watcher_once() -> None:
 
 
 def _get_active_window() -> str | None:
-    """The active X window's id as a decimal string (what `xdotool
-    getactivewindow` printed), or None."""
+    """The active X window's id as a decimal string, or None."""
     x11 = _x11()
-    if x11 is not None:
-        wid = x11.active_window_id()
-        return str(wid) if wid else None
-    if not shutil.which("xdotool"):
+    if x11 is None:
         return None
-    try:
-        out = subprocess.run(
-            ["xdotool", "getactivewindow"],
-            capture_output=True,
-            text=True,
-            timeout=0.5,
-        )
-        return out.stdout.strip() or None
-    except (OSError, subprocess.SubprocessError):
-        return None
+    wid = x11.active_window_id()
+    return str(wid) if wid else None
 
 
 # Terminal WM_CLASS values that use Ctrl+Shift+V for paste instead of
@@ -1948,7 +1913,7 @@ def _paste_to_window(
 
     def worker():
         if not (target_window and _x_can_inject()):
-            _log.warning("[clipboard.paste] skipped - no target, or no XTEST/xdotool")
+            _log.warning("[clipboard.paste] skipped - no target, or no XTEST")
             return
         paste_key = _paste_keystroke_for_window(target_window)
         is_terminal = paste_key == "ctrl+shift+v"
@@ -2016,30 +1981,25 @@ def _paste_to_window(
         #     ChatGPT desktop, Cursor, Notion desktop, etc.). Synthetic
         #     `ctrl+v` lands as isTrusted=false and ProseMirror/Lexical/
         #     Slate reject it silently - paste ends up on the clipboard
-        #     but not in the editor. Individual keypresses via xdotool
-        #     type are real-enough that the editor accepts them.
+        #     but not in the editor. Individual keypresses over XTEST
+        #     are real-enough that the editor accepts them.
         # Multi-line / long text still uses the paste accelerator
         # because typing N newlines would execute N commands in a
         # shell, and typing kilobytes char-by-char is too slow.
-        # Typing stays on xdotool: it remaps a spare keycode for characters
-        # the keyboard layout doesn't have, which XTEST alone can't. Without
-        # xdotool the paste accelerator is used for everything.
+        # Characters the keyboard layout doesn't have go through a spare
+        # keycode that x11.type_text binds for the duration.
+        x11 = _x11()
         use_type = (
             entry.kind == "text"
             and "\n" not in entry.text
             and len(entry.text) <= 2048
-            and bool(shutil.which("xdotool"))
+            and x11 is not None
         )
-        if use_type:
-            _log.info("[clipboard.paste] using xdotool type (%d chars)", len(entry.text))
-            ks = subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--delay", "1", "--", entry.text],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if ks.returncode != 0:
-                _log.warning("[clipboard.paste] paste rc=%d %s", ks.returncode, ks.stderr.strip())
+        if use_type and x11 is not None:
+            _log.info("[clipboard.paste] typing %d chars over XTEST", len(entry.text))
+            if not x11.type_text(entry.text, delay_s=0.001):
+                _log.warning("[clipboard.paste] typing failed, pasting instead")
+                _x_key(paste_key)
         else:
             _x_key(paste_key)
         if cursor_left > 0:
