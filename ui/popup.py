@@ -966,7 +966,7 @@ class PopupWindow:
         def make_handler(p):
             def _on_click(_btn):
                 # Snapshot text at click time + run on a worker thread so
-                # blocking handlers (network, subprocess, xdotool) don't
+                # blocking handlers (network, subprocess, key injection) don't
                 # freeze the GTK main loop.
                 text_snapshot = self._current_text
                 plugin_name = p.name

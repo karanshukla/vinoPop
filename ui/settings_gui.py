@@ -958,8 +958,8 @@ class SettingsDialog:
                 if not argv:
                     return
                 btn.set_sensitive(False)
-                btn.set_label("Installing...")
-                row.set_subtitle("Installing - authorise the password prompt...")
+                btn.set_label("Installing…")
+                row.set_subtitle("Installing, authorise the password prompt…")
 
                 def _done(ok, err):
                     try:

@@ -623,7 +623,7 @@ class RecipeWizard:
         chips_scroll.set_child(chips_flow)
         left.append(chips_scroll)
 
-        browse_btn = Gtk.Button(label="Browse all icons...")
+        browse_btn = Gtk.Button(label="Browse all icons…")
         browse_btn.connect("clicked", self._on_browse_icons)
         left.append(browse_btn)
 

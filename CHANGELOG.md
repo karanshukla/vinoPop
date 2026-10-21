@@ -10,6 +10,22 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- **The OCR overlay comes up without freezing the app.** The screen grab and
+  the pointer lookup ran on the GTK thread, so every OCR hotkey press froze the
+  daemon for the length of the screenshot; they now run on the capture's own
+  thread, and a fallback to the desktop's region tool is logged.
+
+### 🔧 Development
+
+- **xdotool is no longer needed.** The XWayland backend types text and sends
+  every key over XTEST with python-xlib, binding a spare keycode for
+  characters the layout lacks, the way xdotool did. Doctor, install.sh and the
+  README stop listing it.
+- UI labels that lead to another window end in an ellipsis character, as the
+  GNOME HIG asks.
+
 ## [1.1.1] - 2026-10-20
 
 ### 🔧 Development

@@ -390,21 +390,18 @@ def _key_tools(backend: str, family: str) -> list[Result]:
 
 
 def _x11_input(family: str) -> list[Result]:
-    """Paste/Cut over XTEST, xdotool as the fallback. xdotool also types
-    short clipboard-picker text, which is optional."""
+    """Paste/Cut and the clipboard picker's typing go over the X server's
+    XTEST extension (python-xlib), which Xorg and XWayland both ship."""
     xtest = _xtest()
-    xdotool = _which("xdotool")
     if xtest:
         results = [Result(OK, "key injection", "XTEST")]
-    elif xdotool:
-        results = [Result(OK, "key injection", f"xdotool ({xdotool})")]
     elif xtest is None:
         results = [
             Result(
                 UNKNOWN,
                 "key injection",
-                "no X display to ask about XTEST, and no xdotool",
-                "run the doctor inside the desktop session, or " + _install("xdotool", family),
+                "no X display to ask about XTEST",
+                "run the doctor inside the desktop session",
             )
         ]
     else:
@@ -412,21 +409,10 @@ def _x11_input(family: str) -> list[Result]:
             Result(
                 WARN,
                 "key injection",
-                "none: the X server has no XTEST and xdotool is missing, so Paste/Cut only copy",
-                _install("xdotool", family),
+                "none: the X server has no XTEST, so Paste/Cut only copy",
+                "XTEST is built into Xorg and XWayland; check the server's config for a disabled extension",
             )
         ]
-    if xdotool:
-        results.append(Result(OK, "xdotool", xdotool))
-    else:
-        results.append(
-            Result(
-                UNKNOWN,
-                "xdotool",
-                "not installed (optional): the clipboard picker pastes instead of typing",
-                _install("xdotool", family),
-            )
-        )
     return results + _key_tools("x11", family)
 
 

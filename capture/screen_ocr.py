@@ -253,7 +253,9 @@ def _capture_image() -> tuple[Path | None, str | None]:
             crop = _capture_via_overlay()
             return (Path(crop) if crop else None), None
     except Exception as exc:  # noqa: BLE001
-        print(f"[ocr] overlay selector failed, falling back: {exc}")
+        # The desktop's own tool shows its UI (spectacle's region picker with
+        # an Accept step), so say why the overlay didn't come up.
+        log.warning("[ocr] overlay selector failed, using the desktop's region tool: %s", exc)
     with tempfile.NamedTemporaryFile(suffix=".png", prefix="vinopop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
     if _capture_region(png_path):
@@ -321,40 +323,70 @@ def _offer_describe(title: str, body: str, image: Path, ocr_text: str) -> None:
     threading.Thread(target=_wait, daemon=True, name="ocr-describe-offer").start()
 
 
-def _capture_via_overlay() -> str | None:
-    """Run the frictionless overlay selector on the GTK main thread and return
-    the cropped PNG path (or None if cancelled). Called from a worker thread,
-    so it blocks on an Event until the user finishes the drag."""
+def _on_gtk_thread(fn, timeout_s: float, idle_add=None):
+    """Run fn() on the GTK main loop from a worker thread and hand back its
+    result, re-raising what it raised (GLib would otherwise swallow it and
+    we'd wait for a callback that never comes). TimeoutError when the loop
+    didn't get to it in time."""
     import threading
 
-    from gi.repository import GLib
+    if idle_add is None:
+        from gi.repository import GLib
 
-    from capture import ocr_selector
-
+        idle_add = GLib.idle_add
     done = threading.Event()
-    holder: dict = {}
+    box: dict = {}
 
-    def _cb(path):
-        holder["path"] = path
-        done.set()
-
-    def _start() -> bool:
-        # Without this a failed grab (or an exception building the overlay,
-        # which GLib swallows) would leave us waiting the full timeout for a
-        # callback that never comes.
+    def _run() -> bool:
         try:
-            if not ocr_selector.select_and_capture(_cb):
-                raise RuntimeError("could not grab the screen for the overlay")
+            box["value"] = fn()
         except Exception as exc:  # noqa: BLE001
-            holder["error"] = exc
+            box["error"] = exc
+        finally:
             done.set()
         return False  # idle_add: run once
 
-    GLib.idle_add(_start)
+    idle_add(_run)
+    if not done.wait(timeout_s):
+        raise TimeoutError("the GTK main loop is busy")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _capture_via_overlay(selector=None, idle_add=None) -> str | None:
+    """Drive the overlay selector from a worker thread and return the cropped
+    PNG path (None if the user cancelled). Only the GTK steps hop to the main
+    thread; the screen grab, a spectacle / grim / maim run that takes a good
+    part of a second, stays here, so the daemon's main loop and the popup
+    keep responding while it runs (#74). `selector` and `idle_add` are for
+    the tests."""
+    import threading
+
+    if selector is None:
+        from capture import ocr_selector as selector  # type: ignore[no-redef]
+
+    pointer = None
+    if _on_gtk_thread(selector.monitor_count, 5.0, idle_add) > 1:
+        pointer = selector.pointer_hint()
+    monitor = _on_gtk_thread(lambda: selector.pick_monitor(pointer), 5.0, idle_add)
+    shot = selector.grab(monitor)
+    if not shot:
+        raise RuntimeError("could not grab the screen for the overlay")
+    done = threading.Event()
+    holder: dict = {}
+
+    def _cb(path) -> None:
+        holder["path"] = path
+        done.set()
+
+    try:
+        _on_gtk_thread(lambda: selector.show(shot, _cb, monitor), 5.0, idle_add)
+    except Exception:
+        _unlink(Path(shot))
+        raise
     if not done.wait(180):
         return None
-    if "error" in holder:
-        raise holder["error"]
     return holder.get("path")
 
 

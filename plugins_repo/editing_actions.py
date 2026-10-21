@@ -3,7 +3,7 @@
 
 PopClip's bread-and-butter buttons. They all operate on the currently
 focused editable text input by simulating the standard keyboard
-shortcut via xdotool:
+shortcut through the platform backend:
 
   Cut         → Ctrl+X        (copy selection + remove from source)
   Paste       → Ctrl+V        (replace selection with clipboard content)
@@ -11,7 +11,7 @@ shortcut via xdotool:
   Select All  → Ctrl+A        (expand selection to the whole field)
 
 vinoPop's popup has set_accept_focus(False), so the source app keeps
-keyboard focus the whole time the popup is up - xdotool's key event
+keyboard focus the whole time the popup is up - the injected key event
 lands there, not on the popup window. Will only have a visible effect
 in an editable field; clicking 'Cut' on a read-only web page does
 nothing, same as PopClip on macOS.
@@ -23,8 +23,9 @@ from plugin_base import Plugin
 
 
 def _send_keys(combo: str) -> None:
-    # Key injection goes through the platform backend: xdotool on X11,
-    # wtype on Wayland/KDE. The backend handles a missing tool itself.
+    # Key injection goes through the platform backend: XTEST on X11, the
+    # RemoteDesktop portal or ydotool on KDE Wayland. The backend handles a
+    # missing injector itself.
     from platform_backend import get_backend
 
     get_backend().send_key(combo)
@@ -128,7 +129,7 @@ def register(register_plugin) -> None:
             requires_editable=True,
         )
     )
-    # Same handler (xdotool BackSpace key) as the no-selection edit
+    # Same handler (an injected BackSpace key) as the no-selection edit
     # menu's "Backspace" button - label them the same so the user
     # doesn't read them as two separate actions. With a selection
     # active, BackSpace deletes the selection; without one it deletes

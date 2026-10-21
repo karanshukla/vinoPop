@@ -241,9 +241,9 @@ case "$backend" in
         # The XWayland backend (GNOME, sway, Hyprland ...): the whole process
         # runs on XWayland, so selection and clipboard go through xclip and
         # the compositor's X selection bridge (not wl-clipboard: mutter has
-        # no data-control protocol). Keystrokes use the X server's XTEST.
+        # no data-control protocol). Keystrokes and typing use the X
+        # server's XTEST through python-xlib, so no xdotool.
         has xclip || missing+=("xclip")
-        has xdotool || notes+=("xdotool is not installed (optional): the clipboard picker pastes short text with Ctrl+V instead of typing it, which some Electron editors ignore")
         if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
             notes+=("this is a plain Xorg session: vinoPop runs on it best-effort; GNOME, sway and other Wayland desktops (through XWayland) and KDE Plasma Wayland are the supported targets")
         fi
