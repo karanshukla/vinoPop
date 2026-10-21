@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Editing actions - Cut, Paste, Backspace, Select All.
 
 PopClip's bread-and-butter buttons. They all operate on the currently

@@ -16,6 +16,12 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
   the pointer lookup ran on the GTK thread, so every OCR hotkey press froze the
   daemon for the length of the screenshot; they now run on the capture's own
   thread, and a fallback to the desktop's region tool is logged.
+- **Typing accented letters and emoji over XTEST no longer mangles them under
+  load.** Each character the layout lacks gets its own spare keycode for the
+  whole string instead of rebinding one keycode per character.
+- **Bundled Editing and Formatting plugins offer their update again.** A
+  comment-only change without a version bump made installed copies look
+  hand-edited.
 
 ### 🔧 Development
 

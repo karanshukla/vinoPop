@@ -27,7 +27,7 @@
   },
   {
     "file": "editing_actions.py",
-    "version": 1,
+    "version": 2,
     "title": "Editing - Cut, Paste, Backspace, Select All",
     "description": "PopClip's bread-and-butter buttons. Cut/Paste/Delete operate on the selection; Select All expands it. Sends Ctrl+X / Ctrl+V / Backspace / Ctrl+A to the focused app.",
     "category": "Productivity",
@@ -39,7 +39,7 @@
   },
   {
     "file": "formatting.py",
-    "version": 1,
+    "version": 2,
     "title": "Formatting - Bold, Italic, Underline",
     "description": "Rich-text formatting via Ctrl+B / Ctrl+I / Ctrl+U. Works in Google Docs, Word, LibreOffice, Notion, Obsidian and most webmail composers.",
     "category": "Productivity",
