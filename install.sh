@@ -204,7 +204,10 @@ pkg() {
     case "$family:$1" in
         fedora:gtk) echo "python3-gobject gtk4 libadwaita" ;;
         arch:gtk) echo "python-gobject gtk4 libadwaita" ;;
-        *:gtk) echo "python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1" ;;
+        *:gtk) echo "python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 librsvg2-common" ;;
+        fedora:svg) echo "librsvg2" ;;
+        arch:svg) echo "librsvg" ;;
+        *:svg) echo "librsvg2-common" ;;
         arch:python3) echo "python" ;;
         arch:xlib) echo "python-xlib" ;;
         *:xlib) echo "python3-xlib" ;;
@@ -275,6 +278,11 @@ fi
 "$PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
     || { echo "[install] missing GTK 4 / libadwaita for $PYTHON: $(hint "$(pkg gtk)")"
          echo "[install]   (a venv only sees them if it was made with --system-site-packages on the distro's python3)"
+         exit 1; }
+# Debian's libgtk-4-1 only recommends the SVG pixbuf loader, so a minimal
+# install draws every icon (ours and the theme's) as image-missing.
+"$PYTHON" -c "import gi; gi.require_version('GdkPixbuf', '2.0'); from gi.repository import GdkPixbuf; import sys; sys.exit(0 if any(f.get_name() == 'svg' for f in GdkPixbuf.Pixbuf.get_formats()) else 1)" 2>/dev/null \
+    || { echo "[install] missing the SVG loader for GTK, so no icon would draw: $(hint "$(pkg svg)")"
          exit 1; }
 "$PYTHON" -c "import PySide6" 2>/dev/null \
     || notes+=("PySide6 is not installed, so there will be no tray icon (your distro's PySide6 package, or pip install PySide6 into a venv)")
