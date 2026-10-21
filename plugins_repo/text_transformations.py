@@ -242,7 +242,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="strip-html",
-            icon="text-x-generic-symbolic",
+            icon="text-html-symbolic",
             tooltip="Strip HTML tags",
             handler=_strip_html,
             content_types=types,
@@ -266,7 +266,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="ascii-only",
-            icon="text-x-generic-symbolic",
+            icon="font-x-generic-symbolic",
             tooltip="ASCII only",
             handler=_ascii_only,
             content_types=types,
@@ -278,7 +278,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="swap-case",
-            icon="format-text-bold-symbolic",
+            icon="object-flip-vertical-symbolic",
             tooltip="Swap case",
             handler=_swap_case,
             content_types=types,

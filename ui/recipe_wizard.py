@@ -691,7 +691,7 @@ class RecipeWizard:
 
     def _on_browse_icons(self, _btn) -> None:
         picker = IconPicker(
-            parent=self._window, initial=self._state.get("icon") or "applications-other"
+            parent=self._window, initial=self._state.get("icon") or "emblem-system-symbolic"
         )
         chosen = picker.run()
         if chosen:
@@ -702,7 +702,7 @@ class RecipeWizard:
     def _refresh_mock_button(self) -> None:
         if self._mock_button is None:
             return
-        icon_name = self._state.get("icon") or "applications-other"
+        icon_name = self._state.get("icon") or "emblem-system-symbolic"
         self._mock_button.set_child(_icon(icon_name, 24))
         self._mock_button.set_tooltip_text(self._state.get("tooltip") or "Your button")
 
@@ -1093,7 +1093,7 @@ class RecipeWizard:
         card.add_css_class("card")
         card.add_css_class("lp-preview-card")
 
-        icon_img = _icon(self._state.get("icon") or "applications-other", 48)
+        icon_img = _icon(self._state.get("icon") or "emblem-system-symbolic", 48)
         icon_img.set_valign(Gtk.Align.START)
         card.append(icon_img)
 
@@ -1152,7 +1152,7 @@ class RecipeWizard:
         return dict(
             name=name,
             tooltip=(self._state.get("tooltip") or "").strip(),
-            icon=self._state.get("icon") or "applications-other",
+            icon=self._state.get("icon") or "emblem-system-symbolic",
             content_types=list(self._state["content_types"]),
             action=dict(
                 type=self._state["action_type"],

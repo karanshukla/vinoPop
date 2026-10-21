@@ -87,7 +87,15 @@ text → popup shows your new button.
   Wayland); calling either yourself picks the wrong one somewhere.
 - **Use existing icons** - most desktops ship the [hicolor / Adwaita icon
   themes](https://developer.gnome.org/hig/reference/icons.html). Use
-  `-symbolic` suffix for monochrome icons that pick up theme colors.
+  `-symbolic` suffix for monochrome icons that pick up theme colors. Pick a
+  name both Adwaita and Breeze ship (`tests/test_icons.py` has the list) or
+  add a fallback in `ui/icon_style.py`, and give each of a plugin's actions
+  its own icon so two buttons never look the same. A bundled icon is a pair
+  in `icons/`: the tile `vinopop-<concept>.svg` and the glyph
+  `vinopop-<concept>-symbolic.svg`, mapped in `ui/icon_style.py` so the
+  user's icon style picks between them. Draw glyphs as paths, not `<text>`
+  (text depends on installed fonts), with the mark filling about 14/16 of the
+  viewBox like Adwaita's.
 - **Don't depend on a specific path layout** - `classifier`, `plugin_base`,
   `actions` and `settings` are importable by those bare names because
   `plugin_system/compat.py` maps them to `core.classifier`,

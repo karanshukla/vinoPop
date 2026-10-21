@@ -828,9 +828,10 @@ class PopupWindow:
             if b"#f0f0f0" not in svg.lower():
                 return None  # not one of our hardcoded glyphs - leave to GTK
             fg, bg = self._glyph_colors()
-            # Body strokes/fills -> foreground; punch-out holes (#2b2b2b) ->
-            # background so negative space matches the bar in both themes; the
-            # lone map-pin green accent -> foreground (mono glyph).
+            # Body strokes/fills -> foreground; the lone map-pin green accent
+            # -> foreground (mono glyph). Older user-supplied glyphs may still
+            # paint punch-out holes in #2b2b2b: those -> background so negative
+            # space matches the bar in both themes (bundled ones use evenodd).
             for old, new in (
                 (b"#f0f0f0", fg),
                 (b"#F0F0F0", fg),

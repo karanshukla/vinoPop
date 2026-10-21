@@ -562,7 +562,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
     atype = action.get("type", "")
     template = action.get("template", "")
     title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "vinoPop")
-    icon = recipe.get("icon") or "applications-other"
+    icon = recipe.get("icon") or "emblem-system-symbolic"
 
     # Refuse to build a shell-running button that would feed the selection to
     # the shell unquoted: the click then explains itself instead of running it.
@@ -874,7 +874,7 @@ def load_recipes(register) -> int:
             register(
                 Plugin(
                     name=recipe["name"],
-                    icon=recipe.get("icon") or "applications-other",
+                    icon=recipe.get("icon") or "emblem-system-symbolic",
                     tooltip=recipe.get("tooltip") or recipe["name"],
                     handler=_build_handler(recipe),
                     content_types=_content_types(recipe),

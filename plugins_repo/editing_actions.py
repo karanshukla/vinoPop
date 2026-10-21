@@ -121,7 +121,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="paste-and-enter",
-            icon="mail-send-symbolic",
+            icon="go-jump-symbolic",
             tooltip="Paste & Enter (paste clipboard, then press Return)",
             handler=_paste_and_enter,
             content_types=(),

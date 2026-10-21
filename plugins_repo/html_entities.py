@@ -49,7 +49,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="html-entity-encode",
-            icon="tag-symbolic",
+            icon="vinopop-html-encode-symbolic",
             tooltip="HTML entity encode",
             handler=_encode,
             content_types=types,
@@ -60,7 +60,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="html-entity-decode",
-            icon="tag-symbolic",
+            icon="vinopop-html-decode-symbolic",
             tooltip="HTML entity decode",
             handler=_decode,
             content_types=types,
