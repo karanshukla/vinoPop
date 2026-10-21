@@ -30,10 +30,20 @@ _CONCEPT_BY_ICON = {
     "vinopop-clipboard-symbolic": "clipboard",
     "vinopop-json-symbolic": "json",
     "vinopop-qr-symbolic": "qr",
-    "vinopop-base64-encode-symbolic": "base64",
-    "vinopop-case-upper-symbolic": "case",
-    "vinopop-url-encode-symbolic": "url",
     "vinopop-wordcount-symbolic": "wordcount",
+    # Converters and case changes: each action has its own pair, so a plugin's
+    # buttons never mix a tile with a glyph (encode used to get the tile and
+    # decode the glyph).
+    "vinopop-base64-encode-symbolic": "base64-encode",
+    "vinopop-base64-decode-symbolic": "base64-decode",
+    "vinopop-url-encode-symbolic": "url-encode",
+    "vinopop-url-decode-symbolic": "url-decode",
+    "vinopop-html-encode-symbolic": "html-encode",
+    "vinopop-html-decode-symbolic": "html-decode",
+    "vinopop-case-upper-symbolic": "case-upper",
+    "vinopop-case-lower-symbolic": "case-lower",
+    "vinopop-case-title-symbolic": "case-title",
+    "vinopop-slugify-symbolic": "slugify",
 }
 
 # Concept ordering for the Settings preview (most recognisable first).
@@ -72,6 +82,11 @@ _FALLBACKS = {
     "preferences-system-time-symbolic": ("alarm-symbolic",),
     "system-software-install-symbolic": ("list-add-symbolic",),
     "text-html-symbolic": ("text-x-generic-symbolic",),
+    "font-x-generic-symbolic": ("text-x-generic-symbolic",),
+    "object-flip-vertical-symbolic": ("format-text-bold-symbolic",),
+    "go-jump-symbolic": ("mail-send-symbolic",),
+    "application-x-addon-symbolic": ("emblem-system-symbolic",),
+    "emblem-ok-symbolic": ("object-select-symbolic", "starred-symbolic"),
     # Dropped from newer Adwaita (51 has none of these three)
     "tag-symbolic": ("text-x-generic-symbolic",),
     "emblem-default-symbolic": ("object-select-symbolic", "starred-symbolic"),
@@ -131,9 +146,9 @@ def resolve(icon_name: str, style: str | None = None) -> str:
         return icon_name
     concept = _CONCEPT_BY_ICON.get(icon_name)
     if concept is None:
-        # Already a concept colour name? (e.g. a future plugin sets
-        # icon="vinopop-maps" directly.)
-        bare = icon_name.removeprefix("vinopop-")
+        # Already a concept name, tile or glyph? (e.g. a recipe sets
+        # icon="vinopop-maps" or "vinopop-google-symbolic" directly.)
+        bare = icon_name.removeprefix("vinopop-").removesuffix("-symbolic")
         if bare != icon_name and bare in set(_CONCEPT_BY_ICON.values()):
             concept = bare
         else:

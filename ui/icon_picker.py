@@ -31,14 +31,14 @@ _ICON_RENDER_SIZE = 24  # pixels in the preview grid
 # When a search has zero matches, offer these generic icons. Brand-specific
 # icons aren't in standard themes (Adwaita, hicolor) for trademark reasons.
 _FALLBACK_SUGGESTIONS = [
-    "applications-internet",
+    "applications-internet-symbolic",
     "web-browser-symbolic",
     "system-search-symbolic",
     "applications-utilities-symbolic",
     "help-about-symbolic",
     "starred-symbolic",
     "view-list-symbolic",
-    "applications-other",
+    "emblem-system-symbolic",
 ]
 
 

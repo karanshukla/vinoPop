@@ -2,7 +2,7 @@
   "name": "mdn-docs",
   "version": 1,
   "tooltip": "Search MDN docs",
-  "icon": "applications-development-symbolic",
+  "icon": "accessories-dictionary-symbolic",
   "content_types": ["plain_text"],
   "priority": 66,
   "action": {

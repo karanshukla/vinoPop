@@ -60,6 +60,8 @@ Everything the Settings window sets lives in `~/.config/vinopop/settings.json`.
 | `ai_idle_unload_minutes` | `5` | Unload the model after this long idle. `0` keeps it loaded. |
 | `editable_atspi_listener_enabled` | `false` | Use AT-SPI for editable detection + selection geometry |
 | `popup_anchor_to_selection` | `true` | Anchor popup to the selection rect (needs AT-SPI enabled) |
+| `icon_style` | `color` | Popup buttons for branded and converter actions: `color` (vino tiles) or `glyph` (mono glyphs like the system edit icons) |
+| `tray_icon_style` | `color` | Tray icon: `color` (recoloured by the panel), `light` or `dark` (fixed, for panels that don't recolour it) |
 
 ## Demos
 

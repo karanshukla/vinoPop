@@ -513,7 +513,7 @@ class App:
         )
         items.append(
             (
-                "mail-send-symbolic",
+                "go-jump-symbolic",
                 "Paste & Enter",
                 _paste_then_enter,
             )

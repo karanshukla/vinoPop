@@ -22,9 +22,11 @@ SHIPPED_BY_BOTH = {
     "audio-speakers-symbolic",
     "camera-photo-symbolic",
     "color-select-symbolic",
+    "dialog-error-symbolic",
     "dialog-information-symbolic",
     "dialog-password-symbolic",
     "dialog-question-symbolic",
+    "dialog-warning-symbolic",
     "document-edit-symbolic",
     "document-new-symbolic",
     "edit-clear-all-symbolic",
@@ -46,6 +48,7 @@ SHIPPED_BY_BOTH = {
     "format-text-strikethrough-symbolic",
     "format-text-underline-symbolic",
     "go-down-symbolic",
+    "go-next-symbolic",
     "go-up-symbolic",
     "help-about-symbolic",
     "input-keyboard-symbolic",
@@ -90,7 +93,15 @@ def _declared_icons() -> set[str]:
     sources = list((ROOT / "plugins_repo").glob("*.py"))
     sources += [
         ROOT / n
-        for n in ("plugin_system/plugin_loader.py", "ui/recipe_wizard.py", "core/actions.py")
+        for n in (
+            "plugin_system/plugin_loader.py",
+            "ui/recipe_wizard.py",
+            "ui/settings_gui.py",
+            "ui/plugin_manager.py",
+            "ui/icon_picker.py",
+            "core/actions.py",
+            "main.py",
+        )
     ]
     for path in sources:
         found |= set(re.findall(r"[\"']([a-z][a-z0-9-]*-symbolic)[\"']", path.read_text()))
@@ -123,6 +134,47 @@ def test_bundled_icons_come_in_colour_and_glyph_pairs():
     for concept in set(icon_style._CONCEPT_BY_ICON.values()):
         assert (ICONS / f"vinopop-{concept}.svg").is_file(), concept
         assert (ICONS / f"vinopop-{concept}-symbolic.svg").is_file(), concept
+
+
+def test_every_bundled_glyph_is_a_concept():
+    # A glyph outside the map would stay mono in the colour style (and have
+    # no tile), so the popup would mix the two styles within one plugin.
+    concepts = set(icon_style._CONCEPT_BY_ICON.values())
+    for path in ICONS.glob("vinopop-*-symbolic.svg"):
+        concept = path.stem.removeprefix("vinopop-").removesuffix("-symbolic")
+        if concept == "tray":
+            continue
+        assert concept in concepts, path.name
+        assert icon_style.resolve(path.stem, "color") == f"vinopop-{concept}", path.name
+        assert icon_style.resolve(path.stem, "glyph") == path.stem, path.name
+    for path in ICONS.glob("vinopop-*.svg"):
+        if path.name.endswith("-symbolic.svg") or path.name == "vinopop.svg":
+            continue
+        assert path.stem.removeprefix("vinopop-") in concepts, path.name
+
+
+def test_bundled_icons_draw_with_paths_not_fonts():
+    # <text> renders with whatever font is installed (and as a box without a
+    # CJK font), so every mark is outlined.
+    for path in ICONS.glob("*.svg"):
+        assert "<text" not in path.read_text(), path.name
+
+
+def _plugin_action_icons() -> dict[str, list[str]]:
+    icons: dict[str, list[str]] = {}
+    for path in (ROOT / "plugins_repo").glob("*.py"):
+        blocks = re.findall(r"Plugin\(\s*\n(.*?)\n\s*\)", path.read_text(), re.S)
+        icons[path.name] = [
+            m.group(1) for b in blocks for m in [re.search(r"icon=[\"']([^\"']+)[\"']", b)] if m
+        ]
+    return icons
+
+
+def test_each_plugins_buttons_have_distinct_icons():
+    # Encode and decode once shared one icon: two identical buttons side by side.
+    for plugin, icons in _plugin_action_icons().items():
+        resolved = [icon_style.resolve(n, "color") for n in icons]
+        assert len(resolved) == len(set(resolved)), (plugin, resolved)
 
 
 @pytest.mark.parametrize("style,suffix", [("color", ""), ("glyph", "-symbolic")])

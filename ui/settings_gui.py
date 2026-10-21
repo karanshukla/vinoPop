@@ -445,7 +445,6 @@ _SETTING_ICONS = {
     "Don't show in these apps or pages": "security-medium-symbolic",
     "Search engine": "edit-find-symbolic",
     "Custom search URL ({q} = the selection)": "insert-link-symbolic",
-    "Share anonymous OpenVINO usage stats with Intel": "network-transmit-symbolic",
     "Trigger hotkey on first press": "media-playback-start-symbolic",
     "Reset settings to defaults": "view-refresh-symbolic",
     "Keep terminal open after running": "utilities-terminal-symbolic",
