@@ -1,6 +1,6 @@
 {
   "name": "mdn-docs",
-  "version": 1,
+  "version": 2,
   "tooltip": "Search MDN docs",
   "icon": "accessories-dictionary-symbolic",
   "content_types": ["plain_text"],

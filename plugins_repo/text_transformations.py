@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 2
+# vinopop-plugin-version: 3
 """A bundle of small text-transform actions: reverse, sort lines, dedupe,
 trim per line, strip HTML, remove diacritics, ASCII-only, swap case.
 Each transforms the selection and copies the result to the clipboard.

@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 2
+# vinopop-plugin-version: 3
 """HTML entity encode / decode. <p>café & "co"</p> ↔ &lt;p&gt;café &amp; &quot;co&quot;&lt;/p&gt;"""
 
 from __future__ import annotations

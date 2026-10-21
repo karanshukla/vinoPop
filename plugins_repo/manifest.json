@@ -27,7 +27,7 @@
   },
   {
     "file": "editing_actions.py",
-    "version": 2,
+    "version": 3,
     "title": "Editing - Cut, Paste, Backspace, Select All",
     "description": "PopClip's bread-and-butter buttons. Cut/Paste/Delete operate on the selection; Select All expands it. Sends Ctrl+X / Ctrl+V / Backspace / Ctrl+A to the focused app.",
     "category": "Productivity",
@@ -112,7 +112,7 @@
   },
   {
     "file": "text_transformations.py",
-    "version": 2,
+    "version": 3,
     "title": "Text transformations bundle",
     "description": "Reverse, sort lines, deduplicate, trim, strip HTML, remove diacritics, ASCII-only, swap case - 8 buttons in one plugin",
     "category": "Productivity",
@@ -199,7 +199,7 @@
   {
     "kind": "recipe",
     "file": "mdn-docs.json",
-    "version": 1,
+    "version": 2,
     "title": "Search MDN web docs",
     "description": "Mozilla Developer Network - HTML/CSS/JS reference",
     "category": "Web shortcuts",
@@ -310,7 +310,7 @@
   },
   {
     "file": "html_entities.py",
-    "version": 2,
+    "version": 3,
     "title": "HTML entity encode/decode",
     "description": "<p>café & \"co\"</p> ↔ &lt;p&gt;café &amp; &quot;co&quot;&lt;/p&gt;",
     "category": "Developer",
