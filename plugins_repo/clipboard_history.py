@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 4
+# vinopop-plugin-version: 5
 """Clipboard history + snippets picker.
 
 Two backing stores:
@@ -2485,6 +2485,10 @@ class _PickerDialog:
         # Search
         self.search_entry = Gtk.SearchEntry()
         self.search_entry.set_placeholder_text("Type to filter…")
+        # A placeholder isn't a name: without this it reads as a blank field
+        self.search_entry.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Search clipboard history and snippets"]
+        )
         self.search_entry.connect("search-changed", self._on_search_changed)
         outer.append(self.search_entry)
 
@@ -2747,6 +2751,9 @@ class _PickerDialog:
         row = Gtk.ListBoxRow()
         row.entry = entry  # type: ignore[attr-defined]
         row.is_snippet = is_snippet  # type: ignore[attr-defined]
+        # GTK 4.14 doesn't name a list row from its text; a screen reader
+        # would read every entry as a blank "list item".
+        row.update_property([Gtk.AccessibleProperty.LABEL], [entry.preview()])
 
         hbox = Gtk.Box(
             orientation=Gtk.Orientation.HORIZONTAL,
@@ -3053,11 +3060,13 @@ class _PickerDialog:
                 content.append(lbl)
                 if options:
                     combo = Gtk.DropDown.new(Gtk.StringList.new(list(options)), None)
+                    lbl.set_mnemonic_widget(combo)
                     combo.set_selected(0)
                     content.append(combo)
                     widgets[label] = combo
                 else:
                     entry = Gtk.Entry()
+                    lbl.set_mnemonic_widget(entry)
                     entry.set_width_chars(40)
                     content.append(entry)
                     widgets[label] = entry
@@ -3495,6 +3504,7 @@ class _PickerDialog:
             name_lbl.set_markup("<b>Name</b>")
             content.append(name_lbl)
             name_entry = Gtk.Entry()
+            name_lbl.set_mnemonic_widget(name_entry)
             name_entry.set_text(default_name)
             name_entry.set_activates_default(True)
             name_entry.set_width_chars(36)
@@ -3504,6 +3514,7 @@ class _PickerDialog:
             trig_lbl.set_markup("<b>Trigger(s)</b>  <small>(optional, comma-separated)</small>")
             content.append(trig_lbl)
             trig_entry = Gtk.Entry()
+            trig_lbl.set_mnemonic_widget(trig_entry)
             trig_entry.set_text(default_trigger)
             trig_entry.set_activates_default(True)
             triggers_on = bool(_cfg("snippet_triggers_enabled", False))
@@ -3517,6 +3528,7 @@ class _PickerDialog:
             cat_lbl.set_markup("<b>Category</b>  <small>(optional)</small>")
             content.append(cat_lbl)
             cat_entry = Gtk.Entry()
+            cat_lbl.set_mnemonic_widget(cat_entry)
             cat_entry.set_text(default_category)
             cat_entry.set_activates_default(True)
             cat_entry.set_placeholder_text("e.g. Email, Code, Personal")
@@ -3548,6 +3560,7 @@ class _PickerDialog:
             body_scroll.set_has_frame(True)
             body_scroll.set_vexpand(True)
             body_view = Gtk.TextView()
+            body_lbl.set_mnemonic_widget(body_view)
             body_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
             body_view.set_accepts_tab(False)
             body_view.add_css_class("lp-cmd-edit")
@@ -3634,6 +3647,7 @@ class _PickerDialog:
             name_label.set_markup("<b>Name</b>")
             content.append(name_label)
             name_entry = Gtk.Entry()
+            name_label.set_mnemonic_widget(name_entry)
             name_entry.set_placeholder_text("Short label (optional)")
             content.append(name_entry)
 
@@ -3644,6 +3658,7 @@ class _PickerDialog:
             )
             content.append(trigger_label)
             trigger_entry = Gtk.Entry()
+            trigger_label.set_mnemonic_widget(trigger_entry)
             if triggers_on:
                 trigger_entry.set_placeholder_text(
                     "e.g. ;email, ;e - any of them + space/tab auto-expands"
@@ -3660,6 +3675,7 @@ class _PickerDialog:
             )
             content.append(cat_label)
             cat_entry = Gtk.Entry()
+            cat_label.set_mnemonic_widget(cat_entry)
             cat_entry.set_placeholder_text("e.g. Email, Code, Personal. Leave blank for General.")
             # Auto-complete from categories that already exist so the
             # user doesn't end up with "Email" and "email" as separate
@@ -3696,6 +3712,7 @@ class _PickerDialog:
             body_scroll.set_has_frame(True)
             body_scroll.set_vexpand(True)
             body_view = Gtk.TextView()
+            body_label.set_mnemonic_widget(body_view)
             body_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
             body_view.set_accepts_tab(False)
             # Reuse the same class the terminal-confirm dialog's editable
@@ -3842,6 +3859,7 @@ class _PickerDialog:
             dlg.set_default_response("ok")
             dlg.set_close_response("cancel")
             entry = Gtk.Entry()
+            entry.update_property([Gtk.AccessibleProperty.LABEL], ["Snippet name"])
             entry.set_text(default)
             dlg.set_extra_child(entry)
             dlg.set_focus(entry)

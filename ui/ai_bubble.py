@@ -46,7 +46,8 @@ label.vinopop-ai-warning {
     font-size: 9pt;
 }
 label.vinopop-ai-title {
-    color: alpha(@popover_fg_color, 0.6);
+    /* 0.75 keeps 9pt text at 4.5:1 on the light popover (0.6 was 3.7:1) */
+    color: alpha(@popover_fg_color, 0.75);
     font-size: 9pt;
 }
 button.vinopop-ai-chip {
@@ -211,6 +212,9 @@ class ResultBubble:
             header.append(self._replace_btn)
         close = self._chip("✕", lambda *_: self.dismiss())
         close.set_tooltip_text("Close")
+        # A labelled button is named by its label (the glyph) whatever LABEL
+        # says, so drop that relation for "Close" to be what's read.
+        close.reset_relation(Gtk.AccessibleRelation.LABELLED_BY)
         close.update_property([Gtk.AccessibleProperty.LABEL], ["Close"])
         header.append(close)
         bubble.append(header)
@@ -358,7 +362,22 @@ class ResultBubble:
         self._sync_buttons()
         self._queue_replace()
         self._arm_timeout()
+        # The bubble never takes focus, so tell a screen reader the answer is in
+        spoken = self._text_lbl.get_text()
+        self._announce(f"{spoken} {warning}" if self._incomplete and warning else spoken)
         return False
+
+    def _announce(self, message: str) -> None:
+        """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
+        if not hasattr(self.win, "announce"):
+            return
+        try:
+            self.win.announce(
+                f"{self._title_lbl.get_text()}: {message}",
+                Gtk.AccessibleAnnouncementPriority.MEDIUM,
+            )
+        except Exception:
+            pass
 
     def _check_stall(self) -> bool:
         """Give up on a run that has said nothing for _STALL_TIMEOUT_S: drop
