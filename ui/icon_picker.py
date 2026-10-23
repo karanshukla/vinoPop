@@ -165,7 +165,6 @@ class IconPicker:
         self._count_label = Gtk.Label(xalign=0)
         self._count_label.set_wrap(True)
         self._count_label.connect("activate-link", self._on_link_clicked)
-        self._count_label.add_css_class("dim-label")
         outer.append(self._count_label)
 
         # Scrollable grid

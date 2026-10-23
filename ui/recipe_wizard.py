@@ -446,7 +446,6 @@ class RecipeWizard:
             _label(
                 "Custom buttons turn any text you select into an action. We'll "
                 "set yours up in a few short steps -- no coding needed.",
-                "dim-label",
                 wrap=True,
             )
         )
@@ -474,7 +473,6 @@ class RecipeWizard:
 
         hint = _label(
             "Click <b>Next</b> when you're ready. You can go back at any point.",
-            "dim-label",
             "caption",
             markup=True,
         )
@@ -498,7 +496,7 @@ class RecipeWizard:
         tile.append(top)
 
         tile.append(_label(head, "heading"))
-        tile.append(_label(body, "dim-label", wrap=True))
+        tile.append(_label(body, wrap=True))
         return tile
 
     # ---- page 2: choose action type -----------------------------------------
@@ -510,7 +508,6 @@ class RecipeWizard:
         page.append(
             _label(
                 "Pick one. You can change it later if you want to try something else.",
-                "dim-label",
                 wrap=True,
             )
         )
@@ -550,7 +547,7 @@ class RecipeWizard:
         box.append(row)
 
         box.append(_label(spec["blurb"], wrap=True))
-        box.append(_label(f"Example: {spec['example']}", "dim-label", "caption", wrap=True))
+        box.append(_label(f"Example: {spec['example']}", "caption", wrap=True))
         tile.set_child(box)
 
         def on_toggled(btn):
@@ -587,7 +584,6 @@ class RecipeWizard:
         left.append(
             _label(
                 "The icon is what shows up in the popup. The label is the tooltip when you hover.",
-                "dim-label",
                 wrap=True,
             )
         )
@@ -852,7 +848,6 @@ class RecipeWizard:
         # {selection} reach bash as arguments, never as shell source.
         extra_label = _label(
             "Or insert a dynamic value (filled in when the button runs):",
-            "dim-label",
             "caption",
             wrap=True,
         )
@@ -884,7 +879,7 @@ class RecipeWizard:
         examples = spec.get("examples") or []
         if examples:
             ex_label = _label(
-                "Try one of these - click to fill the box above:", "dim-label", "caption", wrap=True
+                "Try one of these - click to fill the box above:", "caption", wrap=True
             )
             ex_label.set_margin_top(4)
             self._detail_container.append(ex_label)
@@ -1031,9 +1026,7 @@ class RecipeWizard:
         page = self._page_box(12)
 
         page.append(_label("When should it show up?", "title-2", wrap=True))
-        page.append(
-            _label("You can leave this as 'always' -- most people do.", "dim-label", wrap=True)
-        )
+        page.append(_label("You can leave this as 'always' -- most people do.", wrap=True))
 
         # Radio-style check buttons (Gtk.RadioButton is gone in GTK 4)
         self._always_radio = Gtk.CheckButton(label="Always -- show on any selected text")
@@ -1097,7 +1090,6 @@ class RecipeWizard:
             _label(
                 "Press <b>Apply</b> to save. You can edit or delete this "
                 "button later from the Plugin Manager.",
-                "dim-label",
                 markup=True,
                 wrap=True,
             )
@@ -1141,7 +1133,7 @@ class RecipeWizard:
             ", ".join(label for k, label in _CONTENT_TYPES if k in self._state["content_types"])
             or "any selected text"
         )
-        info.append(_label(f"Shows on: {when}", "dim-label", "caption", wrap=True))
+        info.append(_label(f"Shows on: {when}", "caption", wrap=True))
 
         card.append(info)
         self._confirm_container.append(card)
