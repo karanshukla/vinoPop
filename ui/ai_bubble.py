@@ -4,7 +4,10 @@ Summarize, rewrite, explain and translate all show their answer the same
 way: a small bubble just below the selection that streams the model's
 text in as it is generated, with Copy (and, for rewrite, Replace) chips.
 The bubble never takes keyboard focus, so the source app keeps its
-selection and Replace can paste straight over it.
+selection and Replace can paste straight over it. When the action was run
+from the keyboard (the hotkey popup), the chips are driven through X11 key
+grabs instead, the way the popup is: Left/Right/Tab pick a chip, Enter runs
+it, Esc closes. Wayland has no such grab, so there it stays pointer-only.
 
 Placement goes through the platform backend: gtk4-layer-shell where the
 compositor has it (KDE, wlroots) and X11 window moves under X11/XWayland.
@@ -54,6 +57,11 @@ button.vinopop-ai-chip {
     padding: 2px 8px;
     min-height: 0;
 }
+/* The chip Enter would run. The bubble never has focus, so this stands in
+ * for GTK's focus ring. */
+button.vinopop-ai-chip.vinopop-selected {
+    box-shadow: inset 0 0 0 2px @accent_color;
+}
 """
 
 _css_installed = False
@@ -66,6 +74,17 @@ _IDLE_TIMEOUT_S = 45
 _STALL_TIMEOUT_S = 300
 # Share of the monitor height the answer may take before it scrolls.
 _MAX_HEIGHT_FRACTION = 0.6
+# Keys grabbed while a keyboard-opened bubble is up: keysym name -> also
+# grab with Shift. No Space or arrows up/down: the grab holds them from the
+# source app for as long as the bubble is up, and someone may type on.
+_NAV_KEYS = {
+    "Left": False,
+    "Right": False,
+    "Tab": True,  # Shift+Tab
+    "Return": False,
+    "KP_Enter": False,
+    "Escape": False,
+}
 
 
 def _install_css() -> None:
@@ -142,8 +161,14 @@ class ResultBubble:
         *,
         header_widget: Gtk.Widget | None = None,
         on_replace: Callable[[str], None] | None = None,
+        keyboard: bool = False,
     ) -> None:
         self._x, self._y = x, y
+        # Opened from the keyboard: grab the chip keys once it's up
+        self._keyboard = keyboard
+        self._kbd_xdpy = None
+        self._kbd_grab = None
+        self._kbd_index = 0
         self._text = ""
         self._busy = True
         # Set when the answer is incomplete (input cut or output capped):
@@ -218,6 +243,7 @@ class ResultBubble:
         close.update_property([Gtk.AccessibleProperty.LABEL], ["Close"])
         header.append(close)
         bubble.append(header)
+        self._chips = [b for b in (self._copy_btn, self._replace_btn, close) if b is not None]
 
         self._text_lbl = Gtk.Label(xalign=0, yalign=0)
         self._text_lbl.set_wrap(True)
@@ -263,6 +289,8 @@ class ResultBubble:
         self.win.present()
         self._pointer_in_bubble = False
         self._start_watchers()
+        if self._keyboard:
+            self._kbd_start()
         self._stall_id = GLib.timeout_add_seconds(30, self._check_stall)
 
     def _place(self, backend) -> None:
@@ -311,11 +339,105 @@ class ResultBubble:
         self._click_watcher = _ClickWatcher(self._on_global_click)
         self._click_watcher.start()
 
-    def _on_key(self, _ctrl, keyval, _code, _state) -> bool:
+    def _on_key(self, _ctrl, keyval, _code, state) -> bool:
         if keyval == Gdk.KEY_Escape:
             self.dismiss()
             return True
+        if self._kbd_grab is not None:
+            name = Gdk.keyval_name(keyval) or ""
+            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            if name == "ISO_Left_Tab":
+                name, shift = "Tab", True
+            return self._kbd_key(name, shift)
         return False
+
+    # ---- keyboard (#124) -------------------------------------------------
+    def _kbd_start(self) -> None:
+        """Grab the chip keys on X11 (see the module docstring). A no-op
+        anywhere else."""
+        try:
+            from ui.popup import X, _KeyGrab, xdisplay
+
+            backend = _backend()
+            if xdisplay is None or X is None or not getattr(backend, "popup_uses_xlib", False):
+                return
+            self._kbd_xdpy = xdisplay.Display()
+            self._kbd_grab = _KeyGrab(self._kbd_xdpy, _NAV_KEYS, self._kbd_key)
+            self._kbd_grab.start()
+        except Exception:
+            log.exception("[ai_bubble] keyboard grab failed; the bubble stays pointer-only")
+            self._kbd_stop()
+            return
+        self._kbd_select(0)
+
+    def _kbd_stop(self) -> None:
+        """Hand the keys back to the source app."""
+        grab, self._kbd_grab = self._kbd_grab, None
+        if grab is not None:
+            grab.stop()
+        if self._kbd_xdpy is not None:
+            try:
+                self._kbd_xdpy.close()
+            except Exception:
+                pass
+            self._kbd_xdpy = None
+        for chip in self._chips:
+            chip.remove_css_class("vinopop-selected")
+
+    def _kbd_select(self, index: int) -> None:
+        self._kbd_index = index % len(self._chips)
+        for i, chip in enumerate(self._chips):
+            if i == self._kbd_index:
+                chip.add_css_class("vinopop-selected")
+            else:
+                chip.remove_css_class("vinopop-selected")
+        self._announce_chip()
+
+    def _chip_name(self, chip: Gtk.Button) -> str:
+        return "Close" if chip.get_label() == "✕" else chip.get_label() or ""
+
+    def _announce_chip(self) -> None:
+        chip = self._chips[self._kbd_index]
+        name = self._chip_name(chip)
+        self._say(name if chip.get_sensitive() else f"{name}, not available yet")
+
+    def _kbd_key(self, name: str, shift: bool = False) -> bool:
+        """Handle one grabbed key; returns whether it was one."""
+        if self._dead or self._kbd_grab is None:
+            return False
+        if name == "Escape":
+            self.dismiss()
+            return True
+        if name in ("Left", "Right", "Tab"):
+            back = name == "Left" or (name == "Tab" and shift)
+            self._kbd_select(self._kbd_index + (-1 if back else 1))
+            return True
+        if name not in ("Return", "KP_Enter"):
+            return False
+        chip = self._chips[self._kbd_index]
+        if not chip.get_sensitive():
+            # Replace says why it's off; Copy is only waiting for the answer
+            self._say(chip.get_tooltip_text() or "The answer isn't ready yet")
+            return True
+        label = self._chip_name(chip)
+        if label != "Close":
+            # Done with the bubble's keys: give them back to the app before
+            # Replace pastes into it, and so typing carries on as normal.
+            # Esc still closes (the keymap poll in _start_watchers).
+            self._kbd_stop()
+        chip.emit("clicked")
+        if label == "Copy":
+            self._say("Copied")
+        return True
+
+    def _say(self, message: str) -> None:
+        """Speak `message` as is, without the title _announce adds."""
+        if not message or not hasattr(self.win, "announce"):
+            return
+        try:
+            self.win.announce(message, Gtk.AccessibleAnnouncementPriority.MEDIUM)
+        except Exception:
+            pass
 
     def _on_enter(self, _ctrl, _x, _y) -> None:
         self._pointer_in_bubble = True
@@ -364,7 +486,13 @@ class ResultBubble:
         self._arm_timeout()
         # The bubble never takes focus, so tell a screen reader the answer is in
         spoken = self._text_lbl.get_text()
-        self._announce(f"{spoken} {warning}" if self._incomplete and warning else spoken)
+        if self._incomplete and warning:
+            spoken = f"{spoken} {warning}"
+        if self._kbd_grab is not None:
+            chip = self._chips[self._kbd_index]
+            if chip.get_sensitive():
+                spoken = f"{spoken} {self._chip_name(chip)} is selected; press Enter."
+        self._announce(spoken)
         return False
 
     def _announce(self, message: str) -> None:
@@ -478,6 +606,7 @@ class ResultBubble:
         if self._click_watcher is not None:
             self._click_watcher.stop()
             self._click_watcher = None
+        self._kbd_stop()
         self.win.destroy()
 
 
@@ -532,10 +661,18 @@ def show(
     import threading
 
     x, y = pointer_position()
+    try:
+        from ui.popup import activated_by_keyboard
+
+        keyboard = activated_by_keyboard()
+    except Exception:
+        keyboard = False
 
     def _build() -> bool:
         header = header_widget_factory() if header_widget_factory else None
-        bubble = ResultBubble(title, x, y, header_widget=header, on_replace=on_replace)
+        bubble = ResultBubble(
+            title, x, y, header_widget=header, on_replace=on_replace, keyboard=keyboard
+        )
         bubble.present()
         threading.Thread(target=worker, args=(bubble,), daemon=True, name="ai-bubble").start()
         return False

@@ -132,6 +132,84 @@ def test_x_poll_fires_on_new_presses_only(popup, monkeypatch):
     assert clicks == [1] and escs == [1]
 
 
+# ---- the shared key grab (popup and AI bubble) ------------------------------
+class _FakeXRoot:
+    def __init__(self):
+        self.grabbed, self.ungrabbed = [], []
+
+    def grab_key(self, keycode, mask, *_a, **_kw):
+        self.grabbed.append((keycode, mask))
+
+    def ungrab_key(self, keycode, mask):
+        self.ungrabbed.append((keycode, mask))
+
+
+class _FakeXDisplay:
+    """Keycode = 10 + position in KEYS; queued events come back in order."""
+
+    KEYS = ["Left", "Tab"]
+
+    def __init__(self, X, XK):
+        self.root = _FakeXRoot()
+        self.events: list = []
+        self._X, self._XK = X, XK
+
+    def keysym_to_keycode(self, keysym):
+        names = [self._XK.string_to_keysym(n) for n in self.KEYS]
+        return 10 + names.index(keysym) if keysym in names else 0
+
+    def screen(self):
+        return SimpleNamespace(root=self.root)
+
+    def sync(self):
+        pass
+
+    def fileno(self):
+        return 0
+
+    def pending_events(self):
+        return len(self.events)
+
+    def next_event(self):
+        return self.events.pop(0)
+
+    def press(self, keycode, shift=False):
+        state = self._X.ShiftMask if shift else 0
+        self.events.append(SimpleNamespace(type=self._X.KeyPress, detail=keycode, state=state))
+
+
+def test_key_grab_routes_presses_and_ungrabs(popup, monkeypatch):
+    if popup.X is None:
+        pytest.skip("python-xlib unavailable")
+    monkeypatch.setattr(popup.GLib, "io_add_watch", lambda *_a: 7)
+    monkeypatch.setattr(popup.GLib, "source_remove", lambda _id: None)
+    dpy = _FakeXDisplay(popup.X, popup.XK)
+    keys = []
+    grab = popup._KeyGrab(
+        dpy, {"Left": False, "Tab": True, "Nope": False}, lambda n, s: keys.append((n, s))
+    )
+    grab.start()
+    # Each key under every Caps/Num Lock combination; Tab with Shift too
+    assert len(dpy.root.grabbed) == 4 + 8
+    dpy.press(11, shift=True)
+    dpy.press(10)
+    dpy.press(99)  # not ours
+    grab.drain()
+    assert keys == [("Tab", True), ("Left", False)]
+    dpy.press(10)  # raced the ungrab: dropped
+    grab.stop()
+    assert keys == [("Tab", True), ("Left", False)]
+    assert sorted(dpy.root.ungrabbed) == sorted(dpy.root.grabbed)
+    assert not grab.active
+
+
+def test_only_keyboard_activation_counts(popup, monkeypatch):
+    monkeypatch.setattr(popup, "_kbd_activated_at", 0.0)
+    assert not popup.activated_by_keyboard()
+    monkeypatch.setattr(popup, "_kbd_activated_at", popup.time.monotonic())
+    assert popup.activated_by_keyboard()
+
+
 # ---- keyboard navigation (#44) ---------------------------------------------
 @pytest.mark.parametrize(
     "rows,index,key,shift,expected",
@@ -257,3 +335,13 @@ def test_focused_popup_routes_gtk_keys_the_same_way(kbd, popup):
     assert selected() == ["a"]
     p._kbd_nav = False  # a popup a selection opened: only Esc is handled
     assert not p._on_key_press(None, Gdk.KEY_Right, 0, Gdk.ModifierType(0))
+
+
+def test_enter_marks_the_run_as_from_the_keyboard(kbd, popup, monkeypatch):
+    # The AI bubble an action opens reads this to take the keys too (#124)
+    p, _log, _selected = kbd
+    monkeypatch.setattr(popup, "_kbd_activated_at", 0.0)
+    p._kbd_key("Right")
+    assert not popup.activated_by_keyboard()
+    p._kbd_key("Return")
+    assert popup.activated_by_keyboard()
