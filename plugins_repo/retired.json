@@ -1,5 +1,4 @@
 {
-  "speak.py": "Dropped in favour of vinoWhisper: it read text aloud with spd-say/espeak.",
   "rot13.py": "Dropped from the catalogue.",
   "ollama_ai.py": "Replaced by the offline AI plugin (Summarize, rewrite, explain).",
   "send_to_ai.py": "Replaced by the offline AI plugin (Summarize, rewrite, explain).",

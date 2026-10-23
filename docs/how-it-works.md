@@ -16,7 +16,7 @@ On KDE Wayland the global hotkey runs through KGlobalAccel (check it actually bo
 
 ## Offline AI
 
-OCR, summarize, rewrite, explain and translate run on your own machine through OpenVINO: the LLM on an Intel NPU when there is one (the iGPU or CPU otherwise), and OCR on the CPU. Install the Python side for the same Python that runs vinoPop:
+OCR, summarize, rewrite, explain, translate and read aloud run on your own machine through OpenVINO: the LLM and the voice (vinoSpeak's Kokoro-82M, cached under `~/.cache/vinospeak/`) on an Intel NPU when there is one (the iGPU or CPU otherwise), and OCR on the CPU. Install the Python side for the same Python that runs vinoPop:
 
 ```sh
 pip install --user -r requirements-ai.txt
@@ -57,7 +57,7 @@ Everything the Settings window sets lives in `~/.config/vinopop/settings.json`.
 | `translate_target_lang` | `en` | Target language for the Translate plugin (ISO code) |
 | `ai_device` | `auto` | `NPU`, `GPU` or `CPU` to force one |
 | `ai_llm_model` | `gemma-4-e2b` | or `gemma-4-e4b` |
-| `ai_idle_unload_minutes` | `5` | Unload the model after this long idle. `0` keeps it loaded. |
+| `ai_idle_unload_minutes` | `5` | Unload the model (and the Read aloud voice) after this long idle. `0` keeps it loaded. |
 | `editable_atspi_listener_enabled` | `false` | Use AT-SPI for editable detection + selection geometry |
 | `popup_anchor_to_selection` | `true` | Anchor popup to the selection rect (needs AT-SPI enabled) |
 | `theme` | `dark` | `dark`, `light`, or `system` (follows the GTK theme) |

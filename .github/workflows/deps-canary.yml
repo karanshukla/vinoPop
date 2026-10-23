@@ -34,7 +34,7 @@ jobs:
       - name: Import the stack the AI actions need
         run: |
           .venv/bin/python - <<'PY'
-          import huggingface_hub, openvino, openvino_genai, openvino_tokenizers, rapidocr, tqdm
+          import huggingface_hub, openvino, openvino_genai, openvino_tokenizers, rapidocr, tqdm, vino_speak
           print("openvino", openvino.__version__)
           print("openvino-genai", openvino_genai.__version__)
           print("huggingface_hub", huggingface_hub.__version__)

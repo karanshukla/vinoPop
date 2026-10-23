@@ -1,4 +1,4 @@
-# Offline AI for vinoPop: OCR, summarize, rewrite, explain, translate.
+# Offline AI for vinoPop: OCR, summarize, rewrite, explain, translate, read aloud.
 #   pip install --user -r requirements-ai.txt
 #
 # OpenVINO is pinned to the exact release the other vino apps use (vinoWhisper's
@@ -11,3 +11,5 @@ openvino-tokenizers==2026.4.1.0
 rapidocr>=3.10
 huggingface_hub>=0.30
 tqdm>=4.66
+# Read aloud. vinoSpeak pins the same OpenVINO as above; bump it in step.
+vinospeak==0.1.1
