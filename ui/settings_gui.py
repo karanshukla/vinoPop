@@ -82,7 +82,6 @@ def _open_text_editor_modal(
     sub_lbl = Gtk.Label(xalign=0)
     sub_lbl.set_wrap(True)
     sub_lbl.set_text(subtitle)
-    sub_lbl.add_css_class("dim-label")
     sub_lbl.add_css_class("caption")
     content.append(sub_lbl)
 

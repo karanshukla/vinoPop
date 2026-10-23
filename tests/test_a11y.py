@@ -418,6 +418,69 @@ def test_icon_picker_is_named(gtk, stub_backend):
     assert not problems, "\n".join(problems)
 
 
+# Text a user has to read to get through a step. libadwaita's dim-label puts
+# it at ~3.2:1 on the light theme, under AA's 4.5:1 (#126). Recaps and
+# previews can stay dim; these can't.
+_INSTRUCTIONS = (
+    "Custom buttons turn any text you select",
+    "Click Next when you're ready",
+    "Pick one. You can change it later",
+    "Example: ",
+    "The icon is what shows up in the popup",
+    "Or insert a dynamic value",
+    "Try one of these",
+    "You can leave this as 'always'",
+    "Press Apply to save",
+    "Shows on: ",
+)
+
+
+def _dimmed_instructions(root, Gtk) -> list[str]:
+    return [
+        w.get_text()
+        for w in _walk(root)
+        if isinstance(w, Gtk.Label)
+        and w.get_text().startswith(_INSTRUCTIONS)
+        and w.has_css_class("dim-label")
+    ]
+
+
+def test_recipe_wizard_instructions_are_not_dimmed(gtk, stub_backend):
+    from ui.recipe_wizard import _STEPS, RecipeWizard
+
+    wiz = RecipeWizard()
+
+    def check(_win):
+        # The confirm page fills in only once it's reached
+        wiz._refresh_confirm_page()
+        found, dimmed = set(), []
+        for tag, _title in _STEPS:
+            page = wiz._nav.find_page(tag)
+            for w in _walk(page):
+                if isinstance(w, gtk.Gtk.Label) and w.get_text().startswith(_INSTRUCTIONS):
+                    found.add(next(p for p in _INSTRUCTIONS if w.get_text().startswith(p)))
+            dimmed += _dimmed_instructions(page, gtk.Gtk)
+        return found, dimmed
+
+    found, dimmed = _run_modal_and_check(gtk, wiz.run_and_get, lambda: wiz._window, check)
+    # Guards the list itself: a reworded label would otherwise pass silently
+    assert found == set(_INSTRUCTIONS), set(_INSTRUCTIONS) - found
+    assert not dimmed, dimmed
+
+
+def test_icon_picker_count_is_not_dimmed(gtk, stub_backend):
+    from ui.icon_picker import IconPicker
+
+    picker = IconPicker()
+    dimmed = _run_modal_and_check(
+        gtk,
+        picker.run,
+        lambda: getattr(picker, "_dialog", None),
+        lambda _win: picker._count_label.has_css_class("dim-label"),
+    )
+    assert not dimmed
+
+
 def test_welcome_dialog_is_named_and_closes_on_escape(gtk):
     from ui.welcome import show_welcome_dialog
 
