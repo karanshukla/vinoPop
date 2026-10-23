@@ -108,6 +108,9 @@ class _Widget:
     def set_text(self, v):
         self.text = v
 
+    def get_text(self):
+        return self.text
+
     def set_tooltip_text(self, v):
         self.tooltip = v
 
@@ -127,6 +130,8 @@ def _headless_bubble(ai_bubble, monkeypatch):
     b._spinner = _Widget()
     monkeypatch.setattr(b, "_arm_timeout", lambda: None, raising=False)
     monkeypatch.setattr(b, "_queue_replace", lambda: None, raising=False)  # no window to measure
+    b.announced = []
+    monkeypatch.setattr(b, "_announce", b.announced.append, raising=False)
     return b
 
 
@@ -136,6 +141,17 @@ def test_incomplete_answer_disables_replace_but_not_copy(ai_bubble, monkeypatch)
     assert b._copy_btn.sensitive is True
     assert b._replace_btn.sensitive is False and b._replace_btn.tooltip
     assert b._warn_lbl.visible and "length limit" in b._warn_lbl.text
+
+
+def test_finished_answer_is_announced(ai_bubble, monkeypatch):
+    # The bubble never has focus, so a screen reader only hears the answer
+    # through an announcement; an incomplete one says why.
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    b._finish("a short summary", None)
+    assert b.announced == ["a short summary"]
+    b = _headless_bubble(ai_bubble, monkeypatch)
+    b._finish("a third", None, "The answer stopped at its length limit")
+    assert b.announced == ["a third The answer stopped at its length limit"]
 
 
 def test_complete_answer_keeps_replace(ai_bubble, monkeypatch):

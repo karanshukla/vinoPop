@@ -43,17 +43,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - name: GTK 4, libadwaita, pycairo, dbus-python, python-xlib
+      - name: GTK 4, libadwaita, pycairo, dbus-python, python-xlib, AT-SPI
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
-            python3-dbus python3-xlib xvfb
+            python3-dbus python3-xlib xvfb \
+            at-spi2-core gir1.2-atspi-2.0 python3-pyatspi dbus-daemon
       # The distro's python3, or the venv can't see its PyGObject
       - run: uv venv --python /usr/bin/python3 --system-site-packages
       - run: uv pip install --group dev
-      # GTK needs a display to import its widgets
-      - run: xvfb-run -a .venv/bin/python -m pytest -rs
+      # GTK needs a display to import its widgets. The session bus carries
+      # the accessibility bus, so tests/test_a11y.py can read the AT-SPI tree.
+      - run: xvfb-run -a dbus-run-session -- .venv/bin/python -m pytest -rs
+        env:
+          VINOPOP_ATSPI_TEST: "1"
 
   uv-run:
     # What CONTRIBUTING.md tells contributors to run, from a fresh checkout
