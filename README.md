@@ -73,7 +73,7 @@ vinopop
 
 - **Select text** in any app and the bar appears above it.
 - **`Super+Shift+Y`** pops the bar at the cursor with whatever's selected, and closes it again. On X11 the arrow keys and Tab then move between its buttons and Enter or Space runs one.
-- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog.
+- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog. Drag a box, or from the keyboard: arrows place and move it, Shift+arrows resize, Enter reads it (or the whole screen if nothing is placed), Escape cancels.
 - **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
 - `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
 
