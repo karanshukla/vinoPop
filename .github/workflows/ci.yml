@@ -43,13 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # librsvg2-common: install.sh refuses to run without GTK's SVG loader,
+      # which --no-install-recommends leaves out (test_install_sh.py)
       - name: GTK 4, libadwaita, pycairo, dbus-python, python-xlib, AT-SPI
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
             python3-dbus python3-xlib xvfb \
-            at-spi2-core gir1.2-atspi-2.0 python3-pyatspi dbus-daemon
+            at-spi2-core gir1.2-atspi-2.0 python3-pyatspi dbus-daemon \
+            librsvg2-common
       # The distro's python3, or the venv can't see its PyGObject
       - run: uv venv --python /usr/bin/python3 --system-site-packages
       - run: uv pip install --group dev
