@@ -10,8 +10,17 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-23
+
 ### ✨ Features
 
+- **The AI bubble's Copy and Replace work from the keyboard.** When the popup
+  was driven by keyboard, the bubble takes Left/Right/Tab, Enter and Esc the
+  same way, highlights a chip and announces it.
+- **OCR can pick its region from the keyboard.** Enter with nothing placed
+  reads the whole screen; arrows place and move a box, Shift+arrows resize it,
+  Ctrl takes bigger steps, and Enter reads it. The box is announced as it
+  changes.
 - **The tray icon can hide while vinoPop goes unused.** Settings has a new
   "Hide tray icon after (minutes)" row (`tray_idle_minutes`, default 0 =
   always shown), as vinoWhisper and vinoWatch do; the next popup, OCR or
@@ -28,7 +37,27 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
   whole string instead of rebinding one keycode per character.
 - **Bundled Editing and Formatting plugins offer their update again.** A
   comment-only change without a version bump made installed copies look
-  hand-edited.
+  hand-edited. The plugins whose icons changed in 1.1.1 (Editing actions,
+  HTML entities, Text transformations, the MDN docs recipe) are bumped too, so
+  installed copies pick up the new icons.
+- **Every action has its own icon, drawn at the system symbolics' size.**
+  Decode, lower case and the like drew a mono glyph next to their encoding
+  twin's colour tile, and five marks were text that depended on installed
+  fonts (the translate one needed a CJK font). Every mark is a path now.
+- **Screen readers can name every control.** Settings and Plugin Manager
+  rows, the clipboard picker's entries, search fields, dialog fields and the
+  AI bubble's close chip read as blank or as "✕"; the two "Disable hotkey"
+  buttons now say which hotkey they set.
+- **The onboarding tour respects reduced motion** and starts keyboard focus
+  on Next. A page change is announced, and the welcome dialog closes on
+  Escape.
+- **Text you have to read to finish a step is no longer dimmed.** The
+  wizard's instructions, the text-editor dialog's subtitle, the onboarding
+  status line and the icon picker's count were ~3.2:1 on the light theme.
+- **install.sh checks for GTK's SVG loader.** On a minimal Debian or Ubuntu
+  install, `librsvg2-common` is only recommended, so every icon drew as
+  image-missing. install.sh names the package, and the README's apt line
+  includes it.
 
 ### 🔧 Development
 
@@ -166,7 +195,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/karanshukla/vinoPop/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/karanshukla/vinoPop/compare/v0.9.7...v1.0.0
