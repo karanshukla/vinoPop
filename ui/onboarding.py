@@ -1168,7 +1168,6 @@ class OnboardingWindow(Adw.Window):
         buttons.set_halign(Gtk.Align.CENTER)
         status = Gtk.Label(xalign=0.5)
         status.set_wrap(True)
-        status.add_css_class("dim-label")
         status.set_visible(False)
         now = Gtk.Button(label="Download now")
         now.add_css_class("suggested-action")
