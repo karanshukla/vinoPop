@@ -1002,6 +1002,27 @@ def _page_key(keyval: int, on_control: bool) -> int | str | None:
     return None
 
 
+# The moment of each scene's loop shown as a still frame when animations are
+# off: the point where the scene has played out (popup up, plugin built...).
+_STILL_AT = {
+    "_draw_how": 4.0,
+    "_draw_summon": 2.0,
+    "_draw_plugins": 5.0,
+    "_draw_recipe": 4.5,
+    "_draw_ai": 5.0,
+    "_draw_done": 3.0,
+}
+
+
+def _animations_enabled() -> bool:
+    """GTK's gtk-enable-animations, which desktops turn off for reduced motion."""
+    settings = Gtk.Settings.get_default()
+    try:
+        return settings is None or bool(settings.get_property("gtk-enable-animations"))
+    except Exception:
+        return True
+
+
 class OnboardingWindow(Adw.Window):
     def __init__(self, settings, on_open_plugins=None, on_download_model=None):
         super().__init__(title="Welcome to vinoPop")
@@ -1023,8 +1044,9 @@ class OnboardingWindow(Adw.Window):
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
         # The animated scene: one Cairo stage, redrawn every frame, whose
-        # contents follow the current page.
-        self._area = Gtk.DrawingArea()
+        # contents follow the current page. It illustrates the text below
+        # it, so assistive tech skips it.
+        self._area = Gtk.DrawingArea(accessible_role=Gtk.AccessibleRole.PRESENTATION)
         self._area.set_content_height(280)
         self._area.set_draw_func(self._on_draw)
         self._area.set_margin_start(22)
@@ -1037,6 +1059,7 @@ class OnboardingWindow(Adw.Window):
         self._carousel.set_vexpand(True)
         self._carousel.set_spacing(24)
         self._carousel.set_allow_scroll_wheel(False)
+        self._page_texts: list[str] = []
         for pg in self._pages:
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
             box.set_hexpand(True)
@@ -1055,6 +1078,7 @@ class OnboardingWindow(Adw.Window):
             body.set_wrap(True)
             body.set_max_width_chars(54)
             box.append(body)
+            self._page_texts.append(f"{pg['title']}. {body.get_text()}")
             if pg.get("ask_model"):
                 box.append(self._model_choice())
             if pg.get("open_plugins") and self._on_open_plugins is not None:
@@ -1110,9 +1134,14 @@ class OnboardingWindow(Adw.Window):
         self.add_controller(keys)
 
         self.connect("destroy", self._on_destroy)
-        # Frame-clock driven animation (replaces the old 33 ms timeout)
-        self._timer = self._area.add_tick_callback(self._tick)
+        # Frame-clock driven animation (replaces the old 33 ms timeout).
+        # With animations off (reduced motion) each page is one still frame.
+        self._animate = _animations_enabled()
+        self._timer = self._area.add_tick_callback(self._tick) if self._animate else None
         self._update_controls()
+        # Start on Next, not on the first control in the bar (the checkbox)
+        self.set_default_widget(self._next)
+        self.set_focus(self._next)
 
     def _plugins_button(self) -> Gtk.Widget:
         """Opens Plugin Manager over the tour (which stays open), so the
@@ -1176,9 +1205,13 @@ class OnboardingWindow(Adw.Window):
                 pass
 
     def _on_draw(self, _area, cr, w, h):
-        t = (GLib.get_monotonic_time() - self._t0) / 1_000_000.0
+        draw = self._pages[self._index]["draw"]
+        if self._animate:
+            t = (GLib.get_monotonic_time() - self._t0) / 1_000_000.0
+        else:
+            t = _STILL_AT.get(draw.__name__, 3.0)
         try:
-            self._pages[self._index]["draw"](cr, w, h, t)
+            draw(cr, w, h, t)
         except Exception:
             pass
 
@@ -1205,6 +1238,14 @@ class OnboardingWindow(Adw.Window):
         self._index = ni
         self._t0 = GLib.get_monotonic_time()
         self._update_controls()
+        self._area.queue_draw()
+        # Focus stays on Next, so a screen reader wouldn't hear the new
+        # page: read its title and text out (GTK 4.14+).
+        if hasattr(self, "announce"):
+            try:
+                self.announce(self._page_texts[ni], Gtk.AccessibleAnnouncementPriority.MEDIUM)
+            except Exception:
+                pass
 
     def _update_controls(self):
         last = self._index == len(self._pages) - 1

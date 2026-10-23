@@ -95,6 +95,8 @@ def _open_text_editor_modal(
     view.set_wrap_mode(Gtk.WrapMode.NONE)
     view.set_monospace(True)
     view.add_css_class("lp-cmd-edit")
+    view.update_property([Gtk.AccessibleProperty.LABEL], [title])
+    view.update_property([Gtk.AccessibleProperty.DESCRIPTION], [subtitle])
     if initial_text:
         view.get_buffer().set_text(initial_text)
     _attach_textarea_placeholder(view, placeholder_text)
@@ -163,8 +165,10 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
         view._setting_placeholder = True
         # The view's own text colour, dimmed like Adwaita's dim-label; a
         # fixed grey can't hold contrast on both light and dark.
+        from ui.theme import PLACEHOLDER_ALPHA
+
         color = view.get_color()
-        color.alpha = 0.55
+        color.alpha = PLACEHOLDER_ALPHA
         tag.set_property("foreground-rgba", color)
         buf.set_text(placeholder_text)
         s, e = buf.get_bounds()
@@ -348,8 +352,16 @@ def _format_combo(keyval: int, state: int) -> str:
 class HotkeyRecorder(Gtk.Button):
     """Compact button that captures a keypress combo when clicked."""
 
-    def __init__(self, initial: str = "", on_changed: Callable[[str], None] | None = None) -> None:
+    def __init__(
+        self,
+        initial: str = "",
+        on_changed: Callable[[str], None] | None = None,
+        name: str = "",
+    ) -> None:
         super().__init__()
+        # What the hotkey is for ("Popup hotkey"), so a screen reader says
+        # more than the bare combo; the row title isn't linked to a suffix.
+        self._name = name
         self._value = initial
         self._recording = False
         self._rejected = ""
@@ -386,6 +398,12 @@ class HotkeyRecorder(Gtk.Button):
             self.set_label(self._value)
         else:
             self.set_label("Click to record…")
+        if self._name:
+            # The label child would otherwise name the button by itself
+            self.reset_relation(Gtk.AccessibleRelation.LABELLED_BY)
+            self.update_property(
+                [Gtk.AccessibleProperty.LABEL], [f"{self._name}: {self.get_label()}"]
+            )
 
     def _on_clicked(self, *_):
         self._recording = True
@@ -912,9 +930,10 @@ class SettingsDialog:
         recorder = HotkeyRecorder(
             self._settings.get("hotkey") or "",
             on_changed=lambda v: self._save_key("hotkey", v),
+            name="Popup hotkey",
         )
         hk_row.add_suffix(recorder)
-        clear = self._suffix_icon_button("edit-clear-symbolic", "Disable hotkey")
+        clear = self._suffix_icon_button("edit-clear-symbolic", "Disable the popup hotkey")
         clear.connect("clicked", lambda *_: recorder.set_value(""))
         hk_row.add_suffix(clear)
         group.add(hk_row)
@@ -939,6 +958,7 @@ class SettingsDialog:
         ocr_recorder = HotkeyRecorder(
             self._settings.get("ocr_hotkey") or "",
             on_changed=lambda v: self._save_key("ocr_hotkey", v),
+            name="Screen OCR hotkey",
         )
         # When OCR backends aren't available, offer a one-click Install
         # button that runs the install in the background via pkexec (a
@@ -1011,7 +1031,7 @@ class SettingsDialog:
             ocr_install_btn.connect("clicked", _on_ocr_install)
             ocr_row.add_suffix(ocr_install_btn)
         ocr_row.add_suffix(ocr_recorder)
-        ocr_clear = self._suffix_icon_button("edit-clear-symbolic", "Disable hotkey")
+        ocr_clear = self._suffix_icon_button("edit-clear-symbolic", "Disable the OCR hotkey")
         ocr_clear.connect("clicked", lambda *_: ocr_recorder.set_value(""))
         ocr_row.add_suffix(ocr_clear)
         group.add(ocr_row)
@@ -1154,9 +1174,12 @@ class SettingsDialog:
         clip_recorder = HotkeyRecorder(
             self._settings.get("clipboard_hotkey") or "",
             on_changed=lambda v: self._save_key("clipboard_hotkey", v),
+            name="Clipboard shortcut",
         )
         clip_row.add_suffix(clip_recorder)
-        clip_clear = self._suffix_icon_button("edit-clear-symbolic", "Disable")
+        clip_clear = self._suffix_icon_button(
+            "edit-clear-symbolic", "Disable the clipboard shortcut"
+        )
         clip_clear.connect("clicked", lambda *_: clip_recorder.set_value(""))
         clip_row.add_suffix(clip_clear)
         clip_row.set_sensitive(clip_on)

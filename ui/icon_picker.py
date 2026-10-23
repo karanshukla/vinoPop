@@ -138,6 +138,8 @@ class IconPicker:
 
         self._search = Gtk.SearchEntry()
         self._search.set_placeholder_text("Search icons… (e.g. folder, mail, save)")
+        # A placeholder isn't a name: without this it reads as a blank field
+        self._search.update_property([Gtk.AccessibleProperty.LABEL], ["Search icons"])
         self._search.set_hexpand(True)
         self._search.set_max_width_chars(40)
         self._search.connect("search-changed", self._on_search)

@@ -145,6 +145,12 @@ _BRAND_DARK_CSS = """
 """
 
 
+# Alpha for hint text drawn in a text view's own colour (the sample text in
+# Settings' text areas and the recipe wizard's template box). 0.55 keeps it
+# at 4.5:1 on Adwaita's light and dark views; tests/test_a11y.py checks it.
+PLACEHOLDER_ALPHA = 0.55
+
+
 # Dark -> light hex remap for the popup bar's CSS (ui/popup.py). The green
 # accent reads on either background, so only surfaces, text and borders swap.
 _LIGHT_REMAP = {

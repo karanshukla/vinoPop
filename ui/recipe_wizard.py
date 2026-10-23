@@ -202,9 +202,10 @@ _MOCK_CSS = """
 button.card.lp-action-tile {
     padding: 14px 16px;
 }
+/* The ring uses the text accent: the fill green was 2.3:1 on a dark card */
 button.card.lp-action-tile:checked {
     background-color: alpha(@accent_bg_color, 0.12);
-    box-shadow: inset 0 0 0 2px @accent_bg_color;
+    box-shadow: inset 0 0 0 2px @accent_color;
 }
 .lp-step-number {
     background-color: @accent_bg_color;
@@ -592,9 +593,11 @@ class RecipeWizard:
         )
 
         # Tooltip / button label
-        left.append(_label("What's the button called?", "heading"))
+        name_lbl = _label("What's the button called?", "heading")
+        left.append(name_lbl)
 
         self._tooltip_entry = Gtk.Entry()
+        name_lbl.set_mnemonic_widget(self._tooltip_entry)
         self._tooltip_entry.set_text(self._state.get("tooltip") or "")
         self._tooltip_entry.set_placeholder_text("e.g. Search Wikipedia")
         self._tooltip_entry.connect("changed", self._on_label_input)
@@ -742,7 +745,8 @@ class RecipeWizard:
         spec = _ACTION_BY_KEY[self._state["action_type"]]
 
         self._detail_container.append(_label(spec["title"], "title-2", wrap=True))
-        self._detail_container.append(_label(spec["detail_prompt"], "heading", wrap=True))
+        prompt = _label(spec["detail_prompt"], "heading", wrap=True)
+        self._detail_container.append(prompt)
 
         # Template editor
         tmpl_scroll = Gtk.ScrolledWindow()
@@ -758,15 +762,19 @@ class RecipeWizard:
         self._template_view.set_left_margin(8)
         self._template_view.set_right_margin(8)
         self._template_buffer = self._template_view.get_buffer()
+        prompt.set_mnemonic_widget(self._template_view)  # names the field for screen readers
 
         # Style tag for the dimmed sample text. Has to live on the
         # buffer's tag table - recreated per page render because we
         # rebuild the whole detail container when action type changes.
         self._placeholder_tag = self._template_buffer.create_tag(
             "lp-placeholder",
-            foreground="#6b7080",  # muted grey, readable on light and dark
             style=Pango.Style.ITALIC,
         )
+        # The view's own text colour, dimmed as in Settings' text areas: a
+        # fixed grey (#6b7080) fell to 3.4:1 on the dark view. Read once the
+        # view is styled, i.e. mapped.
+        self._template_view.connect("map", self._tint_placeholder)
 
         # If the user already typed something on a previous visit, show
         # that and treat as real input. Otherwise drop the sample text
@@ -931,6 +939,13 @@ class RecipeWizard:
         self._set_page_complete("detail", self._detail_page_complete())
         self._refresh_preview_result()
         self._refresh_confirm_page()
+
+    def _tint_placeholder(self, view: Gtk.TextView) -> None:
+        from ui.theme import PLACEHOLDER_ALPHA
+
+        color = view.get_color()
+        color.alpha = PLACEHOLDER_ALPHA
+        self._placeholder_tag.set_property("foreground-rgba", color)
 
     def _on_template_focus_in(self) -> None:
         """Clear the dim placeholder on first click/keypress so the user

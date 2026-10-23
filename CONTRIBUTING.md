@@ -162,6 +162,21 @@ runs:
 git config core.hooksPath .githooks
 ```
 
+`tests/test_a11y.py` builds the real windows and checks them for
+accessibility: every control has a name a screen reader can read, dialogs
+close on Escape, and the custom colours keep 4.5:1 contrast in light and
+dark. It needs a display, and it opens windows on yours, so run it on a
+virtual one the way CI's test-gtk job does (the session bus also lets it
+read the live AT-SPI tree):
+
+```bash
+xvfb-run -a dbus-run-session -- env VINOPOP_ATSPI_TEST=1 python3 -m pytest tests/test_a11y.py
+```
+
+When you add an icon-only button, give it a tooltip or an accessible label
+(`update_property([Gtk.AccessibleProperty.LABEL], [...])`); label a text
+field with `label.set_mnemonic_widget(field)`.
+
 ## Pull requests
 
 - Keep PRs focused - one concern per PR

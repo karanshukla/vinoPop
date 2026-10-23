@@ -36,9 +36,14 @@ def build(
         item.set_margin_top(6)
         item.set_margin_bottom(6)
         item.set_margin_start(6)
-        item.append(Gtk.Image.new_from_icon_name(icon))
+        # The icon only decorates the title next to it
+        item.append(Gtk.Image(icon_name=icon, accessible_role=Gtk.AccessibleRole.PRESENTATION))
         item.append(Gtk.Label(label=title, xalign=0))
-        sidebar.append(item)
+        row = Gtk.ListBoxRow(child=item)
+        # GTK 4.14 doesn't name a list row from its text: without this a
+        # screen reader reads every page in the list as a blank "list item".
+        row.update_property([Gtk.AccessibleProperty.LABEL], [title])
+        sidebar.append(row)
 
     content_page = Adw.NavigationPage()
     content_view = Adw.ToolbarView()

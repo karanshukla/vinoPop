@@ -438,6 +438,16 @@ def _nav_target(rows: list[int], index: int, key: str, shift: bool = False) -> i
     return index
 
 
+def _announce(widget: Gtk.Widget, message: str) -> None:
+    """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
+    if not message or not hasattr(widget, "announce"):
+        return
+    try:
+        widget.announce(message, Gtk.AccessibleAnnouncementPriority.MEDIUM)
+    except Exception:
+        pass
+
+
 class _XInputPoll:
     """The popup's X11 button/Esc poll, for other never-focused windows (the
     AI bubble): fires on_click / on_escape on each new press. start()
@@ -541,7 +551,13 @@ class PopupWindow:
 
         # _bar is the rounded pill background. It stacks one or two
         # rows vertically depending on how many actions matched.
-        self._bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        # A toolbar to assistive tech, so its buttons read as a set of actions
+        self._bar = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=2,
+            accessible_role=Gtk.AccessibleRole.TOOLBAR,
+        )
+        self._bar.update_property([Gtk.AccessibleProperty.LABEL], ["vinoPop actions"])
         self._bar.add_css_class("vinopop-bar")
         self._bar.set_hexpand(True)
         self._outer.append(self._bar)
@@ -999,7 +1015,9 @@ class PopupWindow:
 
             return _on_click
 
-        specs = [(p.icon, p.tooltip, make_handler(p)) for p in plugins]
+        # The tooltip is the button's only name (it's icon-only), so a plugin
+        # or recipe without one falls back to its name rather than going blank.
+        specs = [(p.icon, p.tooltip or p.name, make_handler(p)) for p in plugins]
         self._present_buttons(specs, hidden_count, max_btns)
         self._present_near(x, y, rect=rect, via_hotkey=via_hotkey)
 
@@ -1458,6 +1476,9 @@ class PopupWindow:
                 btn.add_css_class("vinopop-selected")
             else:
                 btn.remove_css_class("vinopop-selected")
+        # The popup never has focus, so a screen reader can't follow the
+        # highlight on its own: say which action Enter would run.
+        _announce(flat[self._kbd_index], flat[self._kbd_index].get_tooltip_text() or "")
 
     def _kbd_key(self, name: str, shift: bool = False) -> bool:
         """Handle one navigation key; returns whether it was one."""

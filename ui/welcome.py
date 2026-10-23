@@ -122,5 +122,14 @@ def show_welcome_dialog(
     toolbar.add_top_bar(header)
     toolbar.set_content(hero)
     dlg.set_content(toolbar)
+    # Escape closes it, as it would any dialog
+    esc = Gtk.ShortcutController()
+    esc.add_shortcut(
+        Gtk.Shortcut.new(
+            Gtk.ShortcutTrigger.parse_string("Escape"),
+            Gtk.CallbackAction.new(lambda *_: (dlg.close(), True)[1]),
+        )
+    )
+    dlg.add_controller(esc)
     dlg.present()
     return dlg

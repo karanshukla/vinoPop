@@ -172,6 +172,15 @@ class _FakeButton:
     def emit(self, signal):
         self.log.append((signal, self.name))
 
+    def get_tooltip_text(self):
+        return f"Action {self.name}"
+
+    def announce(self, message, _priority):
+        _ANNOUNCED.append(message)
+
+
+_ANNOUNCED: list[str] = []
+
 
 @pytest.fixture
 def kbd(popup):
@@ -221,6 +230,15 @@ def test_space_activates_and_escape_closes(kbd):
     assert ("clicked", "a") in log
     assert p._kbd_key("Escape")
     assert ("hide", None) in log
+
+
+def test_the_highlight_is_announced(kbd):
+    # The popup never has focus, so a screen reader hears the highlighted
+    # action only through an announcement
+    p, _log, _selected = kbd
+    _ANNOUNCED.clear()
+    p._kbd_key("Right")
+    assert _ANNOUNCED == ["Action b"]
 
 
 def test_other_keys_are_left_alone(kbd):
