@@ -6,8 +6,10 @@ explicit Accept. This module replaces that with a PopClip-style flow:
   1. grab the screen instantly and silently (spectacle -f -b; with several
      monitors only the one under the pointer, spectacle -m -b),
   2. show it as a dimmed full-screen layer-shell overlay on that output,
-  3. the user drags one rectangle,
-  4. on mouse-up we crop the screenshot to that rectangle and hand the PNG
+  3. the user drags one rectangle (or places it from the keyboard: arrows
+     move it, Shift+arrows resize it, Enter reads it, and Enter with nothing
+     placed reads the whole screen),
+  4. on mouse-up / Enter we crop the screenshot to that rectangle and hand the PNG
      back - no buttons, no second app window.
 
 The steps are separate functions so a worker thread can drive them and hop
@@ -135,6 +137,58 @@ def grab(monitor=None) -> str | None:
     return None
 
 
+# Keyboard selection, in logical pixels. Ctrl takes the big step.
+_STEP = 10
+_BIG_STEP = 50
+_MIN_SIZE = 8
+_ARROWS = {
+    Gdk.KEY_Left: (-1, 0),
+    Gdk.KEY_KP_Left: (-1, 0),
+    Gdk.KEY_Right: (1, 0),
+    Gdk.KEY_KP_Right: (1, 0),
+    Gdk.KEY_Up: (0, -1),
+    Gdk.KEY_KP_Up: (0, -1),
+    Gdk.KEY_Down: (0, 1),
+    Gdk.KEY_KP_Down: (0, 1),
+}
+_ENTER = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
+_TITLE = "Select a region to read"
+_HELP = (
+    "Drag a box over the text, or use the arrow keys to place one and "
+    "Shift with the arrow keys to resize it. Enter reads the box, or the "
+    "whole screen if there is none. Escape cancels."
+)
+
+
+def _initial_rect(width: int, height: int) -> tuple[int, int, int, int]:
+    """Where the keyboard box starts: a third of the width by a quarter of
+    the height, centred, which fits a paragraph on most screens."""
+    rw = max(_MIN_SIZE, width // 3)
+    rh = max(_MIN_SIZE, height // 4)
+    return (max(0, (width - rw) // 2), max(0, (height - rh) // 2), rw, rh)
+
+
+def nudge(
+    rect: tuple[int, int, int, int],
+    dx: int,
+    dy: int,
+    resize: bool,
+    step: int,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    """`rect` moved (or, with `resize`, grown right/down and shrunk left/up)
+    by `step` along (dx, dy), kept inside a width x height window."""
+    x, y, rw, rh = rect
+    if resize:
+        rw = max(_MIN_SIZE, min(width - x, rw + dx * step))
+        rh = max(_MIN_SIZE, min(height - y, rh + dy * step))
+    else:
+        x = max(0, min(width - rw, x + dx * step))
+        y = max(0, min(height - rh, y + dy * step))
+    return (x, y, rw, rh)
+
+
 def _layer_shell():
     """The gtk4-layer-shell module if it is installed AND usable on this
     display (it needs a wlr-layer-shell compositor), else None."""
@@ -162,6 +216,12 @@ class _Selector(Gtk.Window):
         self._scaled = None  # screenshot scaled to the window, cached per size
 
         self.set_decorated(False)
+        # A screen reader lands on the window; say what it is and how to drive it
+        self.set_title(_TITLE)
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL, Gtk.AccessibleProperty.DESCRIPTION],
+            [_TITLE, _HELP],
+        )
 
         if not self._init_layer_shell():
             # X11 / non-layer-shell fallback: a fullscreen window.
@@ -253,10 +313,51 @@ class _Selector(Gtk.Window):
         x1, y1 = x0 + dx, y0 + dy
         self._finish((min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
 
-    def _on_key(self, _c, keyval: int, _code: int, _state) -> bool:
+    def _selection(self) -> tuple[int, int, int, int] | None:
+        if not (self._start and self._cur):
+            return None
+        x0, y0 = self._start
+        x1, y1 = self._cur
+        return (int(min(x0, x1)), int(min(y0, y1)), int(abs(x1 - x0)), int(abs(y1 - y0)))
+
+    def _on_key(self, _c, keyval: int, _code: int, state) -> bool:
+        width = max(1, self._area.get_width())
+        height = max(1, self._area.get_height())
         if keyval == Gdk.KEY_Escape:
             self._finish(None)
+        elif keyval in _ENTER:
+            self._finish(self._selection() or (0, 0, width, height))
+        elif keyval in _ARROWS:
+            dx, dy = _ARROWS[keyval]
+            rect = self._selection()
+            if rect is None:
+                # The first arrow puts the box down; the next ones move it
+                rect = _initial_rect(width, height)
+            else:
+                step = _BIG_STEP if state & Gdk.ModifierType.CONTROL_MASK else _STEP
+                rect = nudge(
+                    rect,
+                    dx,
+                    dy,
+                    bool(state & Gdk.ModifierType.SHIFT_MASK),
+                    step,
+                    width,
+                    height,
+                )
+            x, y, rw, rh = rect
+            self._start, self._cur = (x, y), (x + rw, y + rh)
+            self._area.queue_draw()
+            self._announce(f"{rw} by {rh}, at {x}, {y}")
         return True
+
+    def _announce(self, message: str) -> None:
+        """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
+        if not hasattr(self, "announce"):
+            return
+        try:
+            self.announce(message, Gtk.AccessibleAnnouncementPriority.MEDIUM)
+        except Exception:
+            pass
 
     def _finish(self, rect) -> None:
         if self._fired:
