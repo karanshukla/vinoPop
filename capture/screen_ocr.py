@@ -18,11 +18,13 @@ pipeline lights up automatically.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from core import distro
 from platform_backend.base import expect_selection
 
 log = logging.getLogger("vinopop")
@@ -56,39 +58,25 @@ def _stage_text(text: str) -> None:
                 pass
 
 
-def _distro_id() -> str:
-    """Read /etc/os-release ID + ID_LIKE so we can pick the right
-    package manager. ID_LIKE is the fallback distro family (e.g.
-    Pop_OS has ID=pop, ID_LIKE=ubuntu debian) so we don't need to
-    enumerate every derivative."""
-    try:
-        text = Path("/etc/os-release").read_text()
-    except OSError:
-        return ""
-    info: dict[str, str] = {}
-    for line in text.splitlines():
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        info[k.strip()] = v.strip().strip('"').strip("'")
-    return f"{info.get('ID', '')} {info.get('ID_LIKE', '')}".lower()
+def _capture_packages() -> list[str]:
+    """The region-capture tool that works on this desktop. maim only sees
+    X11, so on a Wayland session it would grab XWayland windows and black:
+    wlroots compositors get grim + slurp, KDE spectacle, GNOME
+    gnome-screenshot (allowed to use GNOME Shell's screenshot API)."""
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return ["maim"]
+    desktops = {d.strip().upper() for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")}
+    if "KDE" in desktops:
+        return ["spectacle"]
+    if "GNOME" in desktops:
+        return ["gnome-screenshot"]
+    return ["grim", "slurp"]
 
 
 def install_command() -> str:
     """Install command for the capture tool, for when no region-capture
-    tool is present (KDE and GNOME ship one, so this is mostly X11 WMs)."""
-    ids = _distro_id()
-
-    def has(needles: tuple[str, ...]) -> bool:
-        return any(n in ids for n in needles)
-
-    if has(("fedora", "rhel", "centos", "rocky", "alma")):
-        return "sudo dnf install -y maim"
-    if has(("arch", "manjaro", "endeavouros")):
-        return "sudo pacman -S --noconfirm maim"
-    if has(("opensuse", "suse")):
-        return "sudo zypper --non-interactive install maim"
-    return "sudo apt install -y maim"
+    tool is present."""
+    return distro.install_command(_capture_packages())
 
 
 def _has_capture_tool() -> bool:
@@ -119,26 +107,12 @@ def is_supported() -> tuple[bool, str]:
 def install_argv() -> list[str] | None:
     """A pkexec argv that installs a capture tool when none is present
     (pkexec shows a graphical auth prompt). Returns None when nothing
-    installable is missing, or we don't recognise the package manager. The
-    OCR engine itself comes from pip (`vinopop[ai]`), not the distro."""
+    installable is missing, the package manager is unknown, or /usr is
+    read-only (Fedora Atomic, openSUSE Aeon: see core.distro). The OCR
+    engine itself comes from pip (`vinopop[ai]`), not the distro."""
     if _has_capture_tool():
         return None
-    ids = _distro_id()
-
-    def has(needles: tuple) -> bool:
-        return any(n in ids for n in needles)
-
-    if has(("fedora", "rhel", "centos", "rocky", "alma")):
-        return ["pkexec", "dnf", "install", "-y", "maim"]
-    if has(("arch", "manjaro", "endeavouros")):
-        return ["pkexec", "pacman", "-S", "--noconfirm", "maim"]
-    if has(("opensuse", "suse")):
-        return ["pkexec", "zypper", "--non-interactive", "install", "maim"]
-    if has(
-        ("debian", "ubuntu", "mint", "pop", "elementary", "zorin", "neon", "kali", "deepin", "mx")
-    ):
-        return ["pkexec", "apt-get", "install", "-y", "maim"]
-    return None
+    return distro.install_argv(_capture_packages())
 
 
 def _has_image(path: Path) -> bool:

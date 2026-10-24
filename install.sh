@@ -183,7 +183,8 @@ session_backend() {
     fi
 }
 
-# fedora, arch, debian or other, from /etc/os-release; picks the install hints.
+# fedora, arch, debian, suse or other, from /etc/os-release; picks the
+# install hints. Same families as core/distro.py.
 distro_family() {
     local ids=""
     if [[ -r /etc/os-release ]]; then
@@ -194,22 +195,46 @@ distro_family() {
         *" fedora "* | *" rhel "*) echo fedora ;;
         *" arch "*) echo arch ;;
         *" debian "* | *" ubuntu "*) echo debian ;;
+        *" suse "* | *" opensuse "* | *" opensuse-"*) echo suse ;;
         *) echo other ;;
     esac
 }
 family="$(distro_family)"
+
+# ostree (Fedora Silverblue, Kinoite, Bazzite), transactional (openSUSE
+# Aeon, MicroOS) or nothing. On those /usr is read-only: packages are
+# layered into a new deployment and need a reboot, so the hints change.
+# vinoPop itself installs into $HOME either way.
+image_kind() {
+    if [[ -e /run/ostree-booted ]]; then
+        echo ostree
+    elif [[ -x /usr/sbin/transactional-update ]] \
+        && findmnt -no OPTIONS -T /usr 2>/dev/null | tr , '\n' | grep -qx ro; then
+        echo transactional
+    fi
+}
+image="$(image_kind)"
 
 # The distro's package names for a dependency.
 pkg() {
     case "$family:$1" in
         fedora:gtk) echo "python3-gobject gtk4 libadwaita" ;;
         arch:gtk) echo "python-gobject gtk4 libadwaita" ;;
+        suse:gtk) echo "python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1" ;;
         *:gtk) echo "python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 librsvg2-common" ;;
         fedora:svg) echo "librsvg2" ;;
         arch:svg) echo "librsvg" ;;
+        suse:svg) echo "gdk-pixbuf-loader-rsvg" ;;
         *:svg) echo "librsvg2-common" ;;
+        fedora:layershell | arch:layershell) echo "gtk4-layer-shell" ;;
+        suse:layershell) echo "typelib-1_0-Gtk4LayerShell-1_0" ;;
+        *:layershell) echo "gir1.2-gtk4layershell-1.0" ;;
+        arch:pyside6) echo "pyside6" ;;
+        debian:pyside6) echo "python3-pyside6.qtwidgets python3-pyside6.qtsvg" ;;
+        *:pyside6) echo "python3-pyside6" ;;
         arch:python3) echo "python" ;;
         arch:xlib) echo "python-xlib" ;;
+        suse:xlib) echo "python3-python-xlib" ;;
         *:xlib) echo "python3-xlib" ;;
         *) echo "$1" ;;
     esac
@@ -217,10 +242,13 @@ pkg() {
 
 # The command that installs the given packages on this distro.
 hint() {
-    case "$family" in
-        fedora) echo "sudo dnf install $*" ;;
-        arch) echo "sudo pacman -S --needed $*" ;;
-        debian) echo "sudo apt-get install -y $*" ;;
+    case "$image:$family" in
+        ostree:*) echo "rpm-ostree install $*, then reboot" ;;
+        transactional:*) echo "sudo transactional-update pkg install $*, then reboot" ;;
+        *:fedora) echo "sudo dnf install $*" ;;
+        *:arch) echo "sudo pacman -S --needed $*" ;;
+        *:debian) echo "sudo apt-get install -y $*" ;;
+        *:suse) echo "sudo zypper install $*" ;;
         *) echo "install with your package manager (see README.md): $*" ;;
     esac
 }
@@ -275,6 +303,15 @@ if [[ ${#missing[@]} -gt 0 ]] || $clipboard_either; then
     exit 1
 fi
 
+# The launchers run on the host. Checked from inside a toolbox or distrobox,
+# the packages below are the container's, not what autostart will see.
+if [[ -e /run/.containerenv || -e /run/.toolboxenv ]]; then
+    notes+=("this shell is inside a toolbox or distrobox, so the checks above saw the container's packages, but autostart and the launcher run vinoPop on the host: run install.sh from a host terminal unless you know the host has them too")
+fi
+"$PYTHON" -c "import sys; sys.exit(sys.version_info < (3, 11))" 2>/dev/null \
+    || { echo "[install] $PYTHON is older than Python 3.11, which vinoPop needs"
+         echo "[install]   (openSUSE Leap 15: VINOPOP_PYTHON=python3.11 bash install.sh, with that version's PyGObject)"
+         exit 1; }
 "$PYTHON" -c "import gi; gi.require_version('Gtk','4.0'); gi.require_version('Adw','1'); from gi.repository import Gtk, Adw" 2>/dev/null \
     || { echo "[install] missing GTK 4 / libadwaita for $PYTHON: $(hint "$(pkg gtk)")"
          echo "[install]   (a venv only sees them if it was made with --system-site-packages on the distro's python3)"
@@ -285,7 +322,11 @@ fi
     || { echo "[install] missing the SVG loader for GTK, so no icon would draw: $(hint "$(pkg svg)")"
          exit 1; }
 "$PYTHON" -c "import PySide6" 2>/dev/null \
-    || notes+=("PySide6 is not installed, so there will be no tray icon (your distro's PySide6 package, or pip install PySide6 into a venv)")
+    || notes+=("PySide6 is not installed, so there will be no tray icon: $(hint "$(pkg pyside6)") (not packaged on Ubuntu 24.04 and older: pip install PySide6 into a venv)")
+if [[ "$backend" == "wayland_kde" ]] \
+    && ! "$PYTHON" -c "import gi; gi.require_version('Gtk4LayerShell', '1.0')" 2>/dev/null; then
+    notes+=("gtk4-layer-shell is not installed, so the popup is placed through XWayland: $(hint "$(pkg layershell)")")
+fi
 if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
     # The X11 backend can't run without it. On KDE Plasma Wayland only the
     # popup's XWayland fallback (no gtk4-layer-shell) needs it.
