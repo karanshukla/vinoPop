@@ -83,7 +83,7 @@ vinopop
 - **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
 - `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
 
-**Off KDE, bind the hotkeys in your desktop instead.** On GNOME, sway, Hyprland and COSMIC the built-in hotkeys are X11 grabs through XWayland, which only fire while an X11 window has focus. A shortcut your desktop runs works in every app: point it at `vinopop --trigger popup` (or `ocr`, `clipboard`) and clear the matching hotkey in vinoPop's Settings so the two don't fight.
+**Off KDE, bind the hotkeys in your desktop instead.** On GNOME, sway, Hyprland and COSMIC the built-in hotkeys are X11 grabs through XWayland, which only fire while an X11 window has focus. A shortcut your desktop runs works in every app: point it at `vinopop --trigger popup` (or `ocr`, `clipboard`, `settings`) and clear the matching hotkey in vinoPop's Settings so the two don't fight.
 
 | Desktop | Where |
 |---|---|
