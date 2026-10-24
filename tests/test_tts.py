@@ -3,7 +3,9 @@ Speak plugin, with vino_speak faked. No OpenVINO, model or audio needed."""
 
 from __future__ import annotations
 
+import io
 import sys
+import threading
 import types
 
 import pytest
@@ -161,6 +163,8 @@ def plugin(monkeypatch):
         speak.actions, "notify", lambda title, body, *_a, **_k: notes.append((title, body))
     )
     monkeypatch.setattr(speak, "_esc_watch", lambda _stop: lambda: None)
+    monkeypatch.setattr(speak, "_stop_notification", lambda _stop: lambda: None)
+    monkeypatch.setattr(speak, "_media_controls", lambda _stop: lambda: None)
     monkeypatch.setattr(tts, "available", lambda: (True, ""))
     return speak, notes
 
@@ -219,3 +223,60 @@ def test_one_load_at_a_time(plugin):
     finally:
         speak._busy.release()
     assert not tts.loaded()
+
+
+class _NotifySend:
+    """notify-send -p -w: the id, then "stop" if Stop was clicked."""
+
+    def __init__(self, lines):
+        self.argv = None
+        self.stdout = io.StringIO("".join(lines))
+        self.killed = False
+
+    def __call__(self, argv, **_kwargs):
+        self.argv = argv
+        return self
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.killed = True
+
+
+def _offer(monkeypatch, lines):
+    import speak
+
+    fake = _NotifySend(lines)
+    closed, stops = [], []
+    monkeypatch.setattr(speak.subprocess, "Popen", fake)
+    monkeypatch.setattr(speak, "_close_notification", closed.append)
+    end = speak._stop_notification(lambda: stops.append(True))
+    return fake, end, closed, stops
+
+
+def test_stop_on_the_notification_stops_the_voice(monkeypatch):
+    fake, end, closed, stops = _offer(monkeypatch, ["7\n", "stop\n"])
+    for thread in threading.enumerate():
+        if thread.name == "speak-stop-offer":
+            thread.join(timeout=2)
+    assert stops == [True]
+    assert "stop=Stop" in fake.argv
+    end()
+    assert closed == [7]
+
+
+def test_the_notification_goes_when_the_voice_finishes(monkeypatch):
+    _fake, end, closed, stops = _offer(monkeypatch, ["7\n"])
+    end()
+    assert (closed, stops) == ([7], [])
+
+
+def test_no_notify_send_means_no_notification(monkeypatch):
+    import speak
+
+    def _missing(*_a, **_k):
+        raise FileNotFoundError("notify-send")
+
+    monkeypatch.setattr(speak.subprocess, "Popen", _missing)
+    speak._stop_notification(lambda: None)()
