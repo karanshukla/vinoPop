@@ -1,10 +1,11 @@
-# vinopop-plugin-version: 3
+# vinopop-plugin-version: 4
 """Read the selection aloud, offline, with vinoSpeak.
 
 Kokoro-82M on the NPU through OpenVINO GenAI (GPU or CPU when there's no
 NPU). Speech starts after the first sentence and the rest is synthesized as
-it plays. Stop on the "Reading aloud" notification, a second click on Read
-aloud, or Esc (X11) stops it. The voice
+it plays. Stop on the "Reading aloud" notification, the desktop's media
+controls (core/mpris.py), a second click on Read aloud, or Esc (X11) stops
+it. The voice
 downloads once (~160 MB) on first use; nothing leaves your machine after
 that.
 """
@@ -99,6 +100,16 @@ def _stop_notification(stop):
     return _end
 
 
+def _media_controls(text: str, stop):
+    """Media keys and the desktop's player widgets stop it too."""
+    try:
+        from core import mpris
+
+        return mpris.playing(text, stop)
+    except Exception:  # noqa: BLE001 - no GLib (tests), no session bus
+        return lambda: None
+
+
 def _close_notification(notification_id: int) -> None:
     try:
         from gi.repository import Gio, GLib
@@ -147,12 +158,14 @@ def _read(text: str) -> None:
         _busy.release()
     end_watch = _esc_watch(tts.stop)
     end_offer = _stop_notification(tts.stop)
+    end_media = _media_controls(text, tts.stop)
     try:
         speech.wait()
     except Exception as exc:  # noqa: BLE001
         log.exception("[speak] playback failed")
         actions.notify(_TITLE, f"Couldn't read it aloud: {exc}", "dialog-error")
     finally:
+        end_media()
         end_offer()
         end_watch()
 

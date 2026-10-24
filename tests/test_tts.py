@@ -164,6 +164,7 @@ def plugin(monkeypatch):
     )
     monkeypatch.setattr(speak, "_esc_watch", lambda _stop: lambda: None)
     monkeypatch.setattr(speak, "_stop_notification", lambda _stop: lambda: None)
+    monkeypatch.setattr(speak, "_media_controls", lambda _text, _stop: lambda: None)
     monkeypatch.setattr(tts, "available", lambda: (True, ""))
     return speak, notes
 
