@@ -6,8 +6,10 @@ explicit Accept. This module replaces that with a PopClip-style flow:
   1. grab the screen instantly and silently (spectacle -f -b; with several
      monitors only the one under the pointer, spectacle -m -b),
   2. show it as a dimmed full-screen layer-shell overlay on that output,
-  3. the user drags one rectangle,
-  4. on mouse-up we crop the screenshot to that rectangle and hand the PNG
+  3. the user drags one rectangle (or places it from the keyboard: arrows
+     move it, Shift+arrows resize it, Enter reads it, and Enter with nothing
+     placed reads the whole screen),
+  4. on mouse-up / Enter we crop the screenshot to that rectangle and hand the PNG
      back - no buttons, no second app window.
 
 The steps are separate functions so a worker thread can drive them and hop
@@ -32,17 +34,33 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 from platform_backend.monitors import monitor_at  # noqa: E402
 
 
+def _grabbers() -> list[str]:
+    """The full-screen grabbers to try, best first. maim is X11-only: in a
+    Wayland session it sees XWayland's windows and black, so it's left out
+    there. The portal comes last: it's the only one GNOME has, and it's a
+    D-Bus round trip (plus a first-use prompt on some desktops)."""
+    tools = [t for t in ("spectacle", "grim") if shutil.which(t)]
+    if not os.environ.get("WAYLAND_DISPLAY") and shutil.which("maim"):
+        tools.append("maim")
+    try:
+        from capture import portal_screenshot
+
+        if portal_screenshot.available():
+            tools.append("portal")
+    except Exception:  # noqa: BLE001 - no Gio, no portal
+        pass
+    return tools
+
+
 def _grabber() -> str | None:
     """Name of the first available full-screen grabber, or None."""
-    for tool in ("spectacle", "grim", "maim"):
-        if shutil.which(tool):
-            return tool
-    return None
+    tools = _grabbers()
+    return tools[0] if tools else None
 
 
 def monitor_count() -> int:
@@ -111,14 +129,56 @@ def _capture_argv(tool: str, path: str, monitor=None) -> list[str]:
 
 def grab(monitor=None) -> str | None:
     """Grab the screen (or just `monitor`) to a temp PNG with no UI.
-    spectacle is the KWin-native path; grim covers wlroots; maim covers X11.
-    Blocks for the length of the screenshot (spectacle takes a good part of
-    a second), so call it from a worker thread.
+    spectacle is the KWin-native path; grim covers wlroots; maim covers X11;
+    the portal covers GNOME. Tries each until one gives a picture (grim is
+    installed on GNOME sometimes and fails there). Blocks for the length of
+    the screenshot (spectacle takes a good part of a second), so call it
+    from a worker thread.
 
     The PNG is written to a temporary file in the user's runtime environment."""
-    tool = _grabber()
-    if not tool:
+    for tool in _grabbers():
+        path = _portal_grab(monitor) if tool == "portal" else _grab_with(tool, monitor)
+        if path:
+            return path
+    return None
+
+
+def _portal_grab(monitor) -> str | None:
+    from capture import portal_screenshot
+
+    path = portal_screenshot.screenshot(interactive=False, timeout_s=15)
+    if path and monitor is not None and not _crop_to_monitor(path, monitor):
+        os.unlink(path)
         return None
+    return path
+
+
+def _crop_to_monitor(path: str, monitor) -> bool:
+    """The portal always returns the whole desktop; cut out `monitor`. The
+    image spans the monitors' logical bounding box, at whatever scale the
+    backend picked, so the scale comes from the image width."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return False
+    rects = [m.get_geometry() for m in display.get_monitors()]
+    left = min(r.x for r in rects)
+    top = min(r.y for r in rects)
+    width = max(r.x + r.width for r in rects) - left
+    try:
+        full = GdkPixbuf.Pixbuf.new_from_file(path)
+        scale = full.get_width() / width
+        g = monitor.get_geometry()
+        x, y = round((g.x - left) * scale), round((g.y - top) * scale)
+        w = min(round(g.width * scale), full.get_width() - x)
+        h = min(round(g.height * scale), full.get_height() - y)
+        full.new_subpixbuf(x, y, w, h).savev(path, "png", [], [])
+    except (GLib.Error, ValueError, ZeroDivisionError) as exc:
+        print(f"[ocr] could not crop the portal screenshot to one monitor: {exc}")
+        return False
+    return True
+
+
+def _grab_with(tool: str, monitor) -> str | None:
     fd, path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-full-")
     os.close(fd)
     argv = _capture_argv(tool, path, monitor)
@@ -133,6 +193,58 @@ def grab(monitor=None) -> str | None:
     except OSError:
         pass
     return None
+
+
+# Keyboard selection, in logical pixels. Ctrl takes the big step.
+_STEP = 10
+_BIG_STEP = 50
+_MIN_SIZE = 8
+_ARROWS = {
+    Gdk.KEY_Left: (-1, 0),
+    Gdk.KEY_KP_Left: (-1, 0),
+    Gdk.KEY_Right: (1, 0),
+    Gdk.KEY_KP_Right: (1, 0),
+    Gdk.KEY_Up: (0, -1),
+    Gdk.KEY_KP_Up: (0, -1),
+    Gdk.KEY_Down: (0, 1),
+    Gdk.KEY_KP_Down: (0, 1),
+}
+_ENTER = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter)
+_TITLE = "Select a region to read"
+_HELP = (
+    "Drag a box over the text, or use the arrow keys to place one and "
+    "Shift with the arrow keys to resize it. Enter reads the box, or the "
+    "whole screen if there is none. Escape cancels."
+)
+
+
+def _initial_rect(width: int, height: int) -> tuple[int, int, int, int]:
+    """Where the keyboard box starts: a third of the width by a quarter of
+    the height, centred, which fits a paragraph on most screens."""
+    rw = max(_MIN_SIZE, width // 3)
+    rh = max(_MIN_SIZE, height // 4)
+    return (max(0, (width - rw) // 2), max(0, (height - rh) // 2), rw, rh)
+
+
+def nudge(
+    rect: tuple[int, int, int, int],
+    dx: int,
+    dy: int,
+    resize: bool,
+    step: int,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    """`rect` moved (or, with `resize`, grown right/down and shrunk left/up)
+    by `step` along (dx, dy), kept inside a width x height window."""
+    x, y, rw, rh = rect
+    if resize:
+        rw = max(_MIN_SIZE, min(width - x, rw + dx * step))
+        rh = max(_MIN_SIZE, min(height - y, rh + dy * step))
+    else:
+        x = max(0, min(width - rw, x + dx * step))
+        y = max(0, min(height - rh, y + dy * step))
+    return (x, y, rw, rh)
 
 
 def _layer_shell():
@@ -162,6 +274,12 @@ class _Selector(Gtk.Window):
         self._scaled = None  # screenshot scaled to the window, cached per size
 
         self.set_decorated(False)
+        # A screen reader lands on the window; say what it is and how to drive it
+        self.set_title(_TITLE)
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL, Gtk.AccessibleProperty.DESCRIPTION],
+            [_TITLE, _HELP],
+        )
 
         if not self._init_layer_shell():
             # X11 / non-layer-shell fallback: a fullscreen window.
@@ -253,10 +371,51 @@ class _Selector(Gtk.Window):
         x1, y1 = x0 + dx, y0 + dy
         self._finish((min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0)))
 
-    def _on_key(self, _c, keyval: int, _code: int, _state) -> bool:
+    def _selection(self) -> tuple[int, int, int, int] | None:
+        if not (self._start and self._cur):
+            return None
+        x0, y0 = self._start
+        x1, y1 = self._cur
+        return (int(min(x0, x1)), int(min(y0, y1)), int(abs(x1 - x0)), int(abs(y1 - y0)))
+
+    def _on_key(self, _c, keyval: int, _code: int, state) -> bool:
+        width = max(1, self._area.get_width())
+        height = max(1, self._area.get_height())
         if keyval == Gdk.KEY_Escape:
             self._finish(None)
+        elif keyval in _ENTER:
+            self._finish(self._selection() or (0, 0, width, height))
+        elif keyval in _ARROWS:
+            dx, dy = _ARROWS[keyval]
+            rect = self._selection()
+            if rect is None:
+                # The first arrow puts the box down; the next ones move it
+                rect = _initial_rect(width, height)
+            else:
+                step = _BIG_STEP if state & Gdk.ModifierType.CONTROL_MASK else _STEP
+                rect = nudge(
+                    rect,
+                    dx,
+                    dy,
+                    bool(state & Gdk.ModifierType.SHIFT_MASK),
+                    step,
+                    width,
+                    height,
+                )
+            x, y, rw, rh = rect
+            self._start, self._cur = (x, y), (x + rw, y + rh)
+            self._area.queue_draw()
+            self._announce(f"{rw} by {rh}, at {x}, {y}")
         return True
+
+    def _announce(self, message: str) -> None:
+        """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
+        if not hasattr(self, "announce"):
+            return
+        try:
+            self.announce(message, Gtk.AccessibleAnnouncementPriority.MEDIUM)
+        except Exception:
+            pass
 
     def _finish(self, rect) -> None:
         if self._fired:

@@ -438,6 +438,17 @@ def _nav_target(rows: list[int], index: int, key: str, shift: bool = False) -> i
     return index
 
 
+# When the keyboard last ran a popup action (time.monotonic()). A window the
+# action opens (the AI bubble) reads it to know the hands are on the keys.
+_kbd_activated_at = 0.0
+
+
+def activated_by_keyboard(within_s: float = 2.0) -> bool:
+    """True if a popup action was run from the keyboard in the last
+    `within_s` seconds. Any thread: actions run on a worker."""
+    return time.monotonic() - _kbd_activated_at < within_s
+
+
 def _announce(widget: Gtk.Widget, message: str) -> None:
     """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
     if not message or not hasattr(widget, "announce"):
@@ -446,6 +457,99 @@ def _announce(widget: Gtk.Widget, message: str) -> None:
         widget.announce(message, Gtk.AccessibleAnnouncementPriority.MEDIUM)
     except Exception:
         pass
+
+
+class _KeyGrab:
+    """Grab `keys` (keysym name -> also grab with Shift) on the X root
+    window so a window that never takes focus can still be driven from the
+    keyboard. on_key(name, shift) runs on the GTK main thread for each press.
+    The popup and the AI bubble use it: both keep focus in the source app so
+    a paste lands there."""
+
+    def __init__(self, xdpy, keys: dict[str, bool], on_key: Callable[[str, bool], object]) -> None:
+        self._xdpy = xdpy
+        self._keys = keys
+        self._on_key = on_key
+        self._grabs: list[tuple[int, int]] = []
+        self._names: dict[int, str] = {}
+        self._watch_id: int | None = None
+        self.active = False
+
+    def start(self) -> None:
+        root = self._xdpy.screen().root
+        catchers = []
+        for name, with_shift in self._keys.items():
+            keycode = self._xdpy.keysym_to_keycode(XK.string_to_keysym(name))
+            if not keycode:
+                continue
+            self._names[keycode] = name
+            for mods in (0, X.ShiftMask) if with_shift else (0,):
+                for lock in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
+                    # One catcher per request: CatchError holds a single error.
+                    catcher = xerror.CatchError(xerror.BadAccess)
+                    root.grab_key(
+                        keycode,
+                        mods | lock,
+                        False,
+                        X.GrabModeAsync,
+                        X.GrabModeAsync,
+                        onerror=catcher,
+                    )
+                    catchers.append(catcher)
+                    self._grabs.append((keycode, mods | lock))
+        try:
+            self._xdpy.sync()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] grabbing the navigation keys failed: {exc}")
+        if any(c.get_error() for c in catchers):
+            # Another client owns some of these combos; the rest still work.
+            print("[popup] some navigation keys are bound by another app")
+        self.active = True
+        self._watch_id = GLib.io_add_watch(
+            self._xdpy.fileno(),
+            GLib.PRIORITY_DEFAULT,
+            GLib.IOCondition.IN,
+            self._on_x_input,
+        )
+
+    def stop(self) -> None:
+        if self._watch_id is not None:
+            GLib.source_remove(self._watch_id)
+            self._watch_id = None
+        self.active = False
+        if self._grabs:
+            root = self._xdpy.screen().root
+            for keycode, mask in self._grabs:
+                try:
+                    root.ungrab_key(keycode, mask)
+                except Exception:
+                    pass
+            try:
+                self._xdpy.sync()
+                self.drain()  # drop presses that raced the ungrab
+            except Exception:
+                pass
+        self._grabs.clear()
+        self._names.clear()
+
+    def _on_x_input(self, _fd, _cond) -> bool:
+        try:
+            self.drain()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] reading navigation keys failed: {exc}")
+        return self._watch_id is not None
+
+    def drain(self) -> None:
+        """Handle the grabbed key presses queued on the Xlib connection.
+        Whoever else queries that connection must call it too: replies can
+        pull events off the socket before the fd watch sees them."""
+        while self._xdpy.pending_events():
+            event = self._xdpy.next_event()
+            if event.type != X.KeyPress or not self.active:
+                continue
+            name = self._names.get(event.detail)
+            if name is not None:
+                self._on_key(name, bool(event.state & X.ShiftMask))
 
 
 class _XInputPoll:
@@ -643,9 +747,7 @@ class PopupWindow:
         # the highlighted button, and the X11 key grabs that drive it.
         self._kbd_nav = False
         self._kbd_index = 0
-        self._kbd_grabs: list[tuple[int, int]] = []
-        self._kbd_keys: dict[int, str] = {}
-        self._kbd_watch_id: int | None = None
+        self._kbd_grab: _KeyGrab | None = None
 
     def _clear_buttons(self) -> None:
         # remove() drops the box's (only) GTK reference, which releases the
@@ -1384,87 +1486,25 @@ class PopupWindow:
     def _kbd_start(self) -> None:
         if self._xdpy is None or X is None:
             return
-        root = self._xdpy.screen().root
-        catchers = []
-        for name, with_shift in _NAV_KEYS.items():
-            keycode = self._xdpy.keysym_to_keycode(XK.string_to_keysym(name))
-            if not keycode:
-                continue
-            self._kbd_keys[keycode] = name
-            for mods in (0, X.ShiftMask) if with_shift else (0,):
-                for lock in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
-                    # One catcher per request: CatchError holds a single error.
-                    catcher = xerror.CatchError(xerror.BadAccess)
-                    root.grab_key(
-                        keycode,
-                        mods | lock,
-                        False,
-                        X.GrabModeAsync,
-                        X.GrabModeAsync,
-                        onerror=catcher,
-                    )
-                    catchers.append(catcher)
-                    self._kbd_grabs.append((keycode, mods | lock))
-        try:
-            self._xdpy.sync()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[popup] grabbing the navigation keys failed: {exc}")
-        if any(c.get_error() for c in catchers):
-            # Another client owns some of these combos; the rest still work.
-            print("[popup] some navigation keys are bound by another app")
+        self._kbd_grab = _KeyGrab(self._xdpy, _NAV_KEYS, self._kbd_key)
+        self._kbd_grab.start()
         self._kbd_nav = True
         self._kbd_select(0)
-        self._kbd_watch_id = GLib.io_add_watch(
-            self._xdpy.fileno(),
-            GLib.PRIORITY_DEFAULT,
-            GLib.IOCondition.IN,
-            self._kbd_on_x_input,
-        )
 
     def _kbd_stop(self) -> None:
-        if self._kbd_watch_id is not None:
-            GLib.source_remove(self._kbd_watch_id)
-            self._kbd_watch_id = None
         was_on, self._kbd_nav = self._kbd_nav, False
-        if self._kbd_grabs and self._xdpy is not None:
-            root = self._xdpy.screen().root
-            for keycode, mask in self._kbd_grabs:
-                try:
-                    root.ungrab_key(keycode, mask)
-                except Exception:
-                    pass
-            try:
-                self._xdpy.sync()
-                self._kbd_drain()  # drop presses that raced the ungrab
-            except Exception:
-                pass
-        self._kbd_grabs.clear()
-        self._kbd_keys.clear()
+        grab, self._kbd_grab = self._kbd_grab, None
+        if grab is not None:
+            grab.stop()
         if was_on:
             for btns in self._rows():
                 for btn in btns:
                     btn.remove_css_class("vinopop-selected")
 
-    def _kbd_on_x_input(self, _fd, _cond) -> bool:
-        try:
-            self._kbd_drain()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[popup] reading navigation keys failed: {exc}")
-        return self._kbd_watch_id is not None
-
     def _kbd_drain(self) -> None:
-        """Handle the grabbed key presses queued on the Xlib connection.
-        _tick calls it too: replies to its queries can pull events off the
-        socket before the fd watch sees them."""
-        if self._xdpy is None:
-            return
-        while self._xdpy.pending_events():
-            event = self._xdpy.next_event()
-            if event.type != X.KeyPress or not self._kbd_nav:
-                continue
-            name = self._kbd_keys.get(event.detail)
-            if name is not None:
-                self._kbd_key(name, bool(event.state & X.ShiftMask))
+        """_tick calls this: its queries share the grab's Xlib connection."""
+        if self._kbd_grab is not None:
+            self._kbd_grab.drain()
 
     def _kbd_select(self, index: int) -> None:
         flat = [b for btns in self._rows() for b in btns]
@@ -1493,6 +1533,8 @@ class PopupWindow:
         # auto-hide countdown rather than let it run out mid-choice.
         self._arm_initial_hide()
         if name in _ACTIVATE_KEYS:
+            global _kbd_activated_at
+            _kbd_activated_at = time.monotonic()
             index = min(self._kbd_index, len(flat) - 1)
             # Shift-click means "copy instead of paste"; don't let the
             # state of an earlier mouse press carry over to this key.

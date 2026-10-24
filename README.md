@@ -35,9 +35,13 @@ sudo dnf install -y python3 python3-gobject gtk4 libadwaita xdg-utils python3-py
 
 # Arch
 sudo pacman -S python python-gobject gtk4 libadwaita xdg-utils pyside6
+
+# openSUSE Tumbleweed
+sudo zypper install python3 python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 \
+    typelib-1_0-Adw-1 gdk-pixbuf-loader-rsvg xdg-utils python3-pyside6
 ```
 
-Then the packages for your desktop (same names on all three, except `python3-xlib` is `python-xlib` on Arch):
+Then the packages for your desktop (same names everywhere, except `python3-xlib` is `python-xlib` on Arch and `python3-python-xlib` on openSUSE, and `gtk4-layer-shell` is `typelib-1_0-Gtk4LayerShell-1_0` on openSUSE):
 
 | Desktop | Install | Why |
 |---|---|---|
@@ -54,6 +58,8 @@ bash install.sh
 pip install --user -r requirements-ai.txt   # optional: the offline AI and OCR
 vinopop
 ```
+
+**Fedora Atomic (Silverblue, Kinoite, Bazzite) and openSUSE Aeon:** vinoPop lives in your home directory, so only the system packages need layering, from a host terminal (not a toolbox: autostart runs vinoPop on the host). `install.sh` names whatever's missing as an `rpm-ostree install` (or `transactional-update pkg install` on Aeon) line. Reboot after layering, then run `install.sh` again. Keep the offline AI in a venv made with `--system-site-packages` inside the checkout (`python3 -m venv --system-site-packages .venv`, then `.venv/bin/pip install -r requirements-ai.txt`): `install.sh` picks up `.venv` on its own.
 
 `install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. `bash ~/vinopop/install.sh --uninstall` removes the launchers and lists what it left (settings, clipboard history, the model); add `--purge` to delete those too.
 
@@ -73,9 +79,18 @@ vinopop
 
 - **Select text** in any app and the bar appears above it.
 - **`Super+Shift+Y`** pops the bar at the cursor with whatever's selected, and closes it again. On X11 the arrow keys and Tab then move between its buttons and Enter or Space runs one.
-- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog.
+- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog. Drag a box, or from the keyboard: arrows place and move it, Shift+arrows resize, Enter reads it (or the whole screen if nothing is placed), Escape cancels.
 - **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
 - `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
+
+**Off KDE, bind the hotkeys in your desktop instead.** On GNOME, sway, Hyprland and COSMIC the built-in hotkeys are X11 grabs through XWayland, which only fire while an X11 window has focus. A shortcut your desktop runs works in every app: point it at `vinopop --trigger popup` (or `ocr`, `clipboard`) and clear the matching hotkey in vinoPop's Settings so the two don't fight.
+
+| Desktop | Where |
+|---|---|
+| GNOME | Settings → Keyboard → Custom Shortcuts, command `/home/you/.local/bin/vinopop --trigger popup` (GNOME doesn't expand `~`) |
+| sway | `bindsym $mod+Shift+y exec ~/.local/bin/vinopop --trigger popup` |
+| Hyprland | `bind = SUPER SHIFT, Y, exec, ~/.local/bin/vinopop --trigger popup` |
+| COSMIC | Settings → Keyboard → Custom shortcuts, same command as GNOME |
 
 <p align="center"><img src="docs/media/clipboard.svg" width="800" alt="In a reply drafted in Kate, Super+Shift+V opens the vinoPop clipboard picker on its Recent tab: a GitHub link, a screenshot, a modprobe command and a pinned note. Tab switches to Snippets, typing sig filters to ;sig and ;sign-off, and Enter pastes Thanks, Karan and today's date where the caret was."></p>
 

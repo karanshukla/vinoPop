@@ -21,6 +21,13 @@ if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
+# `--trigger` only pokes the running daemon over D-Bus: no GTK, no lock.
+if __name__ == "__main__":
+    from core import remote
+
+    if (_action := remote.trigger_arg(sys.argv[1:])) is not None:
+        sys.exit(remote.send(_action))
+
 from platform_backend import detect as detect_backend  # noqa: E402
 from platform_backend import is_wayland_session  # noqa: E402
 
@@ -292,6 +299,7 @@ class App:
         self._start_hotkey()
         self._start_clipboard_hotkey()
         self._start_ocr_hotkey()
+        self._start_remote()
         self._maybe_start_dblclick_watcher()
         if enable_tray:
             self._start_tray()
@@ -654,6 +662,20 @@ class App:
         )
         self.hotkey.start()
         self._bound_hotkey = hotkey_str
+
+    def _start_remote(self) -> None:
+        """`vinopop --trigger ...` from a shortcut set in the desktop's own
+        settings (core/remote.py). Calls arrive on the GTK thread, like a
+        KGlobalAccel press."""
+        from core import remote
+
+        remote.serve(
+            {
+                "popup": self._on_popup_hotkey,
+                "ocr": self._on_ocr_hotkey,
+                "clipboard": self._on_clipboard_hotkey,
+            }
+        )
 
     def _start_ocr_hotkey(self) -> None:
         hotkey_str = (self.settings.get("ocr_hotkey") or "").strip()
@@ -1034,6 +1056,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Check what offline AI needs (OpenVINO, devices, ovfetch, models) and exit",
     )
     p.add_argument("--json", action="store_true", help="With --doctor: machine-readable output")
+    p.add_argument(
+        "--trigger",
+        choices=("popup", "ocr", "clipboard"),
+        help="Run that hotkey's action in the running vinoPop and exit, for a shortcut "
+        "set in your desktop's settings",
+    )
     return p.parse_args(argv)
 
 

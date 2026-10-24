@@ -2,8 +2,8 @@
 
 User holds a hotkey, drags a rectangle, the rectangle's contents land
 on the clipboard as text. Capture uses the overlay selector or the
-desktop's own region tool (spectacle, grim+slurp, maim, or
-gnome-screenshot); recognition is PP-OCR running
+desktop's own region tool (spectacle, grim+slurp, maim, gnome-screenshot,
+or the xdg-desktop-portal's Screenshot); recognition is PP-OCR running
 offline on OpenVINO (vino_ai.ocr), on the CPU.
 
 Why this matters beyond a one-off screenshot tool: the vinoPop popup
@@ -18,11 +18,13 @@ pipeline lights up automatically.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from core import distro
 from platform_backend.base import expect_selection
 
 log = logging.getLogger("vinopop")
@@ -56,48 +58,52 @@ def _stage_text(text: str) -> None:
                 pass
 
 
-def _distro_id() -> str:
-    """Read /etc/os-release ID + ID_LIKE so we can pick the right
-    package manager. ID_LIKE is the fallback distro family (e.g.
-    Pop_OS has ID=pop, ID_LIKE=ubuntu debian) so we don't need to
-    enumerate every derivative."""
-    try:
-        text = Path("/etc/os-release").read_text()
-    except OSError:
-        return ""
-    info: dict[str, str] = {}
-    for line in text.splitlines():
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        info[k.strip()] = v.strip().strip('"').strip("'")
-    return f"{info.get('ID', '')} {info.get('ID_LIKE', '')}".lower()
+def _capture_packages() -> list[str]:
+    """The region-capture tool that works on this desktop. maim only sees
+    X11, so on a Wayland session it would grab XWayland windows and black:
+    wlroots compositors get grim + slurp, KDE spectacle, GNOME
+    gnome-screenshot (allowed to use GNOME Shell's screenshot API)."""
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return ["maim"]
+    desktops = {d.strip().upper() for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")}
+    if "KDE" in desktops:
+        return ["spectacle"]
+    if "GNOME" in desktops:
+        return ["gnome-screenshot"]
+    return ["grim", "slurp"]
 
 
 def install_command() -> str:
     """Install command for the capture tool, for when no region-capture
-    tool is present (KDE and GNOME ship one, so this is mostly X11 WMs)."""
-    ids = _distro_id()
+    tool is present."""
+    return distro.install_command(_capture_packages())
 
-    def has(needles: tuple[str, ...]) -> bool:
-        return any(n in ids for n in needles)
 
-    if has(("fedora", "rhel", "centos", "rocky", "alma")):
-        return "sudo dnf install -y maim"
-    if has(("arch", "manjaro", "endeavouros")):
-        return "sudo pacman -S --noconfirm maim"
-    if has(("opensuse", "suse")):
-        return "sudo zypper --non-interactive install maim"
-    return "sudo apt install -y maim"
+def _wayland() -> bool:
+    import os
+
+    return bool(os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _portal_available() -> bool:
+    try:
+        from capture import portal_screenshot
+
+        return portal_screenshot.available()
+    except Exception:  # noqa: BLE001 - no Gio, no portal
+        return False
 
 
 def _has_capture_tool() -> bool:
-    """True if a supported region-capture tool is available on PATH."""
+    """True if a supported region-capture tool is available: one on PATH
+    (maim only outside Wayland, where it sees just XWayland's windows), or
+    the desktop portal's Screenshot (GNOME has nothing else)."""
     return bool(
         shutil.which("spectacle")
         or shutil.which("grim")
-        or shutil.which("maim")
+        or (shutil.which("maim") and not _wayland())
         or shutil.which("gnome-screenshot")
+        or _portal_available()
     )
 
 
@@ -119,26 +125,12 @@ def is_supported() -> tuple[bool, str]:
 def install_argv() -> list[str] | None:
     """A pkexec argv that installs a capture tool when none is present
     (pkexec shows a graphical auth prompt). Returns None when nothing
-    installable is missing, or we don't recognise the package manager. The
-    OCR engine itself comes from pip (`vinopop[ai]`), not the distro."""
+    installable is missing, the package manager is unknown, or /usr is
+    read-only (Fedora Atomic, openSUSE Aeon: see core.distro). The OCR
+    engine itself comes from pip (`vinopop[ai]`), not the distro."""
     if _has_capture_tool():
         return None
-    ids = _distro_id()
-
-    def has(needles: tuple) -> bool:
-        return any(n in ids for n in needles)
-
-    if has(("fedora", "rhel", "centos", "rocky", "alma")):
-        return ["pkexec", "dnf", "install", "-y", "maim"]
-    if has(("arch", "manjaro", "endeavouros")):
-        return ["pkexec", "pacman", "-S", "--noconfirm", "maim"]
-    if has(("opensuse", "suse")):
-        return ["pkexec", "zypper", "--non-interactive", "install", "maim"]
-    if has(
-        ("debian", "ubuntu", "mint", "pop", "elementary", "zorin", "neon", "kali", "deepin", "mx")
-    ):
-        return ["pkexec", "apt-get", "install", "-y", "maim"]
-    return None
+    return distro.install_argv(_capture_packages())
 
 
 def _has_image(path: Path) -> bool:
@@ -184,7 +176,7 @@ def _capture_region(out_path: Path) -> bool:
             return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
-    if shutil.which("maim"):
+    if shutil.which("maim") and not _wayland():
         # `-s` puts maim in interactive region-select mode; output goes
         # to stdout if we don't pass a filename. We use a filename so
         # the OCR step can read it back.
@@ -213,7 +205,25 @@ def _capture_region(out_path: Path) -> bool:
             return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
-    return False
+    # Last: the desktop's own picker through the portal (GNOME's region UI).
+    shot = _portal_region()
+    if shot is None:
+        return False
+    try:
+        shutil.move(shot, out_path)
+    except OSError:
+        return False
+    return _has_image(out_path)
+
+
+def _portal_region() -> str | None:
+    try:
+        from capture import portal_screenshot
+
+        return portal_screenshot.screenshot(interactive=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[ocr] portal screenshot failed: %s", exc)
+        return None
 
 
 def _recognize(image_path: Path) -> str | None:

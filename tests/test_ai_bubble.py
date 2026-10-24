@@ -1,5 +1,7 @@
 """A superseded AI run must not write into the bubble's next run."""
 
+from types import SimpleNamespace
+
 import pytest
 
 pytest.importorskip("gi")
@@ -128,6 +130,7 @@ def _headless_bubble(ai_bubble, monkeypatch):
     b._text_lbl, b._warn_lbl = _Widget(), _Widget()
     b._copy_btn, b._replace_btn = _Widget(), _Widget()
     b._spinner = _Widget()
+    b._kbd_grab = None  # opened with the pointer
     monkeypatch.setattr(b, "_arm_timeout", lambda: None, raising=False)
     monkeypatch.setattr(b, "_queue_replace", lambda: None, raising=False)  # no window to measure
     b.announced = []
@@ -213,3 +216,137 @@ def test_dead_bubble_stops_the_stall_check(ai_bubble, monkeypatch):
     b._dead = True
     b._stall_id = 7
     assert b._check_stall() is False and b._stall_id is None
+
+
+# ---- keyboard (#124) ---------------------------------------------------------
+
+
+@pytest.fixture
+def kbd_bubble(ai_bubble, monkeypatch):
+    """A real bubble (not shown) in keyboard mode, with the X grab faked:
+    Copy, Replace and Close, and a log of what ran and what was spoken."""
+    from gi.repository import Gdk
+
+    from ui import gtk4_app
+
+    try:
+        gtk4_app.init()
+    except Exception as exc:  # Gtk.init() raises without a display
+        pytest.skip(f"no display: {exc}")
+    if Gdk.Display.get_default() is None:
+        pytest.skip("no display")
+    log: list = []
+    import platform_backend
+
+    backend = SimpleNamespace(
+        name="x11",
+        popup_uses_xlib=False,
+        pointer_is_logical=True,
+        set_clipboard=lambda t: log.append(("copy", t)),
+    )
+    monkeypatch.setattr(platform_backend, "get_backend", lambda: backend)
+
+    class _Grab:
+        def stop(self):
+            log.append(("ungrab",))
+
+    b = ai_bubble.ResultBubble(
+        "Rewrite", 0, 0, on_replace=lambda t: log.append(("replace", t)), keyboard=True
+    )
+    b._kbd_grab = _Grab()
+    b._say = lambda m: log.append(("say", m))
+    b._announce = lambda m: log.append(("announce", m))
+    b._kbd_select(0)
+    yield b, log
+    b.dismiss()
+
+
+def _selected(b):
+    return [b._chip_name(c) for c in b._chips if c.has_css_class("vinopop-selected")]
+
+
+def test_keyboard_picks_a_chip_and_announces_it(kbd_bubble):
+    b, log = kbd_bubble
+    assert _selected(b) == ["Copy"]
+    # Still streaming: the chips are off, and say so
+    assert log[-1] == ("say", "Copy, not available yet")
+    assert b._kbd_key("Right")
+    assert _selected(b) == ["Replace"]
+    assert b._kbd_key("Tab")
+    assert _selected(b) == ["Close"]
+    assert b._kbd_key("Right")  # wraps
+    assert _selected(b) == ["Copy"]
+    assert b._kbd_key("Tab", shift=True)
+    assert b._kbd_key("Left")
+    assert _selected(b) == ["Replace"]
+    assert not b._kbd_key("a")
+
+
+def test_enter_waits_for_the_answer(kbd_bubble):
+    b, log = kbd_bubble
+    assert b._kbd_key("Return")
+    assert ("say", "The answer isn't ready yet") in log
+    assert not any(e[0] in ("copy", "ungrab") for e in log)
+
+
+def test_enter_copies_then_hands_the_keys_back(kbd_bubble):
+    b, log = kbd_bubble
+    b._finish("new text", None)
+    # The answer is read out with the way to act on it
+    assert log[-1] == ("announce", "new text Copy is selected; press Enter.")
+    assert b._kbd_key("Return")
+    assert ("copy", "new text") in log and ("say", "Copied") in log
+    assert ("ungrab",) in log and b._kbd_grab is None
+    assert _selected(b) == []
+    # Keys are the app's again: nothing more is handled
+    assert not b._kbd_key("Return")
+
+
+def test_enter_on_replace_ungrabs_before_pasting(kbd_bubble):
+    b, log = kbd_bubble
+    b._finish("new text", None)
+    b._kbd_key("Right")
+    b._kbd_key("KP_Enter")
+    # The paste goes to the source app, so its keys are released first
+    assert log.index(("ungrab",)) < log.index(("replace", "new text"))
+
+
+def test_replace_says_why_when_the_answer_is_incomplete(kbd_bubble):
+    b, log = kbd_bubble
+    b._finish("part", None, warning="Cut short.")
+    b._kbd_key("Right")
+    b._kbd_key("Return")
+    assert not any(e[0] == "replace" for e in log)
+    assert log[-1][1].startswith("The answer is incomplete")
+
+
+def test_escape_closes(kbd_bubble):
+    b, log = kbd_bubble
+    assert b._kbd_key("Escape")
+    assert b._dead and ("ungrab",) in log
+
+
+def test_only_a_keyboard_run_action_opens_a_keyboard_bubble(ai_bubble, monkeypatch):
+    from gi.repository import GLib
+
+    from ui import popup
+
+    built = []
+
+    class _Bubble:
+        def __init__(self, *_a, keyboard=False, **_kw):
+            built.append(keyboard)
+
+        def present(self):
+            pass
+
+    monkeypatch.setattr(ai_bubble, "ResultBubble", _Bubble)
+    monkeypatch.setattr(ai_bubble, "pointer_position", lambda: (0, 0))
+    monkeypatch.setattr(GLib, "idle_add", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(popup, "_kbd_activated_at", 0.0)
+    ai_bubble.show("Summary", lambda _b: None)
+    # Popup key grabs steal those keys from the app, so a clicked action
+    # mustn't get them
+    monkeypatch.setattr(popup, "_kbd_activated_at", popup.time.monotonic())
+    ai_bubble.show("Summary", lambda _b: None)
+    assert built == [False, True]
