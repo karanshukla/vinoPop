@@ -100,12 +100,12 @@ def _stop_notification(stop):
     return _end
 
 
-def _media_controls(text: str, stop):
+def _media_controls(stop):
     """Media keys and the desktop's player widgets stop it too."""
     try:
         from core import mpris
 
-        return mpris.playing(text, stop)
+        return mpris.playing(stop)
     except Exception:  # noqa: BLE001 - no GLib (tests), no session bus
         return lambda: None
 
@@ -158,7 +158,7 @@ def _read(text: str) -> None:
         _busy.release()
     end_watch = _esc_watch(tts.stop)
     end_offer = _stop_notification(tts.stop)
-    end_media = _media_controls(text, tts.stop)
+    end_media = _media_controls(tts.stop)
     try:
         speech.wait()
     except Exception as exc:  # noqa: BLE001

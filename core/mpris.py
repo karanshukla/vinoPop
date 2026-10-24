@@ -4,7 +4,8 @@ The desktop's media controls (the keyboard's play/pause and stop keys,
 KDE's media widget, GNOME's notification-area player, the lock screen)
 find players on the session bus by their org.mpris.MediaPlayer2.* name.
 vinoPop owns one only for as long as the voice plays. vinoSpeak can stop
-but not pause, so Pause, PlayPause and Stop all stop it.
+but not pause, so Pause, PlayPause and Stop all stop it. The track title is
+always "Reading aloud", never the text: the lock screen shows it.
 
 Only GLib/Gio here, like core/remote.py.
 """
@@ -23,7 +24,7 @@ TRACK_ID = "/io/github/karanshukla/vinoPop/speech"
 IDENTITY = "vinoPop"
 DESKTOP_ENTRY = "io.github.karanshukla.vinoPop"
 ART = Path(__file__).resolve().parent.parent / "icons" / "vinopop-vinospeak.svg"
-TITLE_CHARS = 80
+TITLE = "Reading aloud"
 
 _XML = """
 <node>
@@ -71,20 +72,14 @@ _XML = """
 _STOPS = {"Pause", "PlayPause", "Stop"}
 
 
-def title(text: str) -> str:
-    """The track title: the start of what's being read, on one line."""
-    text = " ".join(text.split())
-    return text if len(text) <= TITLE_CHARS else text[: TITLE_CHARS - 1].rstrip() + "…"
-
-
-def properties(text: str) -> dict[str, dict[str, object]]:
+def properties() -> dict[str, dict[str, object]]:
     """Every property, by interface, as GLib.Variants."""
     from gi.repository import GLib
 
     v = GLib.Variant
     metadata = {
         "mpris:trackid": v("o", TRACK_ID),
-        "xesam:title": v("s", title(text)),
+        "xesam:title": v("s", TITLE),
         "xesam:artist": v("as", ["vinoSpeak"]),
     }
     if ART.is_file():
@@ -117,13 +112,13 @@ def properties(text: str) -> dict[str, dict[str, object]]:
     }
 
 
-def playing(text: str, on_stop: Callable[[], None]) -> Callable[[], None]:
-    """Show `text` as the playing track until the returned function is
+def playing(on_stop: Callable[[], None]) -> Callable[[], None]:
+    """Show Read aloud as the playing track until the returned function is
     called; a stop from the desktop's media controls calls on_stop. Runs on
     the GLib main loop, so it is safe from any thread."""
     from gi.repository import Gio, GLib
 
-    props = properties(text)
+    props = properties()
     node = Gio.DBusNodeInfo.new_for_xml(_XML)
     state: dict = {"ended": False}
 
