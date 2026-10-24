@@ -83,6 +83,15 @@ vinopop
 - **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
 - `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
 
+**Off KDE, bind the hotkeys in your desktop instead.** On GNOME, sway, Hyprland and COSMIC the built-in hotkeys are X11 grabs through XWayland, which only fire while an X11 window has focus. A shortcut your desktop runs works in every app: point it at `vinopop --trigger popup` (or `ocr`, `clipboard`) and clear the matching hotkey in vinoPop's Settings so the two don't fight.
+
+| Desktop | Where |
+|---|---|
+| GNOME | Settings → Keyboard → Custom Shortcuts, command `/home/you/.local/bin/vinopop --trigger popup` (GNOME doesn't expand `~`) |
+| sway | `bindsym $mod+Shift+y exec ~/.local/bin/vinopop --trigger popup` |
+| Hyprland | `bind = SUPER SHIFT, Y, exec, ~/.local/bin/vinopop --trigger popup` |
+| COSMIC | Settings → Keyboard → Custom shortcuts, same command as GNOME |
+
 <p align="center"><img src="docs/media/clipboard.svg" width="800" alt="In a reply drafted in Kate, Super+Shift+V opens the vinoPop clipboard picker on its Recent tab: a GitHub link, a screenshot, a modprobe command and a pinned note. Tab switches to Snippets, typing sig filters to ;sig and ;sign-off, and Enter pastes Thanks, Karan and today's date where the caret was."></p>
 
 ## Settings and plugins
