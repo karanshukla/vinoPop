@@ -206,3 +206,39 @@ def test_overlay_show_error_surfaces_and_deletes_the_shot(tmp_path, gtk_thread):
 def test_a_frozen_gtk_loop_is_a_timeout_not_a_hang():
     with pytest.raises(TimeoutError):
         screen_ocr._on_gtk_thread(lambda: 1, 0.05, idle_add=lambda fn: None)
+
+
+# ---- which capture tools count (GNOME has only the portal) ------------------
+
+
+def _only(monkeypatch, tools, portal):
+    monkeypatch.setattr(
+        screen_ocr.shutil, "which", lambda n: f"/usr/bin/{n}" if n in tools else None
+    )
+    monkeypatch.setattr(screen_ocr, "_portal_available", lambda: portal)
+
+
+def test_maim_does_not_count_on_wayland(monkeypatch):
+    # Under XWayland maim only sees XWayland's windows and black.
+    _only(monkeypatch, {"maim"}, portal=False)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert not screen_ocr._has_capture_tool()
+    monkeypatch.delenv("WAYLAND_DISPLAY")
+    assert screen_ocr._has_capture_tool()
+
+
+def test_the_portal_alone_is_enough(monkeypatch):
+    _only(monkeypatch, set(), portal=True)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert screen_ocr._has_capture_tool()
+
+
+def test_region_falls_back_to_the_portal_picker(monkeypatch, tmp_path):
+    _only(monkeypatch, {"maim"}, portal=True)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    shot = tmp_path / "portal.png"
+    shot.write_bytes(b"png")
+    monkeypatch.setattr(screen_ocr, "_portal_region", lambda: str(shot))
+    out = tmp_path / "out.png"
+    assert screen_ocr._capture_region(out)
+    assert out.read_bytes() == b"png" and not shot.exists()

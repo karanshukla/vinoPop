@@ -122,3 +122,22 @@ def test_box_stays_on_screen(sel_mod):
     # Growing stops at the edge, shrinking at the minimum size
     assert nudge((340, 240, 50, 50), 1, 1, True, 50, W, H) == (340, 240, 60, 60)
     assert nudge((0, 0, 12, 12), -1, -1, True, 10, W, H) == (0, 0, 8, 8)
+
+
+def test_grabbers_skip_maim_on_wayland_and_end_with_the_portal(sel_mod, monkeypatch):
+    from capture import portal_screenshot
+
+    monkeypatch.setattr(sel_mod.shutil, "which", lambda n: f"/usr/bin/{n}" if n == "maim" else None)
+    monkeypatch.setattr(portal_screenshot, "available", lambda: True)
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert sel_mod._grabbers() == ["portal"]
+    monkeypatch.delenv("WAYLAND_DISPLAY")
+    assert sel_mod._grabbers() == ["maim", "portal"]
+
+
+def test_grab_moves_on_when_a_tool_gives_nothing(sel_mod, monkeypatch):
+    # grim is sometimes installed on GNOME, where it can't capture.
+    monkeypatch.setattr(sel_mod, "_grabbers", lambda: ["grim", "portal"])
+    monkeypatch.setattr(sel_mod, "_grab_with", lambda tool, monitor: None)
+    monkeypatch.setattr(sel_mod, "_portal_grab", lambda monitor: "/tmp/shot.png")
+    assert sel_mod.grab() == "/tmp/shot.png"
