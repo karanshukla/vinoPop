@@ -70,9 +70,21 @@ def _packages() -> list[Result]:
         ("openvino_genai", "openvino-genai", "summarize, rewrite, explain, translate"),
         ("rapidocr", "rapidocr", "screen OCR"),
         ("huggingface_hub", "huggingface_hub", "the one-time model download"),
+        ("vino_speak", "vinospeak", "read aloud"),
     ):
         version = _version(module)
-        if version is None:
+        if version is None and module == "vino_speak":
+            # One optional button, newer than the rest of the stack: an
+            # install from before it isn't broken
+            results.append(
+                Result(
+                    WARN,
+                    label,
+                    f"missing, needed for {needed_for}",
+                    "pip install --user -r requirements-ai.txt",
+                )
+            )
+        elif version is None:
             results.append(
                 Result(
                     FAIL,
@@ -271,6 +283,43 @@ def _models() -> list[Result]:
             )
         ]
     return results + [_model_files(model, path)]
+
+
+def _tts_model() -> list[Result]:
+    """vinoSpeak's Kokoro download, which it pins and hashes itself. Read
+    aloud uses vinoSpeak's default directory, shared with its CLI."""
+    if importlib.util.find_spec("vino_speak") is None:
+        return []
+    from vino_speak import model as kokoro
+
+    path = kokoro.default_model_dir()
+    if not path.is_dir():
+        return [
+            Result(
+                UNKNOWN,
+                "tts model",
+                f"{kokoro.MODEL_ID} not downloaded yet; the first Read aloud fetches it (~160 MB)",
+            )
+        ]
+    if not kokoro.model_is_ready(path):
+        return [
+            Result(
+                UNKNOWN,
+                "tts model",
+                f"{kokoro.MODEL_ID} at {path} is a partial download; the next Read aloud finishes it",
+            )
+        ]
+    problems = kokoro.verify(path)
+    if problems:
+        return [
+            Result(
+                FAIL,
+                "tts model",
+                f"{kokoro.MODEL_ID} at {path}: {problems[0]}",
+                f"rm -rf {path}, and the next Read aloud downloads it again",
+            )
+        ]
+    return [Result(OK, "tts model", f"{kokoro.MODEL_ID} at {path}, every file matches its pin")]
 
 
 def _model_files(model, path) -> Result:
@@ -500,7 +549,7 @@ def collect() -> list[Result]:
     results += _grouped("privacy", _telemetry())
     results += _grouped("devices", _devices())
     results += _grouped("npu", _npu() + _ovfetch() + _failures())
-    results += _grouped("model", _models())
+    results += _grouped("model", _models() + _tts_model())
     results += _grouped("input", _input())
     return results
 

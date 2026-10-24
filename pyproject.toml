@@ -30,6 +30,7 @@ ai = [
     "rapidocr>=3.10",
     "huggingface_hub>=0.30",
     "tqdm>=4.66",  # vino_ai/models.py imports it for the download progress bar
+    "vinospeak==0.1.1",  # read aloud
 ]
 
 # ── uv ────────────────────────────────────────────────────────────────────────

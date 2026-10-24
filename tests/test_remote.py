@@ -52,8 +52,11 @@ def test_round_trip_over_the_session_bus(monkeypatch):
         GLib.idle_add(loop.quit)
 
     GLib.timeout_add_seconds(10, loop.quit)
-    threading.Thread(target=client, daemon=True).start()
+    thread = threading.Thread(target=client, daemon=True)
+    thread.start()
     loop.run()
+    # The popup handler quits the loop before send() returns to the client
+    thread.join(timeout=5)
     from gi.repository import Gio
 
     Gio.bus_unown_name(owner)

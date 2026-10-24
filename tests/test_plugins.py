@@ -178,7 +178,7 @@ def test_retired_files_are_not_in_the_catalogue():
     from plugin_system import plugin_loader
 
     retired = plugin_loader.retired_bundled()
-    assert {"speak.py", "define.json"} <= set(retired)
+    assert {"rot13.py", "define.json"} <= set(retired)
     assert not set(retired) & {e["file"] for e in _manifest()}
     assert not [name for name in retired if (PLUGINS / name).exists()]
 
@@ -222,3 +222,15 @@ def test_updating_a_recipe_keeps_its_on_off_switch(tmp_path, monkeypatch):
     assert data["action"]["template"] == "new"
     # Turning a current recipe off doesn't make it look out of date
     assert plugin_loader.bundled_status(src, dst, 2) == "current"
+
+
+def test_an_old_espeak_speak_py_is_offered_read_aloud(tmp_path):
+    # The spd-say speak.py was retired; its name came back for vinoSpeak
+    # (#45), so an old copy (no version line) shows as outdated, not retired
+    from plugin_system import plugin_loader
+
+    old = tmp_path / "speak.py"
+    old.write_text('"""Speak the selection aloud via spd-say (speech-dispatcher) or espeak."""\n')
+    entry = next(e for e in _manifest() if e["file"] == "speak.py")
+    assert "speak.py" not in plugin_loader.retired_bundled()
+    assert plugin_loader.bundled_status(PLUGINS / "speak.py", old, entry["version"]) == "outdated"
