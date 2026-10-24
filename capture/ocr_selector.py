@@ -34,17 +34,33 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
 from platform_backend.monitors import monitor_at  # noqa: E402
 
 
+def _grabbers() -> list[str]:
+    """The full-screen grabbers to try, best first. maim is X11-only: in a
+    Wayland session it sees XWayland's windows and black, so it's left out
+    there. The portal comes last: it's the only one GNOME has, and it's a
+    D-Bus round trip (plus a first-use prompt on some desktops)."""
+    tools = [t for t in ("spectacle", "grim") if shutil.which(t)]
+    if not os.environ.get("WAYLAND_DISPLAY") and shutil.which("maim"):
+        tools.append("maim")
+    try:
+        from capture import portal_screenshot
+
+        if portal_screenshot.available():
+            tools.append("portal")
+    except Exception:  # noqa: BLE001 - no Gio, no portal
+        pass
+    return tools
+
+
 def _grabber() -> str | None:
     """Name of the first available full-screen grabber, or None."""
-    for tool in ("spectacle", "grim", "maim"):
-        if shutil.which(tool):
-            return tool
-    return None
+    tools = _grabbers()
+    return tools[0] if tools else None
 
 
 def monitor_count() -> int:
@@ -113,14 +129,56 @@ def _capture_argv(tool: str, path: str, monitor=None) -> list[str]:
 
 def grab(monitor=None) -> str | None:
     """Grab the screen (or just `monitor`) to a temp PNG with no UI.
-    spectacle is the KWin-native path; grim covers wlroots; maim covers X11.
-    Blocks for the length of the screenshot (spectacle takes a good part of
-    a second), so call it from a worker thread.
+    spectacle is the KWin-native path; grim covers wlroots; maim covers X11;
+    the portal covers GNOME. Tries each until one gives a picture (grim is
+    installed on GNOME sometimes and fails there). Blocks for the length of
+    the screenshot (spectacle takes a good part of a second), so call it
+    from a worker thread.
 
     The PNG is written to a temporary file in the user's runtime environment."""
-    tool = _grabber()
-    if not tool:
+    for tool in _grabbers():
+        path = _portal_grab(monitor) if tool == "portal" else _grab_with(tool, monitor)
+        if path:
+            return path
+    return None
+
+
+def _portal_grab(monitor) -> str | None:
+    from capture import portal_screenshot
+
+    path = portal_screenshot.screenshot(interactive=False, timeout_s=15)
+    if path and monitor is not None and not _crop_to_monitor(path, monitor):
+        os.unlink(path)
         return None
+    return path
+
+
+def _crop_to_monitor(path: str, monitor) -> bool:
+    """The portal always returns the whole desktop; cut out `monitor`. The
+    image spans the monitors' logical bounding box, at whatever scale the
+    backend picked, so the scale comes from the image width."""
+    display = Gdk.Display.get_default()
+    if display is None:
+        return False
+    rects = [m.get_geometry() for m in display.get_monitors()]
+    left = min(r.x for r in rects)
+    top = min(r.y for r in rects)
+    width = max(r.x + r.width for r in rects) - left
+    try:
+        full = GdkPixbuf.Pixbuf.new_from_file(path)
+        scale = full.get_width() / width
+        g = monitor.get_geometry()
+        x, y = round((g.x - left) * scale), round((g.y - top) * scale)
+        w = min(round(g.width * scale), full.get_width() - x)
+        h = min(round(g.height * scale), full.get_height() - y)
+        full.new_subpixbuf(x, y, w, h).savev(path, "png", [], [])
+    except (GLib.Error, ValueError, ZeroDivisionError) as exc:
+        print(f"[ocr] could not crop the portal screenshot to one monitor: {exc}")
+        return False
+    return True
+
+
+def _grab_with(tool: str, monitor) -> str | None:
     fd, path = tempfile.mkstemp(suffix=".png", prefix="lp-ocr-full-")
     os.close(fd)
     argv = _capture_argv(tool, path, monitor)

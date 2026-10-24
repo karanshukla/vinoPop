@@ -2,8 +2,8 @@
 
 User holds a hotkey, drags a rectangle, the rectangle's contents land
 on the clipboard as text. Capture uses the overlay selector or the
-desktop's own region tool (spectacle, grim+slurp, maim, or
-gnome-screenshot); recognition is PP-OCR running
+desktop's own region tool (spectacle, grim+slurp, maim, gnome-screenshot,
+or the xdg-desktop-portal's Screenshot); recognition is PP-OCR running
 offline on OpenVINO (vino_ai.ocr), on the CPU.
 
 Why this matters beyond a one-off screenshot tool: the vinoPop popup
@@ -79,13 +79,31 @@ def install_command() -> str:
     return distro.install_command(_capture_packages())
 
 
+def _wayland() -> bool:
+    import os
+
+    return bool(os.environ.get("WAYLAND_DISPLAY"))
+
+
+def _portal_available() -> bool:
+    try:
+        from capture import portal_screenshot
+
+        return portal_screenshot.available()
+    except Exception:  # noqa: BLE001 - no Gio, no portal
+        return False
+
+
 def _has_capture_tool() -> bool:
-    """True if a supported region-capture tool is available on PATH."""
+    """True if a supported region-capture tool is available: one on PATH
+    (maim only outside Wayland, where it sees just XWayland's windows), or
+    the desktop portal's Screenshot (GNOME has nothing else)."""
     return bool(
         shutil.which("spectacle")
         or shutil.which("grim")
-        or shutil.which("maim")
+        or (shutil.which("maim") and not _wayland())
         or shutil.which("gnome-screenshot")
+        or _portal_available()
     )
 
 
@@ -158,7 +176,7 @@ def _capture_region(out_path: Path) -> bool:
             return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
-    if shutil.which("maim"):
+    if shutil.which("maim") and not _wayland():
         # `-s` puts maim in interactive region-select mode; output goes
         # to stdout if we don't pass a filename. We use a filename so
         # the OCR step can read it back.
@@ -187,7 +205,25 @@ def _capture_region(out_path: Path) -> bool:
             return res.returncode == 0 and _has_image(out_path)
         except subprocess.TimeoutExpired:
             return False
-    return False
+    # Last: the desktop's own picker through the portal (GNOME's region UI).
+    shot = _portal_region()
+    if shot is None:
+        return False
+    try:
+        shutil.move(shot, out_path)
+    except OSError:
+        return False
+    return _has_image(out_path)
+
+
+def _portal_region() -> str | None:
+    try:
+        from capture import portal_screenshot
+
+        return portal_screenshot.screenshot(interactive=True)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[ocr] portal screenshot failed: %s", exc)
+        return None
 
 
 def _recognize(image_path: Path) -> str | None:
