@@ -105,7 +105,7 @@ def test_stop_says_whether_anything_was_playing():
 
 
 def test_idle_unload_waits_for_the_speech_to_end(monkeypatch):
-    now = [tts.time.monotonic()]
+    now = [1000.0]  # whole seconds, so the 300 s boundary is exact
     monkeypatch.setattr(tts.time, "monotonic", lambda: now[0])
     speech = tts.speak("A long passage.")
     now[0] += 301
