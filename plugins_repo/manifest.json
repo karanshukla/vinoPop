@@ -27,7 +27,7 @@
   },
   {
     "file": "speak.py",
-    "version": 1,
+    "version": 2,
     "title": "Read aloud",
     "description": "Reads the selection aloud with vinoSpeak's Kokoro voice, on your NPU (GPU or CPU if there's none) through OpenVINO. Nothing leaves your machine; the voice downloads once on first use. Click again or press Esc to stop.",
     "category": "AI",
@@ -37,7 +37,7 @@
       "accessibility",
       "speech"
     ],
-    "icon": "audio-speakers-symbolic"
+    "icon": "vinopop-vinospeak-symbolic"
   },
   {
     "file": "editing_actions.py",

@@ -31,6 +31,7 @@ _CONCEPT_BY_ICON = {
     "vinopop-json-symbolic": "json",
     "vinopop-qr-symbolic": "qr",
     "vinopop-wordcount-symbolic": "wordcount",
+    "vinopop-vinospeak-symbolic": "vinospeak",
     # Converters and case changes: each action has its own pair, so a plugin's
     # buttons never mix a tile with a glyph (encode used to get the tile and
     # decode the glyph).

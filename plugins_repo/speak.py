@@ -1,4 +1,4 @@
-# vinopop-plugin-version: 1
+# vinopop-plugin-version: 2
 """Read the selection aloud, offline, with vinoSpeak.
 
 Kokoro-82M on the NPU through OpenVINO GenAI (GPU or CPU when there's no
@@ -95,7 +95,7 @@ def register(register_plugin) -> None:
     register_plugin(
         Plugin(
             name="speak",
-            icon="audio-speakers-symbolic",
+            icon="vinopop-vinospeak-symbolic",
             tooltip=_TITLE,
             handler=_read,
             priority=45,

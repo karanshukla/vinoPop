@@ -170,7 +170,7 @@ def test_plugin_registers_read_aloud(plugin):
     registered = []
     speak.register(registered.append)
     assert [(p.name, p.icon, p.tooltip) for p in registered] == [
-        ("speak", "audio-speakers-symbolic", "Read aloud")
+        ("speak", "vinopop-vinospeak-symbolic", "Read aloud")
     ]
 
 
