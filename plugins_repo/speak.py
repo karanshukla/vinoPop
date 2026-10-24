@@ -1,9 +1,10 @@
-# vinopop-plugin-version: 2
+# vinopop-plugin-version: 3
 """Read the selection aloud, offline, with vinoSpeak.
 
 Kokoro-82M on the NPU through OpenVINO GenAI (GPU or CPU when there's no
 NPU). Speech starts after the first sentence and the rest is synthesized as
-it plays. Click Read aloud again, or press Esc (X11), to stop. The voice
+it plays. Stop on the "Reading aloud" notification, a second click on Read
+aloud, or Esc (X11) stops it. The voice
 downloads once (~160 MB) on first use; nothing leaves your machine after
 that.
 """
@@ -11,6 +12,7 @@ that.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 
 import actions
@@ -54,6 +56,68 @@ def _esc_watch(stop):
     return _end
 
 
+def _stop_notification(stop):
+    """A "Reading aloud" notification with a Stop button while it plays.
+    notify-send prints the notification's id, then the action when Stop is
+    clicked; returns a function that takes the notification down."""
+    try:
+        proc = subprocess.Popen(
+            actions.notify_argv(
+                _TITLE,
+                "Reading aloud…",
+                "vinopop-vinospeak",
+                0,
+                extra=("-A", "stop=Stop", "-p", "-w"),
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except OSError:
+        return lambda: None
+    shown = threading.Event()
+    holder = {}
+
+    def _listen() -> None:
+        lines = iter(proc.stdout.readline, "")
+        holder["id"] = next(lines, "").strip()
+        shown.set()
+        if any(line.strip() == "stop" for line in lines):
+            stop()
+
+    threading.Thread(target=_listen, daemon=True, name="speak-stop-offer").start()
+
+    def _end() -> None:
+        shown.wait(timeout=2)
+        if holder.get("id", "").isdigit():
+            _close_notification(int(holder["id"]))
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    return _end
+
+
+def _close_notification(notification_id: int) -> None:
+    try:
+        from gi.repository import Gio, GLib
+
+        Gio.bus_get_sync(Gio.BusType.SESSION, None).call_sync(
+            "org.freedesktop.Notifications",
+            "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications",
+            "CloseNotification",
+            GLib.Variant("(u)", (notification_id,)),
+            None,
+            Gio.DBusCallFlags.NONE,
+            2000,
+            None,
+        )
+    except Exception as exc:  # noqa: BLE001 - it may already be gone
+        log.debug("[speak] couldn't close the notification: %s", exc)
+
+
 def _read(text: str) -> None:
     from vino_ai import tts
 
@@ -82,12 +146,14 @@ def _read(text: str) -> None:
     finally:
         _busy.release()
     end_watch = _esc_watch(tts.stop)
+    end_offer = _stop_notification(tts.stop)
     try:
         speech.wait()
     except Exception as exc:  # noqa: BLE001
         log.exception("[speak] playback failed")
         actions.notify(_TITLE, f"Couldn't read it aloud: {exc}", "dialog-error")
     finally:
+        end_offer()
         end_watch()
 
 
