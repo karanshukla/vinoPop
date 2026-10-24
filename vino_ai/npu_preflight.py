@@ -18,6 +18,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from core import distro
+
 ROOT = Path("/")
 NPU_RELEASES_URL = "https://github.com/intel/linux-npu-driver/releases"
 
@@ -76,52 +78,16 @@ def _read_attr(path: Path) -> str:
 
 # ---- distro ------------------------------------------------------------------
 
-_FAMILIES = {
-    "fedora": "fedora",
-    "rhel": "fedora",
-    "centos": "fedora",
-    "nobara": "fedora",
-    "bazzite": "fedora",
-    "debian": "debian",
-    "ubuntu": "debian",
-    "pop": "debian",
-    "linuxmint": "debian",
-    "arch": "arch",
-    "cachyos": "arch",
-    "endeavouros": "arch",
-    "manjaro": "arch",
-    "opensuse": "suse",
-    "opensuse-tumbleweed": "suse",
-    "opensuse-leap": "suse",
-}
-_INSTALL = {
-    "fedora": "sudo dnf install -y",
-    "debian": "sudo apt install -y",
-    "arch": "sudo pacman -S --needed",
-    "suse": "sudo zypper install -y",
-}
-
 
 def distro_family(root: Path = ROOT) -> str:
     """fedora/debian/arch/suse from os-release, or "" if unrecognised."""
-    values: dict[str, str] = {}
-    try:
-        text = _under(root, "/etc/os-release").read_text(encoding="utf-8")
-    except OSError:
-        text = ""
-    for line in text.splitlines():
-        key, sep, value = line.strip().partition("=")
-        if sep:
-            values[key] = value.strip().strip("\"'").lower()
-    for candidate in [values.get("ID", "")] + values.get("ID_LIKE", "").split():
-        if candidate in _FAMILIES:
-            return _FAMILIES[candidate]
-    return ""
+    return distro.family(root)
 
 
-def install_command(package: str, family: str) -> str:
-    prefix = _INSTALL.get(family)
-    return f"{prefix} {package}" if prefix else f"install {package} with your package manager"
+def install_command(package: str, family: str, root: Path = ROOT) -> str:
+    """`family` is distro_family()'s answer; core.distro adds the
+    rpm-ostree / transactional-update forms on a read-only /usr."""
+    return distro.install_command([package], root, fam=family)
 
 
 def driver_fix(family: str) -> str:

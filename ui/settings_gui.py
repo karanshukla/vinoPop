@@ -979,9 +979,17 @@ class SettingsDialog:
             )
             if argv is None:
                 ocr_install_btn.set_sensitive(False)
-                ocr_install_btn.set_tooltip_text(
-                    "Install the OCR engine with: pip install --user -r requirements-ai.txt"
-                )
+                hint = "Install the OCR engine with: pip install --user -r requirements-ai.txt"
+                if "capture tool" in ocr_reason:
+                    # No in-place install here (read-only /usr, unknown
+                    # package manager): say what to run instead.
+                    try:
+                        from capture.screen_ocr import install_command as _ocr_install_cmd
+
+                        hint = f"Install a screen-capture tool: {_ocr_install_cmd()}"
+                    except Exception:
+                        pass
+                ocr_install_btn.set_tooltip_text(hint)
 
             def _on_ocr_install(btn, argv=argv, row=ocr_row):
                 if not argv:

@@ -8,7 +8,7 @@ contributions will be plugins.
 ```
 vinopop             launcher (what autostart and ~/.local/bin run)
 main.py             the daemon: wires everything together
-core/               classifier, actions, settings, XDG paths, version, autostart
+core/               classifier, actions, settings, XDG paths, version, autostart, distro detection
 triggers/           what starts the popup: hotkeys, selection and double-click watchers, editable-field detection
 plugin_system/      Plugin dataclass, plugin and recipe loaders, compat for old bare-name imports
 ui/                 GTK 4 windows: popup bar, AI bubble, settings, plugin manager, recipe wizard, onboarding, theme
