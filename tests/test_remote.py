@@ -30,8 +30,11 @@ def test_round_trip_over_the_session_bus(monkeypatch):
     from gi.repository import GLib
 
     del gi
-    # A name of our own, so a vinoPop running on this desktop isn't poked.
+    # A name and path of our own, so a vinoPop running on this desktop isn't
+    # poked, and so an app built by an earlier test in this process (which
+    # exported the real path on the shared connection) doesn't answer.
     monkeypatch.setattr(remote, "BUS_NAME", f"io.github.karanshukla.vinoPop.Test{os.getpid()}")
+    monkeypatch.setattr(remote, "OBJECT_PATH", f"/io/github/karanshukla/vinoPop/Test{os.getpid()}")
     loop = GLib.MainLoop()
     fired: list[str] = []
     owner = remote.serve({"popup": lambda: (fired.append("popup"), loop.quit())})

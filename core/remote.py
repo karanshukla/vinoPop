@@ -41,6 +41,8 @@ def serve(handlers: dict[str, Callable[[], None]]) -> int:
     from gi.repository import Gio
 
     node = Gio.DBusNodeInfo.new_for_xml(_XML)
+    # Read now: on_bus runs later, from whichever main loop is spinning then.
+    path = OBJECT_PATH
 
     def on_call(_conn, _sender, _path, _iface, method, params, invocation) -> None:
         action = params.unpack()[0] if method == "Trigger" else ""
@@ -56,9 +58,9 @@ def serve(handlers: dict[str, Callable[[], None]]) -> int:
 
     def on_bus(conn, _name) -> None:
         try:
-            conn.register_object(OBJECT_PATH, node.interfaces[0], on_call, None, None)
+            conn.register_object(path, node.interfaces[0], on_call, None, None)
         except Exception as exc:  # noqa: BLE001
-            print(f"[remote] could not export {OBJECT_PATH}: {exc}")
+            print(f"[remote] could not export {path}: {exc}")
 
     def on_lost(_conn, name) -> None:
         print(f"[remote] don't own {name}: vinopop --trigger won't reach this instance")
