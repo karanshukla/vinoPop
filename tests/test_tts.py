@@ -105,10 +105,17 @@ def test_stop_says_whether_anything_was_playing():
 
 
 def test_idle_unload_waits_for_the_speech_to_end(monkeypatch):
+    now = [tts.time.monotonic()]
+    monkeypatch.setattr(tts.time, "monotonic", lambda: now[0])
     speech = tts.speak("A long passage.")
-    monkeypatch.setattr(tts, "_last_used", 0.0)
+    now[0] += 301
     assert not tts.unload_if_idle()  # still talking
     speech.finished = True
+    assert not tts.unload_if_idle()
+    assert tts._last_used == now[0]
+    now[0] += 299
+    assert not tts.unload_if_idle()
+    now[0] += 1
     assert tts.unload_if_idle()
     assert not tts.loaded()
 

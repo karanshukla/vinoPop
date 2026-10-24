@@ -161,14 +161,17 @@ def stop() -> bool:
 
 def unload_if_idle() -> bool:
     """Free the voice once nothing has played for the idle timeout."""
-    global _synth, _speech
+    global _synth, _speech, _last_used
     minutes = _idle_minutes()
     with _lock:
         if minutes <= 0 or _synth is None:
             return False
-        if (_speech is not None and not _speech.done) or (
-            time.monotonic() - _last_used < minutes * 60
-        ):
+        if _speech is not None:
+            if not _speech.done:
+                return False
+            _speech = None
+            _last_used = time.monotonic()
+        if time.monotonic() - _last_used < minutes * 60:
             return False
         log.info("[vino_ai] TTS idle for %.0f min, unloading from %s", minutes, device())
         _synth, _speech = None, None
