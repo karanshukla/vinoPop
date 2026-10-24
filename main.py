@@ -150,6 +150,11 @@ def _acquire_single_instance_lock() -> None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, BlockingIOError):
         os.close(fd)
+        # Opened again from the app launcher: show the running copy's Settings.
+        from core import remote
+
+        if remote.send("settings") == 0:
+            sys.exit(0)
         # Read the existing PID for the user-facing message
         try:
             with open(LOCK_FILE, encoding="utf-8") as f:
@@ -674,6 +679,7 @@ class App:
                 "popup": self._on_popup_hotkey,
                 "ocr": self._on_ocr_hotkey,
                 "clipboard": self._on_clipboard_hotkey,
+                "settings": self.open_settings,
             }
         )
 

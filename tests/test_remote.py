@@ -21,7 +21,7 @@ def test_trigger_arg(argv, action):
 
 def test_unknown_action_is_refused_before_the_bus(capsys):
     assert remote.send("explode") == 2
-    assert "one of popup, ocr, clipboard" in capsys.readouterr().err
+    assert "one of popup, ocr, clipboard, settings" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(not os.environ.get("DBUS_SESSION_BUS_ADDRESS"), reason="needs a session bus")

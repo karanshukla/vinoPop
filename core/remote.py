@@ -1,5 +1,6 @@
-"""`vinopop --trigger popup|ocr|clipboard`: run a hotkey's action in the
-running daemon, so any desktop's own shortcut settings can bind it.
+"""`vinopop --trigger popup|ocr|clipboard|settings`: run a hotkey's action in
+the running daemon, so any desktop's own shortcut settings can bind it.
+Launching vinoPop again while it runs sends `settings` the same way.
 
 The in-app hotkeys need KGlobalAccel (KDE) or an X11 key grab. Under
 XWayland a grab only fires while an X11 window has focus, so on GNOME,
@@ -19,7 +20,7 @@ from collections.abc import Callable
 BUS_NAME = "io.github.karanshukla.vinoPop"
 OBJECT_PATH = "/io/github/karanshukla/vinoPop"
 INTERFACE = "io.github.karanshukla.vinoPop.Remote"
-ACTIONS = ("popup", "ocr", "clipboard")
+ACTIONS = ("popup", "ocr", "clipboard", "settings")
 
 _XML = f"""
 <node>
