@@ -37,3 +37,8 @@ extensions/firefox/build/
 extensions/firefox/dist/
 extensions/chrome/build/
 extensions/chrome/dist/
+
+# Coverage output (ci.yml test-gtk)
+.coverage
+coverage.xml
+coverage.md
