@@ -35,7 +35,9 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - run: uv venv --python ${{ matrix.python-version }}
       - run: uv pip install --group dev
-      - run: .venv/bin/python -m pytest --cov=. --cov-report=term-missing
+      # No coverage here: without GTK about 50 tests skip, so the figure is
+      # lower and means less. test-gtk measures it.
+      - run: .venv/bin/python -m pytest
 
   test-gtk:
     needs: lint
@@ -55,12 +57,41 @@ jobs:
             librsvg2-common
       # The distro's python3, or the venv can't see its PyGObject
       - run: uv venv --python /usr/bin/python3 --system-site-packages
-      - run: uv pip install --group dev
+      # PySide6-Essentials has QtWidgets, all tray/tray_qt.py imports, so the
+      # real tray child runs offscreen in tests/test_tray.py
+      - run: uv pip install --group dev PySide6-Essentials
       # GTK needs a display to import its widgets. The session bus carries
       # the accessibility bus, so tests/test_a11y.py can read the AT-SPI tree.
-      - run: xvfb-run -a dbus-run-session -- .venv/bin/python -m pytest -rs
+      # Coverage is measured here, the only job that runs the whole suite
+      # ([tool.coverage.run] in pyproject.toml). The floor sits a few points
+      # under what this job measured; raise it as tests land.
+      - name: pytest with coverage
+        run: >-
+          xvfb-run -a dbus-run-session -- .venv/bin/python -m pytest -rs
+          --cov --cov-report=term-missing:skip-covered --cov-report=xml
+          --cov-fail-under=53
         env:
           VINOPOP_ATSPI_TEST: "1"
+      - name: Coverage summary
+        if: ${{ !cancelled() && hashFiles('coverage.xml') != '' }}
+        run: |
+          total=$(.venv/bin/python -m coverage report --format=total)
+          .venv/bin/python -m coverage report --format=markdown --sort=cover --skip-covered > coverage.md
+          {
+            echo "## Coverage (line + branch): ${total}%"
+            echo
+            echo "<details><summary>Per file, least covered first</summary>"
+            echo
+            cat coverage.md
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && hashFiles('coverage.xml') != '' }}
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 30
 
   uv-run:
     # What CONTRIBUTING.md tells contributors to run, from a fresh checkout

@@ -101,8 +101,21 @@ pythonpath = ["."]
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
+# CI's test-gtk job measures this (ci.yml) with its floor in --cov-fail-under.
+# Tests are left out: counting them as covered code inflated the figure by
+# 11 points (57% source, 68% with tests/, audited 2026-10-25).
+[tool.coverage.run]
+source = ["."]
+branch = true
+omit = ["tests/*", "scripts/manual_popup.py", ".venv/*"]
+
 [tool.coverage.report]
 show_missing = true
+# PySide6 runs embedded loader code under made-up filenames in the working
+# directory (signature_bootstrap.py, shibokensupport/...), which then have
+# no source. pytest-cov already ignores them; this makes `coverage report`
+# agree with it.
+ignore_errors = true
 
 # ── Bandit ────────────────────────────────────────────────────────────────────
 
