@@ -533,6 +533,11 @@ def test_device_still_compiling_is_not_compiled_twice(loader):
     assert llm._load(lambda _m: None) == "CPU"
     assert tried.count("NPU") == 1 and tried.count("GPU") == 1
     release.set()
+    # Let the abandoned compiles land before the next test swaps in fresh
+    # module state, or they park in its _late and it adopts them
+    for t in threading.enumerate():
+        if t.name.startswith("vino-ai-load-"):
+            t.join(5)
 
 
 def test_late_npu_beats_late_gpu_whatever_finishes_last(loader):
