@@ -55,3 +55,19 @@ jobs:
           if not rows or any(c["status"] != "ok" for c in rows):
               sys.exit("::error::an AI package is missing or broken")
           PY
+
+      # The tests that skip in PR CI without the real stack: the privacy test
+      # (openvino writes nothing to ~/intel) and the VLM preprocessing tests,
+      # which need numpy. Everything else about vino_ai runs on fakes.
+      - name: AI tests against the real stack
+        run: |
+          uv pip install --group dev numpy pillow
+          .venv/bin/python -m pytest -rs tests/test_telemetry.py tests/test_vino_ai.py \
+            tests/test_model_integrity.py tests/test_npu_preflight.py tests/test_tts.py
+
+      # Known CVEs in what this resolved to. Audits the installed set, so it
+      # covers transitive deps without a second resolve.
+      - name: pip-audit
+        run: |
+          uv pip freeze > installed.txt
+          uvx pip-audit --strict --disable-pip --no-deps -r installed.txt

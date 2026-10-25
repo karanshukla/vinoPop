@@ -36,3 +36,9 @@ jobs:
         with:
           sarif_file: bandit.sarif
           category: bandit
+
+      # The scan above can't fail (see --exit-zero), so this one gates: a new
+      # finding fails the job. Fix it, or skip it with a reason in
+      # [tool.bandit] or a `# nosec Bxxx` comment.
+      - name: Fail on Bandit findings
+        run: uvx --from 'bandit[toml]==1.9.4' bandit -c pyproject.toml -r . -q
