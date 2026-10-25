@@ -654,9 +654,35 @@ def run_in_terminal(text: str) -> None:
         pass  # already logged
 
 
+# A file with one of these extensions is a program or launcher to whatever
+# claims its MIME type, so "Open path" shows it in its folder instead.
+_LAUNCHER_EXTENSIONS = frozenset(
+    {".desktop", ".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".appimage", ".jar", ".run"}
+)
+
+
+def _is_launcher(path: str) -> bool:
+    """True for a regular file xdg-open would run rather than show: one
+    with the execute bit, or a launcher extension (.desktop, .exe...)."""
+    if not os.path.isfile(path):
+        return False
+    if os.path.splitext(path)[1].lower() in _LAUNCHER_EXTENSIONS:
+        return True
+    return os.access(path, os.X_OK)
+
+
 def open_path(text: str) -> None:
+    """Open a selected path with xdg-open. A program or launcher opens its
+    folder instead, as a file:// link does (_open_file_url): the selection
+    is whatever a page or chat put there, and xdg-open on ~/Downloads/x.desktop
+    or an executable script means running it."""
     raw = _strip_invisible(text)
     path = os.path.expanduser(raw)
+    if _is_launcher(path):
+        folder = os.path.dirname(os.path.abspath(path))
+        notify("Opened its folder", f"{os.path.basename(path)} is a program, so it wasn't run")
+        print(f"[actions] {path} is runnable; opening its folder instead")
+        path = folder
     try:
         subprocess.Popen(
             ["xdg-open", path],
