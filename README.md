@@ -9,7 +9,7 @@
 Select some text and a little bar shows up right over it. Copy it, search it, translate, summarize or rewrite it with a local model, run it as a command, encode it, do maths on it. Whatever makes sense for whatever you grabbed, without moving your hands from where you were already working.
 
 - **Reads what you selected.** Links, shell commands, file paths, emails and plain text each get the buttons that fit.
-- **Offline AI.** Summarize, rewrite, explain and translate run Gemma 4 on the NPU through OpenVINO (GPU or CPU if there's no NPU). OCR a screen region with `Shift+Super+O`. **Read aloud** (from the Plugin Manager) speaks the selection with [vinoSpeak](https://github.com/karanshukla/vinoSpeak)'s Kokoro voice, also on the NPU.
+- **Offline AI.** Summarize, rewrite, explain and translate run Gemma 4 on the NPU through OpenVINO (GPU or CPU if there's no NPU). On a 16 TOPS NPU, Gemma 4 E2B runs at ~5.6 tokens/s and draws ~2–4 W. OCR a screen region with `Shift+Super+O`. **Read aloud** (from the Plugin Manager) speaks the selection with [vinoSpeak](https://github.com/karanshukla/vinoSpeak)'s Kokoro voice, also on the NPU.
 - **Clipboard history and snippets** on `Super+Shift+V`: recent text and images, pinned entries, and snippets with placeholders like `{date}` and `{clipboard}`.
 - **Plugins are just `.py` files**, and the recipe builder makes web searches, commands and transforms without code. Base64, JSON, hashes, timestamps, colours, a calculator, case conversion, QR codes and more ship in the box.
 - **Private.** Your text stays on your machine unless you click something that obviously goes online, like web search or opening a link. Nothing phones home.
