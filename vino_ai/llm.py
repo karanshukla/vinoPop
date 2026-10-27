@@ -769,5 +769,6 @@ def _with_pipe(
                     status("The NPU was reset, reloading the model…")
         finally:
             _last_used = time.monotonic()
-    _schedule_unload()
+            # A cancelled or failed run still loaded the model; it must still unload.
+            _schedule_unload()
     return result
