@@ -917,6 +917,27 @@ def test_cancel_stops_the_stream_and_frees_the_lock(long_pipe):
     assert not llm._lock.locked()
 
 
+def test_cancelled_run_still_arms_the_idle_unload(long_pipe, monkeypatch):
+    """A popup dismissed mid-answer raised Cancelled past _schedule_unload, so
+    the model stayed on the NPU (~2.5 GB pinned) until the app restarted."""
+    armed = []
+    monkeypatch.setattr(llm, "_schedule_unload", lambda: armed.append(1))
+    tokens = []
+    with pytest.raises(llm.Cancelled):
+        llm.run("rewrite", "some text", on_token=tokens.append, cancelled=lambda: len(tokens) >= 3)
+    assert armed == [1]
+
+
+def test_failed_run_still_arms_the_idle_unload(monkeypatch):
+    monkeypatch.setitem(sys.modules, "openvino_genai", types.ModuleType("openvino_genai"))
+    monkeypatch.setattr(llm, "_load", lambda _status: _LostPipe(fail_after_stream=True))
+    armed = []
+    monkeypatch.setattr(llm, "_schedule_unload", lambda: armed.append(1))
+    with pytest.raises(RuntimeError):
+        llm.run("summarize", "hello", on_token=lambda _c: None)
+    assert armed == [1]
+
+
 def test_cancel_works_without_a_token_callback(long_pipe):
     calls = iter([False, False, False])
     with pytest.raises(llm.Cancelled):
