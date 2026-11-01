@@ -10,6 +10,52 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-01
+
+### ✨ Features
+
+- **Read aloud, with vinoSpeak.** A new Read aloud action speaks the
+  selection on the NPU, falling back to GPU or CPU, and unloads the voice
+  when idle like the LLM. A "Reading aloud" notification has a Stop button,
+  and while it plays vinoPop shows up as a media player, so the media keys,
+  KDE's and GNOME's player widgets and the lock screen can stop it. Needs the
+  `ai` extra (`vinospeak`); doctor checks the package and the voice download.
+- **`vinopop --trigger popup|ocr|clipboard`, for shortcuts set in the
+  desktop's own settings.** Off KDE the hotkeys are XWayland grabs, which
+  miss native Wayland apps. Binding this command in GNOME, sway, Hyprland or
+  COSMIC works whatever has focus; the README says where.
+- **Opening vinoPop again shows the running copy's Settings** instead of only
+  saying it's already running.
+
+### 🐛 Bug Fixes
+
+- **Open path no longer runs programs.** Selecting a `.desktop` file, an
+  AppImage, an `.exe` or any executable and clicking Open path launched it
+  through xdg-open. It now opens the containing folder and says why.
+- **The selection never appears in the media player's title,** so the start
+  of a selected password or message can't be read from the lock screen. The
+  title is always "Reading aloud".
+- **OCR works on GNOME.** The screen grab falls back to the desktop's
+  screenshot portal (cropped to the monitor under the pointer), the region
+  picker ends with the portal's interactive one, and maim, which only sees
+  XWayland, is skipped on Wayland.
+- **The AI model leaves the NPU after a cancelled answer.** Dismissing a
+  popup mid-answer skipped the idle unload, so Gemma kept ~2.5 GB pinned
+  until the next completed run or a restart.
+- **install.sh supports openSUSE and image-based distros** (Fedora Atomic,
+  Aeon): the right package names, rpm-ostree or transactional-update hints
+  when `/usr` is read-only, a Python 3.11 check, and a note when run inside a
+  toolbox or distrobox. The OCR Install button no longer offers `pkexec dnf`
+  on a read-only `/usr`, and installs the screenshot tool for your desktop.
+
+### 🔧 Development
+
+- Tests for text expansion, the Run-in-terminal confirm dialog, the
+  `{shell:}` snippet gate and Compose email's mailto quoting.
+- CI measures coverage in the GTK job with a floor, fails on new Bandit
+  findings, and runs the AI tests and pip-audit weekly against the real
+  OpenVINO stack.
+
 ## [1.2.0] - 2026-10-23
 
 ### ✨ Features
@@ -195,7 +241,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/karanshukla/vinoPop/compare/v1.0.0...v1.1.0
