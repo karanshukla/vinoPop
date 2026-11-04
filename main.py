@@ -94,6 +94,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
+from core import vino_family  # noqa: E402
 from core.classifier import classify  # noqa: E402
 from core.settings import get_settings  # noqa: E402
 from core.version import __version__  # noqa: E402
@@ -962,6 +963,10 @@ class App:
             "Based on LinuxPop by",
             ["Robert Berge https://github.com/GaimsDevSoftware/linuxpop"],
         )
+        # The family: vinopilot.ca, then the other apps (core/vino_family.py).
+        about.add_link(vino_family.SITE_LABEL, vino_family.SITE)
+        for app in vino_family.others("vinoPop"):
+            about.add_link(f"{app.name}: {app.blurb}", app.page)
         about.present(None)
 
     # ---- first-run experience ------------------------------------------------

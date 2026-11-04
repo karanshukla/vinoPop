@@ -606,7 +606,7 @@ class SettingsDialog:
                 "advanced",
                 "Advanced",
                 "emblem-system-symbolic",
-                [self._build_ai_group, self._build_advanced_group],
+                [self._build_ai_group, self._build_advanced_group, self._build_updates_group],
             ),
             (
                 "debug",
@@ -1573,6 +1573,105 @@ class SettingsDialog:
         # (see vino_ai.models.prefetch_consented).
         self._settings.set("ai_prefetch_asked", True)
         self._save_key("ai_prefetch_model", bool(switch.get_active()))
+
+    def _build_updates_group(self) -> Adw.PreferencesGroup:
+        """Check for updates, then Update to vN. Online only when clicked (core/update.py)."""
+        from core import update
+        from core.version import __version__
+
+        group = Adw.PreferencesGroup()
+        group.set_title("Updates")
+        row = _plain(Adw.ActionRow())
+        row.set_title(f"vinoPop {__version__}")
+        btn = Gtk.Button(label="Check for updates")
+        btn.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(btn)
+        row.set_activatable_widget(btn)
+        group.add(row)
+        # What the button does next: check, install, restart or open the page.
+        state: dict[str, object] = {"next": "check", "tag": None}
+
+        def _show(subtitle: str, label: str | None, nxt: str, *, suggested: bool = False) -> None:
+            row.set_subtitle(subtitle)
+            btn.set_visible(label is not None)
+            btn.set_sensitive(True)
+            if label is not None:
+                btn.set_label(label)
+            if suggested:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+            state["next"] = nxt
+
+        def _busy(subtitle: str) -> None:
+            row.set_subtitle(subtitle)
+            btn.set_sensitive(False)
+
+        def _checked(tag: str | None, error: str | None) -> bool:
+            if error is not None:
+                _show(error, "Try again", "check")
+            elif tag is not None and update.is_newer(__version__, tag):
+                state["tag"] = tag
+                if update.upgrade_command() is not None:
+                    _show(f"{tag} is out.", f"Update to {tag}", "install", suggested=True)
+                else:
+                    _show(
+                        f"{tag} is out. Its release page says how to update.",
+                        "Open release page",
+                        "page",
+                    )
+            else:
+                _show(f"vinoPop {__version__} is the newest release.", "Check again", "check")
+            return False
+
+        def _installed(error: str | None) -> bool:
+            tag = state["tag"]
+            if error is not None:
+                _show(error, "Try again", "install")
+            elif self._on_restart is not None:
+                _show(f"Restart vinoPop to use {tag}.", "Restart", "restart", suggested=True)
+            else:
+                _show(f"Restart vinoPop to use {tag}.", None, "check")
+            return False
+
+        def _clicked(*_) -> None:
+            nxt = state["next"]
+            if nxt == "check":
+                _busy("Checking GitHub for a newer release.")
+
+                def _worker() -> None:
+                    try:
+                        GLib.idle_add(_checked, update.fetch_latest(), None)
+                    except RuntimeError as exc:
+                        GLib.idle_add(_checked, None, str(exc))
+
+                threading.Thread(target=_worker, daemon=True, name="update-check").start()
+            elif nxt == "install":
+                tag, upgrade = state["tag"], update.upgrade_command()
+                if not isinstance(tag, str) or upgrade is None:
+                    return
+                _busy(f"Installing {tag}. This can take a few minutes.")
+
+                def _install() -> None:
+                    try:
+                        update.install(tag, upgrade)
+                        GLib.idle_add(_installed, None)
+                    except RuntimeError as exc:
+                        GLib.idle_add(_installed, str(exc))
+
+                threading.Thread(target=_install, daemon=True, name="update-install").start()
+            elif nxt == "restart" and self._on_restart is not None:
+                self._on_restart()
+            elif nxt == "page":
+                Gtk.UriLauncher.new(f"{update.RELEASES_URL}/tag/{state['tag']}").launch(
+                    self._window, None, None
+                )
+
+        btn.connect("clicked", _clicked)
+        _show(
+            "Checks GitHub for a newer release. Nothing else is sent.", "Check for updates", "check"
+        )
+        return group
 
     def _build_advanced_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
