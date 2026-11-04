@@ -46,6 +46,8 @@ def _plain(row: Gtk.Widget) -> Gtk.Widget:
 def _icon_button(icon_name: str, tooltip: str | None = None) -> Gtk.Button:
     btn = Gtk.Button.new_from_icon_name(icon_name)
     btn.set_valign(Gtk.Align.CENTER)
+    # Icon buttons inside boxed-list rows are flat in GNOME apps
+    btn.add_css_class("flat")
     if tooltip:
         btn.set_tooltip_text(tooltip)
     return btn
@@ -407,14 +409,10 @@ class PluginManagerDialog:
     ) -> None:
         if update_btn is not None:
             update_btn.set_visible(_status(entry) == "outdated")
-        btn.remove_css_class("suggested-action")
-        btn.remove_css_class("destructive-action")
-        if _is_installed(entry):
-            btn.set_label("Remove")
-            btn.add_css_class("destructive-action")
-        else:
-            btn.set_label("Install")
-            btn.add_css_class("suggested-action")
+        # Plain buttons: a column of green or red buttons down the list
+        # shouts, and the HIG keeps suggested/destructive styling for the
+        # one action a view or dialog is about.
+        btn.set_label("Remove" if _is_installed(entry) else "Install")
 
     def _on_install_clicked(self, btn: Gtk.Button, entry: dict, update_btn: Gtk.Button) -> None:
         filename = entry["file"]
@@ -641,8 +639,7 @@ class PluginManagerDialog:
         new_row = _plain(Adw.ActionRow())
         new_row.set_title("New action…")
         new_row.set_subtitle("Open URL · Run command · Notify · Transform clipboard")
-        add_btn = _icon_button("list-add-symbolic")
-        add_btn.add_css_class("suggested-action")
+        add_btn = _icon_button("list-add-symbolic", "New action")
         add_btn.connect("clicked", lambda *_: self._open_recipe_wizard())
         new_row.add_suffix(add_btn)
         new_row.set_activatable_widget(add_btn)

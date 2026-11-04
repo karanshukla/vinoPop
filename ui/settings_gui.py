@@ -55,14 +55,12 @@ def _open_text_editor_modal(
     shouldn't occupy permanent space in the Settings page when empty.
 
     GTK 4 has no blocking Gtk.Dialog.run(), so the result is delivered
-    through a callback instead of a return value."""
-    dlg = Adw.Window()
+    through a callback instead of a return value. An Adw.Dialog, so it
+    attaches to the Settings window the way GNOME apps' dialogs do."""
+    dlg = Adw.Dialog()
     dlg.set_title(title)
-    dlg.set_default_size(580, 420)
-    dlg.set_icon_name("vinopop")
-    dlg.set_modal(True)
-    if parent is not None:
-        dlg.set_transient_for(parent)
+    dlg.set_content_width(580)
+    dlg.set_content_height(420)
 
     header = Adw.HeaderBar()
     header.set_show_end_title_buttons(False)
@@ -73,23 +71,22 @@ def _open_text_editor_modal(
     header.pack_start(cancel_btn)
     header.pack_end(save_btn)
 
-    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    content.set_margin_top(12)
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    content.set_margin_top(6)
     content.set_margin_bottom(12)
-    content.set_margin_start(14)
-    content.set_margin_end(14)
+    content.set_margin_start(12)
+    content.set_margin_end(12)
 
     sub_lbl = Gtk.Label(xalign=0)
     sub_lbl.set_wrap(True)
     sub_lbl.set_text(subtitle)
-    sub_lbl.add_css_class("caption")
     content.append(sub_lbl)
 
     scroll = Gtk.ScrolledWindow()
     scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scroll.set_has_frame(True)
     scroll.set_hexpand(True)
     scroll.set_vexpand(True)
+    scroll.add_css_class("card")
     view = Gtk.TextView()
     view.set_wrap_mode(Gtk.WrapMode.NONE)
     view.set_monospace(True)
@@ -105,7 +102,9 @@ def _open_text_editor_modal(
     toolbar = Adw.ToolbarView()
     toolbar.add_top_bar(header)
     toolbar.set_content(content)
-    dlg.set_content(toolbar)
+    dlg.set_child(toolbar)
+    dlg.set_default_widget(save_btn)
+    dlg.set_focus(view)
 
     finished = {"done": False}
 
@@ -119,24 +118,14 @@ def _open_text_editor_modal(
             s, e = buf.get_bounds()
             raw = buf.get_text(s, e, True)
             result = "" if getattr(view, "_placeholder_active", False) else raw
-        dlg.destroy()
+        dlg.force_close()
         on_done(result)
 
     cancel_btn.connect("clicked", lambda *_: _finish(False))
     save_btn.connect("clicked", lambda *_: _finish(True))
-    # Window-manager close and Escape both mean Cancel, like Gtk.Dialog did.
-    dlg.connect("close-request", lambda *_: (_finish(False), True)[1])
-    esc = Gtk.ShortcutController()
-    esc.add_shortcut(
-        Gtk.Shortcut.new(
-            Gtk.ShortcutTrigger.parse_string("Escape"),
-            Gtk.CallbackAction.new(lambda *_: (_finish(False), True)[1]),
-        )
-    )
-    dlg.add_controller(esc)
-
-    dlg.present()
-    view.grab_focus()
+    # Escape and the close gesture both mean Cancel (Adw.Dialog handles
+    # Escape itself and emits closed).
+    gtk4_app.present_dialog(dlg, parent, lambda *_: _finish(False))
 
 
 def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> None:
@@ -348,6 +337,47 @@ def _format_combo(keyval: int, state: int) -> str:
     return "+".join(parts)
 
 
+def _combo_to_accel(combo: str) -> str:
+    """'super+shift+y' (the settings.json form) as a GTK accelerator
+    ('<Super><Shift>y'), or '' if GTK can't parse it."""
+    mods = {
+        "ctrl": "<Control>",
+        "control": "<Control>",
+        "alt": "<Alt>",
+        "shift": "<Shift>",
+        "super": "<Super>",
+        "meta": "<Meta>",
+    }
+    parts = [p for p in combo.lower().split("+") if p]
+    if not parts or any(p not in mods for p in parts[:-1]):
+        return ""
+    # Saved key names are lowercased; GDK's are case-sensitive ("F9", "y")
+    key = parts[-1]
+    keyval = next(
+        (
+            v
+            for v in (Gdk.keyval_from_name(n) for n in (key, key.capitalize(), key.upper()))
+            if v and v != Gdk.KEY_VoidSymbol
+        ),
+        0,
+    )
+    if not keyval:
+        return ""
+    accel = "".join(mods[p] for p in parts[:-1]) + (Gdk.keyval_name(keyval) or key)
+    ok, parsed, _mods = Gtk.accelerator_parse(accel)
+    return accel if ok and parsed else ""
+
+
+def _pretty_combo(combo: str) -> str:
+    """'super+shift+y' as 'Shift+Super+Y', the way GNOME writes shortcuts."""
+    accel = _combo_to_accel(combo)
+    if accel:
+        ok, keyval, mods = Gtk.accelerator_parse(accel)
+        if ok:
+            return Gtk.accelerator_get_label(keyval, mods)
+    return "+".join(p[:1].upper() + p[1:] for p in combo.split("+") if p)
+
+
 class HotkeyRecorder(Gtk.Button):
     """Compact button that captures a keypress combo when clicked."""
 
@@ -366,6 +396,8 @@ class HotkeyRecorder(Gtk.Button):
         self._rejected = ""
         self._on_changed = on_changed
         self.set_valign(Gtk.Align.CENTER)
+        # Flat keycaps sit in the row like GNOME Settings' shortcut rows
+        self.add_css_class("flat")
         self._update_label()
         self.connect("clicked", self._on_clicked)
         keys = Gtk.EventControllerKey()
@@ -390,19 +422,27 @@ class HotkeyRecorder(Gtk.Button):
 
     def _update_label(self) -> None:
         if self._recording and self._rejected:
-            self.set_label(f"Can't bind {self._rejected} - try another  (Esc to cancel)")
+            text = f"Can't bind {_pretty_combo(self._rejected)}, try another"
+            self.set_tooltip_text("Press Esc to cancel")
+            self.set_child(Gtk.Label(label=text))
         elif self._recording:
-            self.set_label("⏺  Press a hotkey  (Esc to cancel)")
+            text = "Press a shortcut…"
+            self.set_tooltip_text("Press Esc to cancel")
+            self.set_child(Gtk.Label(label=text))
         elif self._value:
-            self.set_label(self._value)
+            text = _pretty_combo(self._value)
+            self.set_tooltip_text("Click to change")
+            accel = _combo_to_accel(self._value)
+            # Keycaps, like GNOME Settings' Keyboard Shortcuts page
+            self.set_child(Gtk.ShortcutLabel(accelerator=accel) if accel else Gtk.Label(label=text))
         else:
-            self.set_label("Click to record…")
+            text = "Disabled"
+            self.set_tooltip_text("Click to set a shortcut")
+            self.set_child(Gtk.Label(label=text))
         if self._name:
             # The label child would otherwise name the button by itself
             self.reset_relation(Gtk.AccessibleRelation.LABELLED_BY)
-            self.update_property(
-                [Gtk.AccessibleProperty.LABEL], [f"{self._name}: {self.get_label()}"]
-            )
+            self.update_property([Gtk.AccessibleProperty.LABEL], [f"{self._name}: {text}"])
 
     def _on_clicked(self, *_):
         self._recording = True
@@ -436,40 +476,6 @@ class HotkeyRecorder(Gtk.Button):
         self.set_value(combo)
         return True
 
-
-#: Per-row leading icon for the Settings rows, so each gets a coloured tile in
-#: the same style as the Plugin Manager. Titles must match set_title() exactly;
-#: anything unmapped falls back to a generic gear (never a broken glyph).
-_SETTING_ICONS = {
-    "Theme": "applications-graphics-symbolic",
-    "Popup button size": "view-fullscreen-symbolic",
-    "Maximum buttons in the popup": "view-grid-symbolic",
-    "When actions overflow": "view-more-symbolic",
-    "Popup hotkey": "preferences-desktop-keyboard-shortcuts-symbolic",
-    "Screen OCR hotkey": "camera-photo-symbolic",
-    "Auto-popup on selection": "edit-select-all-symbolic",
-    "Modifier+double-click for the edit menu": "input-mouse-symbolic",
-    "Modifier key": "input-keyboard-symbolic",
-    "Force all plugins modifier": "view-grid-symbolic",
-    "Start at login": "system-run-symbolic",
-    "Clipboard history": "edit-copy-symbolic",
-    "Optional clipboard shortcut": "edit-paste-symbolic",
-    "Snippet triggers (text expansion)": "document-edit-symbolic",
-    "Don't expand triggers in these apps or sites": "security-high-symbolic",
-    "Snippet variables": "view-list-symbolic",
-    "Shell expansion in snippets": "utilities-terminal-symbolic",
-    "Skip short auto-popup selections": "format-justify-left-symbolic",
-    "Don't show in these apps or pages": "security-medium-symbolic",
-    "Search engine": "edit-find-symbolic",
-    "Custom search URL ({q} = the selection)": "insert-link-symbolic",
-    "Trigger hotkey on first press": "media-playback-start-symbolic",
-    "Reset settings to defaults": "view-refresh-symbolic",
-    "Keep terminal open after running": "utilities-terminal-symbolic",
-    "Plugin Manager": "application-x-addon-symbolic",
-    "Installed plugins": "emblem-default-symbolic",
-    "Custom actions": "document-new-symbolic",
-    "Popup button order": "view-sort-ascending-symbolic",
-}
 
 #: The Plugins page: (title, subtitle, Plugin Manager tab) for each row.
 _PLUGIN_LINKS = [
@@ -546,9 +552,6 @@ class SettingsDialog:
                 if group.get_title() == title:
                     group.set_title("")
                 page.add(group)
-            # The Debug page's rows carry status icons instead.
-            if name != "debug":
-                self._decorate_badges(page)
             pages.append((name, title, icon, page))
 
         def _on_show(name: str) -> None:
@@ -622,53 +625,6 @@ class SettingsDialog:
         if win is not None and self._window is not None and win is not self._window:
             return
         self._window = None
-
-    # ---- coloured icon badges (matches the Plugin Manager) -------------------
-    def _badge(self, icon_name: str | None, color_index: int) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        box.set_size_request(32, 32)
-        box.set_valign(Gtk.Align.CENTER)
-        box.set_halign(Gtk.Align.CENTER)
-        box.set_margin_end(8)
-        box.add_css_class("lp-badge")
-        box.add_css_class(f"lp-badge-{color_index % 4}")
-        it = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
-        from ui import icon_style
-
-        icon_name = icon_style.available(icon_name or "", it)
-        name = icon_name if (icon_name and it.has_icon(icon_name)) else "emblem-system-symbolic"
-        img = Gtk.Image.new_from_icon_name(name)
-        img.set_pixel_size(17)
-        img.add_css_class("lp-badge-glyph")
-        img.set_hexpand(True)
-        box.set_hexpand(False)  # stop the glyph's hexpand propagating to the row prefix
-        img.set_halign(Gtk.Align.CENTER)
-        box.append(img)
-        return box
-
-    def _decorate_badges(self, root: Gtk.Widget) -> None:
-        """Give each settings row a coloured icon tile so Settings reads as the
-        same family as the Plugin Manager. Walks the row tree, skipping the
-        inside of each row (so expander sub-rows aren't decorated)."""
-        rows: list[Gtk.Widget] = []
-
-        def walk(w):
-            # ComboRow / SwitchRow / SpinRow are ActionRow subclasses.
-            if isinstance(w, (Adw.ActionRow, Adw.ExpanderRow, Adw.EntryRow)):
-                rows.append(w)
-                return
-            child = w.get_first_child()
-            while child is not None:
-                walk(child)
-                child = child.get_next_sibling()
-
-        walk(root)
-        for i, r in enumerate(rows):
-            icon = _SETTING_ICONS.get(r.get_title() or "")
-            try:
-                r.add_prefix(self._badge(icon, i))
-            except Exception:
-                pass
 
     # ---- row factories -------------------------------------------------------
 
@@ -973,7 +929,6 @@ class SettingsDialog:
                 argv = None
             ocr_install_btn = Gtk.Button(label="Install")
             ocr_install_btn.set_valign(Gtk.Align.CENTER)
-            ocr_install_btn.add_css_class("suggested-action")
             ocr_install_btn.set_tooltip_text(
                 "Installs the OCR tools in the background (asks for your password)."
             )
@@ -1009,7 +964,6 @@ class SettingsDialog:
                         row.set_subtitle("Ready. Draw a box anywhere to copy its text.")
                         btn.set_label("Installed")
                         btn.set_sensitive(False)
-                        btn.remove_css_class("suggested-action")
                         # Bind the hotkey now that the backend works.
                         if self._on_changed is not None:
                             try:
