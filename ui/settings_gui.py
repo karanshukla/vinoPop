@@ -1666,6 +1666,13 @@ class SettingsDialog:
                         "Open release page",
                         "page",
                     )
+            elif tag is not None and update.version_parts(__version__) is None:
+                # A git clone past a tag ("1.3.0-5-gabc123"): never offered one.
+                _show(
+                    f"This is a development build. The newest release is {tag}.",
+                    "Check again",
+                    "check",
+                )
             else:
                 _show(f"vinoPop {__version__} is the newest release.", "Check again", "check")
             return False
