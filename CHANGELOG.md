@@ -10,6 +10,24 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+### 🎨 Look and feel
+
+- **The windows follow the GNOME HIG more closely.** Settings rows drop their
+  coloured badge circles for plain rows, as in GNOME Settings, and hotkeys show
+  as keycaps (`Gtk.ShortcutLabel`) instead of raw `super+shift+y` text. List
+  rows use plain Install/Remove buttons and flat icon buttons, keeping the
+  coloured styles for a view's one main action.
+- **The clipboard picker uses a view switcher.** Recent and Snippets are an
+  `Adw.ViewStack` with an inline `Adw.ViewSwitcher` instead of notebook tabs,
+  with the lists in a card and a shorter keyboard hint.
+- **Dialogs are `Adw.Dialog`s.** The recipe wizard, the icon picker and the
+  Settings text editors attach to the window they were opened from.
+- **AppStream metainfo.** `install.sh` installs
+  `data/io.github.karanshukla.vinoPop.metainfo.xml`, so GNOME Software and KDE
+  Discover can describe vinoPop. `--uninstall` removes it.
+- Copy fixes: no more `--` dashes, header capitalisation on headings and
+  buttons, and the welcome dialog mentions the app grid as well as the tray.
+
 ## [1.2.0] - 2026-10-23
 
 ### ✨ Features

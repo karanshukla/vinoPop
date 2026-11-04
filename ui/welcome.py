@@ -56,7 +56,7 @@ def show_welcome_dialog(
     hero.add_css_class("compact")
 
     # ---- 4-step usage explainer ----
-    steps_lbl = Gtk.Label(xalign=0, label="How to use it")
+    steps_lbl = Gtk.Label(xalign=0, label="How to Use It")
     steps_lbl.add_css_class("heading")
     outer.append(steps_lbl)
 
@@ -66,7 +66,7 @@ def show_welcome_dialog(
         (
             1,
             "Highlight text",
-            "Select anything in any app -- a URL, an error message, a paragraph.",
+            "Select anything in any app: a link, an error message, a paragraph.",
         ),
         (
             2,
@@ -75,22 +75,23 @@ def show_welcome_dialog(
         ),
         (
             3,
-            "Open the tray icon for more",
-            "It sits in your panel's system tray -- find Settings, Plugin Manager, "
-            "and your custom buttons there.",
+            "Find Settings and plugins",
+            "Open vinoPop from the app grid, or from its tray icon where your desktop "
+            "has one, for Settings, the Plugin Manager and your custom buttons.",
         ),
         (
             4,
-            "Starter plugins are pre-installed",
+            "Starter plugins are installed",
             "Editing buttons, clipboard history, word count, text transforms, and offline "
             "translate and AI actions, plus Google, Wikipedia and YouTube search. Open "
-            "Plugin Manager to add more (developer tools, calculator, QR, etc.).",
+            "the Plugin Manager to add more, like developer tools, a calculator and QR codes.",
         ),
     ]:
         row = Adw.ActionRow(title=head, subtitle=body)
-        num = Gtk.Label(label=f"{n}.")
+        num = Gtk.Label(label=str(n), valign=Gtk.Align.CENTER)
         num.add_css_class("accent")
         num.add_css_class("title-3")
+        num.add_css_class("numeric")
         row.add_prefix(num)
         steps.append(row)
     outer.append(steps)
@@ -98,7 +99,7 @@ def show_welcome_dialog(
     # ---- bottom action row ----
     bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=10)
     if on_open_plugins is not None:
-        plug_btn = Gtk.Button(label="Open Plugin Manager…")
+        plug_btn = Gtk.Button(label="Open _Plugin Manager", use_underline=True)
         plug_btn.add_css_class("pill")
         plug_btn.connect("clicked", lambda _b: (dlg.close(), on_open_plugins()))
         bottom.append(plug_btn)
@@ -106,7 +107,7 @@ def show_welcome_dialog(
     spacer = Gtk.Box(hexpand=True)
     bottom.append(spacer)
 
-    close_btn = Gtk.Button(label="Got it -- let's go")
+    close_btn = Gtk.Button(label="_Get Started", use_underline=True)
     close_btn.add_css_class("suggested-action")
     close_btn.add_css_class("pill")
     close_btn.connect("clicked", lambda _b: dlg.close())

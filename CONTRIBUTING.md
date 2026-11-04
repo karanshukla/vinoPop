@@ -17,6 +17,7 @@ tray/               tray protocol (daemon side) and the Qt tray process
 platform_backend/   X11 and KDE Wayland backends
 vino_ai/            offline AI on OpenVINO: models, worker, OCR, doctor
 plugins_repo/       bundled plugins and recipes (the catalogue)
+data/               AppStream metainfo (install.sh puts it in ~/.local/share/metainfo)
 icons/  docs/  scripts/  tests/
 ```
 
