@@ -10,6 +10,15 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+### ✨ Features
+
+- One-line install from a GitHub release: `curl -fsSL https://github.com/karanshukla/vinoPop/releases/latest/download/get.sh | bash` (`-s -- --with-ai` for the offline AI). Releases now ship a tarball with a `VERSION` file and `SHA256SUMS`; `get.sh` checks the tarball, unpacks it into `~/.local/share/vinopop` behind an `app` link and runs its `install.sh`.
+- Settings > Advanced > Updates: Check for updates, then Update to vN, then Restart. Nothing goes online until you click it. It runs `vinopop-upgrade`, the copy of `get.sh` the installer keeps.
+
+### 🐛 Bug Fixes
+
+- An install without `.git` (a release tarball) showed version 0.0.0; it reads the tarball's `VERSION` file now.
+
 ## [1.3.0] - 2026-11-01
 
 ### ✨ Features

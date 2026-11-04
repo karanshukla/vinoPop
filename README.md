@@ -49,7 +49,16 @@ Then the packages for your desktop (same names everywhere, except `python3-xlib`
 | KDE Plasma Wayland | `wl-clipboard`, plus `gtk4-layer-shell` for native popup placement (`gir1.2-gtk4layershell-1.0` on Debian 13 / Ubuntu 24.10+) and `ydotool` if you want Paste/Cut without KDE's Remote Control prompt | Native Wayland; `xclip` isn't used. `python3-xlib` only matters without `gtk4-layer-shell` |
 | Plain Xorg (Cinnamon, XFCE, MATE ...), best-effort | same as the first row | Same code path as XWayland, less tested |
 
-Then vinoPop:
+Then vinoPop, from the latest release (no sudo; add `-s -- --with-ai` after `bash` for the offline AI and OCR, in a venv that sees the system's GTK):
+
+```sh
+curl -fsSL https://github.com/karanshukla/vinoPop/releases/latest/download/get.sh | bash
+vinopop
+```
+
+`get.sh` checks the release tarball against its `SHA256SUMS`, unpacks it into `~/.local/share/vinopop`, and runs its `install.sh`. To upgrade, use **Check for updates** in Settings > Advanced (nothing goes online until you click it), or run `vinopop-upgrade`. `vinopop-upgrade --uninstall` removes it again.
+
+Or from a git clone:
 
 ```sh
 git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
