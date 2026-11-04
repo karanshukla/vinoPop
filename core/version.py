@@ -1,4 +1,5 @@
-"""Resolve vinoPop's version from its git tag when running from a checkout."""
+"""Resolve vinoPop's version: its git tag in a checkout, else the VERSION file a
+release tarball carries (get.sh installs those)."""
 
 from __future__ import annotations
 
@@ -29,8 +30,18 @@ def _from_git() -> str | None:
     return tag[1:] if tag.startswith("v") else tag
 
 
+def _from_file() -> str | None:
+    try:
+        text = (_HERE / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    return text[1:] if text.startswith("v") else text
+
+
 def get_version() -> str:
-    return _from_git() or "0.0.0"
+    return _from_git() or _from_file() or "0.0.0"
 
 
 __version__ = get_version()

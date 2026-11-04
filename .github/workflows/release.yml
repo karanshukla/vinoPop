@@ -1,7 +1,9 @@
 name: Release
 
-# Runs on a pushed v* tag. vinoPop installs from a checkout (install.sh), so
-# a release is the tag plus its notes: nothing is built or uploaded.
+# Runs on a pushed v* tag. vinoPop is Python run from its source tree, so a
+# release is the tag's tree as a tarball (with a VERSION file, which
+# core/version.py reads where there's no .git), get.sh (the one-line
+# installer, which unpacks it) and SHA256SUMS over both. Nothing is built.
 
 on:
   push:
@@ -31,13 +33,23 @@ jobs:
             echo '## Install'
             echo
             echo '```sh'
-            echo "git clone --branch v${version} https://github.com/${GITHUB_REPOSITORY}.git ~/vinopop"
-            echo 'cd ~/vinopop && bash install.sh'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/download/v${version}/get.sh | bash"
             echo '```'
             echo
             echo "The [README](https://github.com/${GITHUB_REPOSITORY}#install) has the system packages and the optional AI setup."
           } >> RELEASE_NOTES.md
           cat RELEASE_NOTES.md
+
+      # Not GitHub's own tag tarballs: they aren't in SHA256SUMS, and their
+      # bytes have changed before.
+      - name: Tarball and checksums
+        run: |
+          mkdir dist
+          git archive --format=tar.gz --prefix="vinopop-${GITHUB_REF_NAME}/" \
+            --add-virtual-file="vinopop-${GITHUB_REF_NAME}/VERSION:${GITHUB_REF_NAME}" \
+            -o "dist/vinopop-${GITHUB_REF_NAME}.tar.gz" HEAD
+          cp get.sh dist/get.sh
+          (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
       - name: Create the release
         env:
@@ -48,7 +60,7 @@ jobs:
             printf '\n**Full changelog**: https://github.com/%s/compare/%s...%s\n' \
               "$GITHUB_REPOSITORY" "$previous" "$GITHUB_REF_NAME" >> RELEASE_NOTES.md
           fi
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --title "vinoPop ${GITHUB_REF_NAME#v}" \
             --notes-file RELEASE_NOTES.md \
             --verify-tag
