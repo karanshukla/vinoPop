@@ -19,6 +19,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from plugin_system import recipe_loader  # noqa: E402
+from ui import gtk4_app  # noqa: E402
 from ui.icon_picker import IconPicker  # noqa: E402
 
 # --------------------------------------------------------------------------
@@ -314,7 +315,7 @@ class RecipeWizard:
         )
         self._editing = bool(recipe)
         self._result: dict | None = None
-        self._window: Adw.Window | None = None
+        self._window: Adw.Dialog | None = None
         self._nav: Adw.NavigationView | None = None
         self._loop: GLib.MainLoop | None = None
         self._next_buttons: dict[str, Gtk.Button] = {}
@@ -327,12 +328,12 @@ class RecipeWizard:
         """Show the wizard modally and block (nested main loop) until it is
         applied or cancelled. Returns the recipe dict or None."""
         _install_mock_css()
-        win = Adw.Window(modal=True)
-        win.set_title("Edit custom button" if self._editing else "New custom button")
-        win.set_default_size(720, 560)
-        if isinstance(self._parent, Gtk.Window):
-            win.set_transient_for(self._parent)
-        win.set_icon_name("vinopop")
+        # An Adw.Dialog, so it attaches to the Plugin Manager like any
+        # GNOME app's dialog (its own window when there's no parent)
+        win = Adw.Dialog()
+        win.set_title("Edit Custom Button" if self._editing else "New Custom Button")
+        win.set_content_width(720)
+        win.set_content_height(560)
         self._window = win
 
         self._nav = Adw.NavigationView()
@@ -349,16 +350,12 @@ class RecipeWizard:
             content, complete = builders[tag]()
             self._nav.add(self._wrap_page(i, tag, title, content))
             self._set_page_complete(tag, complete)
-        win.set_content(self._nav)
+        win.set_child(self._nav)
 
-        # Esc cancels, like the old assistant
-        keys = Gtk.EventControllerKey()
-        keys.connect("key-pressed", self._on_key)
-        win.add_controller(keys)
-
+        # Esc cancels, like the old assistant: Adw.Dialog closes on Escape
         self._loop = GLib.MainLoop()
-        win.connect("close-request", self._on_close_request)
-        win.present()
+        parent = self._parent if isinstance(self._parent, Gtk.Widget) else None
+        gtk4_app.present_dialog(win, parent, self._on_closed)
         self._loop.run()
         self._loop = None
         return self._result
@@ -385,6 +382,7 @@ class RecipeWizard:
         bottom.set_margin_start(12)
         bottom.set_margin_end(12)
         cancel = Gtk.Button(label="Cancel")
+        cancel.add_css_class("pill")
         cancel.connect("clicked", lambda _b: self._window.close())
         bottom.append(cancel)
         bottom.append(Gtk.Box(hexpand=True))
@@ -412,16 +410,9 @@ class RecipeWizard:
         if btn is not None:
             btn.set_sensitive(bool(complete))
 
-    def _on_key(self, _ctrl, keyval, _code, _state) -> bool:
-        if keyval == Gdk.KEY_Escape and self._window is not None:
-            self._window.close()
-            return True
-        return False
-
-    def _on_close_request(self, _win) -> bool:
+    def _on_closed(self, _dialog) -> None:
         if self._loop is not None and self._loop.is_running():
             self._loop.quit()
-        return False  # let the window close
 
     @staticmethod
     def _page_box(spacing: int, orientation=Gtk.Orientation.VERTICAL, hmargin: int = 28) -> Gtk.Box:
@@ -445,7 +436,7 @@ class RecipeWizard:
         page.append(
             _label(
                 "Custom buttons turn any text you select into an action. We'll "
-                "set yours up in a few short steps -- no coding needed.",
+                "set yours up in a few short steps, no coding needed.",
                 wrap=True,
             )
         )
@@ -465,7 +456,7 @@ class RecipeWizard:
                 3,
                 "starred-symbolic",
                 "Done",
-                "Whatever you set up\nhappens. Open a URL,\nrun a command -- you choose.",
+                "Whatever you set up\nhappens. Open a URL,\nrun a command: you choose.",
             ),
         ]:
             flow.append(self._build_step_tile(n, icon, head, body))
@@ -1026,10 +1017,10 @@ class RecipeWizard:
         page = self._page_box(12)
 
         page.append(_label("When should it show up?", "title-2", wrap=True))
-        page.append(_label("You can leave this as 'always' -- most people do.", wrap=True))
+        page.append(_label("You can leave this as 'always'. Most people do.", wrap=True))
 
         # Radio-style check buttons (Gtk.RadioButton is gone in GTK 4)
-        self._always_radio = Gtk.CheckButton(label="Always -- show on any selected text")
+        self._always_radio = Gtk.CheckButton(label="Always: show on any selected text")
         page.append(self._always_radio)
 
         self._only_radio = Gtk.CheckButton(label="Only when I've selected one of these:")

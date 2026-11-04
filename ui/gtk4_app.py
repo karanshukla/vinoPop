@@ -47,3 +47,22 @@ def run_window(win: Gtk.Window) -> None:
     win.connect("close-request", lambda *_: (quit(), False)[1])
     win.present()
     run()
+
+
+def present_dialog(dialog: Adw.Dialog, parent: Gtk.Widget | None, on_closed) -> None:
+    """Present an Adw.Dialog over `parent` and call on_closed(dialog) once
+    it is gone. libadwaita 1.5 doesn't emit "closed" for a dialog with no
+    libadwaita window to attach to (it floats in a window of its own), so
+    that window going away counts as closed too."""
+    done = {"yes": False}
+
+    def _closed(*_a) -> None:
+        if not done["yes"]:
+            done["yes"] = True
+            on_closed(dialog)
+
+    dialog.connect("closed", _closed)
+    dialog.present(parent)
+    root = dialog.get_root()
+    if isinstance(root, Gtk.Window) and not isinstance(root, (Adw.Window, Adw.ApplicationWindow)):
+        root.connect("unmap", _closed)
