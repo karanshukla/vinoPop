@@ -2356,12 +2356,32 @@ def _run_nested(present: Callable[[], None], connect_done: Callable[[Callable], 
     loop.run()
 
 
+class _PickerTabs:
+    """The picker's Recent / Snippets views by index (0 = Recent), over
+    the Adw.ViewStack that shows them."""
+
+    _NAMES = ("recent", "snippets")
+
+    def __init__(self, stack: Adw.ViewStack) -> None:
+        self.stack = stack
+
+    def get_n_pages(self) -> int:
+        return len(self._NAMES)
+
+    def get_current_page(self) -> int:
+        name = self.stack.get_visible_child_name()
+        return self._NAMES.index(name) if name in self._NAMES else 0
+
+    def set_current_page(self, index: int) -> None:
+        self.stack.set_visible_child_name(self._NAMES[index % len(self._NAMES)])
+
+
 class _PickerDialog:
     def __init__(self) -> None:
         self.dialog: Gtk.Window | None = None
         self.target_window: str | None = None
         self.search_entry: Gtk.SearchEntry | None = None
-        self.notebook: Gtk.Notebook | None = None
+        self.tabs: _PickerTabs | None = None
         self.recent_listbox: Gtk.ListBox | None = None
         self.snippets_listbox: Gtk.ListBox | None = None
         self._filter_text = ""
@@ -2404,7 +2424,7 @@ class _PickerDialog:
         # GTK paints over ListBox content. Without an explicit class
         # the row area kept a dark cast in the light theme.
         win.add_css_class("lp-picker")
-        win.set_title("vinoPop - Clipboard & Snippets")
+        win.set_title("Clipboard")
         win.set_default_size(_PICKER_W, _PICKER_H)
         win.set_icon_name("vinopop")
         # Borderless, ephemeral picker on X11 - moved via the brand-row drag
@@ -2453,38 +2473,33 @@ class _PickerDialog:
         outer.set_margin_start(8)
         outer.set_margin_end(8)
 
-        # Branding header - keeps the picker recognisably "vinoPop"
-        # without a window decoration to lean on (this is a borderless
-        # popup). The icon is the full-colour app logo so it reads on
-        # both the dark and the light theme.
-        # A click gesture on the header begins a window-move drag - the
-        # only way for the user to reposition a decoration-less window
-        # without re-enabling the title bar.
+        # Title row - keeps the picker recognisably vinoPop's without a
+        # window decoration to lean on (this is a borderless popup), and
+        # doubles as its drag handle: a click on it begins a window move,
+        # the only way to reposition a decoration-less window. Not an
+        # Adw.HeaderBar, whose own drag would let the focus-out dismiss
+        # fire mid-move (_on_header_pressed flags the drag).
         brand_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        brand_row.set_margin_bottom(6)
+        brand_row.set_margin_start(4)
+        brand_row.set_margin_end(4)
+        brand_row.set_margin_bottom(8)
         brand_row.set_cursor_from_name("grab")
         header_click = Gtk.GestureClick()
         header_click.set_button(Gdk.BUTTON_PRIMARY)
         header_click.connect("pressed", self._on_header_pressed)
         brand_row.add_controller(header_click)
+        # Full-colour app logo, so it reads on the dark and the light theme
         brand_icon = Gtk.Image.new_from_icon_name("vinopop")
         brand_icon.set_pixel_size(24)
         brand_row.append(brand_icon)
-        brand_text_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        brand_text_box.set_valign(Gtk.Align.CENTER)
-        brand_text_box.set_hexpand(True)
-        brand_name = Gtk.Label(xalign=0)
-        brand_name.set_markup("<b>vinoPop</b>")
-        brand_text_box.append(brand_name)
-        brand_sub = Gtk.Label(label="Clipboard & snippets", xalign=0)
-        brand_sub.add_css_class("dim-label")
-        brand_text_box.append(brand_sub)
-        brand_row.append(brand_text_box)
+        brand_name = Gtk.Label(label="Clipboard", xalign=0, hexpand=True)
+        brand_name.add_css_class("heading")
+        brand_row.append(brand_name)
         outer.append(brand_row)
 
         # Search
         self.search_entry = Gtk.SearchEntry()
-        self.search_entry.set_placeholder_text("Type to filter…")
+        self.search_entry.set_placeholder_text("Search clipboard and snippets")
         # A placeholder isn't a name: without this it reads as a blank field
         self.search_entry.update_property(
             [Gtk.AccessibleProperty.LABEL], ["Search clipboard history and snippets"]
@@ -2492,12 +2507,13 @@ class _PickerDialog:
         self.search_entry.connect("search-changed", self._on_search_changed)
         outer.append(self.search_entry)
 
-        # Tabs
-        self.notebook = Gtk.Notebook()
-        self.notebook.set_margin_top(6)
-        self.notebook.set_vexpand(True)
+        # Recent / Snippets: an Adw.ViewStack with an inline view switcher,
+        # the libadwaita pattern for a few top-level views (HIG) rather
+        # than notebook tabs.
+        stack = Adw.ViewStack()
+        stack.set_vexpand(True)
+        self.tabs = _PickerTabs(stack)
 
-        # Recent tab
         recent_scroll = Gtk.ScrolledWindow()
         recent_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         recent_scroll.set_vexpand(True)
@@ -2506,10 +2522,10 @@ class _PickerDialog:
         self.recent_listbox.set_filter_func(self._row_filter)
         self.recent_listbox.connect("row-activated", self._on_row_activated)
         recent_scroll.set_child(self.recent_listbox)
-        self.notebook.append_page(recent_scroll, Gtk.Label(label="Recent"))
+        stack.add_titled_with_icon(recent_scroll, "recent", "Recent", "edit-paste-symbolic")
 
-        # Snippets tab - listbox plus a "+ New snippet" button under it.
-        snippets_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        # Snippets view - listbox plus a New Snippet button under it.
+        snippets_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         snippets_scroll = Gtk.ScrolledWindow()
         snippets_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         snippets_scroll.set_vexpand(True)
@@ -2519,22 +2535,43 @@ class _PickerDialog:
         self.snippets_listbox.connect("row-activated", self._on_row_activated)
         snippets_scroll.set_child(self.snippets_listbox)
         snippets_box.append(snippets_scroll)
-        new_snippet_btn = Gtk.Button(label="＋ New snippet…")
+        new_snippet_btn = Gtk.Button(
+            child=Adw.ButtonContent(
+                icon_name="list-add-symbolic", label="_New Snippet", use_underline=True
+            )
+        )
         new_snippet_btn.set_halign(Gtk.Align.START)
-        new_snippet_btn.set_margin_top(4)
+        new_snippet_btn.set_margin_start(4)
+        new_snippet_btn.set_margin_bottom(4)
+        new_snippet_btn.add_css_class("flat")
         new_snippet_btn.connect("clicked", self._on_new_snippet_clicked)
         snippets_box.append(new_snippet_btn)
-        self.notebook.append_page(snippets_box, Gtk.Label(label="Snippets"))
+        stack.add_titled_with_icon(snippets_box, "snippets", "Snippets", "document-edit-symbolic")
 
-        outer.append(self.notebook)
+        switcher = Adw.ViewSwitcher(stack=stack, policy=Adw.ViewSwitcherPolicy.WIDE)
+        switcher.set_halign(Gtk.Align.CENTER)
+        switcher.set_margin_top(8)
+        switcher.set_margin_bottom(4)
+        outer.append(switcher)
 
-        # Hint
-        hint = Gtk.Label(xalign=0, margin_top=6)
-        hint.set_markup(
-            "<small>Enter to paste · Tab to switch tab · Ctrl+P pin · Del remove · "
-            "Ctrl+R rename · Snippets support <tt>{date} {time} {datetime} "
-            "{clipboard} {cursor} {ask:Label}</tt> · Esc to close</small>"
+        # The lists sit in a card, like a boxed list in any GNOME app
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        content.add_css_class("card")
+        content.set_overflow(Gtk.Overflow.HIDDEN)
+        content.append(stack)
+        outer.append(content)
+
+        # Keyboard hint
+        hint = Gtk.Label(
+            label="Enter to paste · Tab to switch · Ctrl+P to pin · Ctrl+R to rename · "
+            "Delete to remove · Esc to close",
+            xalign=0,
+            margin_top=8,
+            margin_start=4,
+            margin_end=4,
         )
+        hint.add_css_class("caption")
+        hint.add_css_class("dim-label")
         hint.set_wrap(True)
         outer.append(hint)
 
@@ -2654,7 +2691,7 @@ class _PickerDialog:
         logging.getLogger("vinopop").info("[clipboard.show] window destroyed -- state cleared")
         self.dialog = None
         self.search_entry = None
-        self.notebook = None
+        self.tabs = None
         self.recent_listbox = None
         self.snippets_listbox = None
         self._filter_text = ""
@@ -2680,7 +2717,7 @@ class _PickerDialog:
             entries = list(_history)
         if not entries:
             self.recent_listbox.append(
-                self._empty_row("History is empty", "Copy something - it appears here.")
+                self._empty_row("History is empty", "Copy something and it shows up here.")
             )
         else:
             for entry in entries:
@@ -3111,8 +3148,8 @@ class _PickerDialog:
         if _pin_entry(entry, name, trigger=trigger, category=category, text=new_text) is None:
             return
         self._populate_snippets()
-        if self.notebook is not None:
-            self.notebook.set_current_page(1)
+        if self.tabs is not None:
+            self.tabs.set_current_page(1)
 
     def _on_unpin_clicked(self, _btn, entry: Entry) -> None:
         """Delete a snippet. Confirms first since the body, triggers,
@@ -3605,8 +3642,8 @@ class _PickerDialog:
             return
         _create_snippet(name=name, text=body, trigger=trigger, category=category)
         self._populate_snippets()
-        if self.notebook is not None:
-            self.notebook.set_current_page(1)
+        if self.tabs is not None:
+            self.tabs.set_current_page(1)
 
     def _confirm_trigger_conflicts(
         self,
@@ -3875,9 +3912,9 @@ class _PickerDialog:
     # ---- keyboard ----
 
     def _current_listbox(self) -> Gtk.ListBox | None:
-        if self.notebook is None:
+        if self.tabs is None:
             return None
-        page = self.notebook.get_current_page()
+        page = self.tabs.get_current_page()
         return self.recent_listbox if page == 0 else self.snippets_listbox
 
     def _first_visible_row(self, listbox: Gtk.ListBox):
@@ -3919,9 +3956,9 @@ class _PickerDialog:
         # Replaces the default focus-cycling (search-entry → listbox →
         # +New button etc.) which is overkill for a 2-tab popup.
         if keyval in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
-            if self.notebook is not None and self.notebook.get_n_pages() > 1:
-                cur = self.notebook.get_current_page()
-                self.notebook.set_current_page(1 - cur)
+            if self.tabs is not None and self.tabs.get_n_pages() > 1:
+                cur = self.tabs.get_current_page()
+                self.tabs.set_current_page(1 - cur)
             return True
         # Down / Up → jump straight into the listbox the first time
         # (skipping search-entry + tab-labels), then let GTK's native
@@ -3972,7 +4009,7 @@ class _PickerDialog:
         # Ctrl+Delete works from anywhere, like Ctrl+P.
         if keyval in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete):
             ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-            on_recent = self.notebook is not None and self.notebook.get_current_page() == 0
+            on_recent = self.tabs is not None and self.tabs.get_current_page() == 0
             if on_recent and (ctrl or self._focus_within(self.recent_listbox)):
                 self._action_on_selected("delete")
                 return True
@@ -4006,9 +4043,9 @@ class _PickerDialog:
         return False
 
     def _action_on_selected(self, action: str) -> None:
-        if self.notebook is None:
+        if self.tabs is None:
             return
-        page = self.notebook.get_current_page()
+        page = self.tabs.get_current_page()
         listbox = self.recent_listbox if page == 0 else self.snippets_listbox
         if listbox is None:
             return
