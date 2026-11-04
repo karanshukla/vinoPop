@@ -21,6 +21,8 @@ APPS_DIR="$DATA_HOME/applications"
 APP_FILE="$APPS_DIR/${APP_ID}.desktop"
 ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 ICON_FILE="$ICON_DIR/${APP_ID}.svg"
+METAINFO_DIR="$DATA_HOME/metainfo"
+METAINFO_FILE="$METAINFO_DIR/${APP_ID}.metainfo.xml"
 # Files left behind by older installs (short-name launcher, and the
 # pre-rename LinuxPop launcher, autostart entry and icon) to clean up.
 LEGACY_FILES=(
@@ -57,6 +59,9 @@ uninstall() {
     update-desktop-database "$APPS_DIR" 2>/dev/null || true
     if [[ -f "$ICON_FILE" ]]; then
         rm -v "$ICON_FILE"
+    fi
+    if [[ -f "$METAINFO_FILE" ]]; then
+        rm -v "$METAINFO_FILE"
     fi
     if [[ -f "$BIN_FILE" ]] && grep -q "vinoPop launcher" "$BIN_FILE"; then
         rm -v "$BIN_FILE"
@@ -406,6 +411,11 @@ if [[ -f "$REPO_DIR/icons/vinopop.svg" ]]; then
     install -Dm644 "$REPO_DIR/icons/vinopop.svg" "$ICON_FILE"
 fi
 gtk-update-icon-cache -f "$ICON_DIR/.." 2>/dev/null || true
+
+# AppStream metadata, so GNOME Software / KDE Discover describe vinoPop
+if [[ -f "$REPO_DIR/data/${APP_ID}.metainfo.xml" ]]; then
+    install -Dm644 "$REPO_DIR/data/${APP_ID}.metainfo.xml" "$METAINFO_FILE"
+fi
 
 echo "[install] autostart written to $AUTOSTART_FILE"
 echo "[install] launcher entry written to $APP_FILE"

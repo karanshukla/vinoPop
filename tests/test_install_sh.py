@@ -104,3 +104,12 @@ def test_uninstall_purge_leaves_nothing_behind(installed):
         str(p.relative_to(home)) for p in home.rglob("*") if not p.is_dir() and p != mime_cache
     )
     assert leftover == []
+
+
+def test_appstream_metainfo_is_installed_for_the_launcher(installed):
+    _, home, _ = installed
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(home / f".local/share/metainfo/{APP_ID}.metainfo.xml").getroot()
+    assert root.findtext("id") == APP_ID
+    assert root.findtext("launchable") == f"{APP_ID}.desktop"
