@@ -18,12 +18,13 @@ import struct
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QCursor, QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 # Run as a script, so the repo root (not this folder) has to be on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core import vino_family  # noqa: E402
 from core.xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
 from core.xdg_paths import CONFIG_DIR, HICOLOR_APPS
 from tray.tray import FrameReader  # the same wire protocol as the daemon side
@@ -56,6 +57,16 @@ def _send_message(sock: socket.socket, msg: dict) -> None:
 
 
 # ─── TrayQt ─────────────────────────────────────────────────────────
+
+
+def _icon(what: str) -> QIcon:
+    """A menu icon from the desktop's theme, by what the item does."""
+    return QIcon.fromTheme(vino_family.MENU_ICONS[what])
+
+
+def _open(url: str) -> None:
+    """Opens a link in the browser; the tray process is a Qt app already."""
+    QDesktopServices.openUrl(QUrl(url))
 
 
 class TrayQt:
@@ -205,6 +216,8 @@ class TrayQt:
 
     # ─── menu ───
     def _setup_menu(self) -> None:
+        # Icons per vino-ui's tray rules (core/vino_family.py): actions and
+        # submenus get one; the checkable item and the list of apps don't.
         h = self._menu.addAction("vinoPop")
         h.setEnabled(False)
         self._menu.addSeparator()
@@ -212,17 +225,25 @@ class TrayQt:
         self._toggle_action.setCheckable(True)
         self._toggle_action.setChecked(True)
         self._toggle_action.triggered.connect(lambda checked: self._emit("toggle_watcher", checked))
-        a = self._menu.addAction("Show popup now")
+        a = self._menu.addAction(_icon("popup"), "Show popup now")
         a.triggered.connect(lambda: self._emit("show_popup", None))
         self._menu.addSeparator()
-        a = self._menu.addAction("Settings…")
+        a = self._menu.addAction(_icon("settings"), "Settings…")
         a.triggered.connect(lambda: self._emit("settings", None))
-        a = self._menu.addAction("Plugins…")
+        a = self._menu.addAction(_icon("plugins"), "Plugins…")
         a.triggered.connect(lambda: self._emit("plugins", None))
-        a = self._menu.addAction("About vinoPop")
+        a = self._menu.addAction(_icon("about"), "About vinoPop")
         a.triggered.connect(lambda: self._emit("about", None))
         self._menu.addSeparator()
-        a = self._menu.addAction("Quit vinoPop")
+        apps = self._menu.addMenu(_icon("apps"), vino_family.APPS_MENU)
+        a = apps.addAction(_icon("website"), vino_family.SITE_LABEL)
+        a.triggered.connect(lambda: _open(vino_family.SITE))
+        apps.addSeparator()
+        for app in vino_family.others("vinoPop"):
+            a = apps.addAction(app.name)
+            a.setToolTip(app.blurb)
+            a.triggered.connect(lambda _=False, url=app.page: _open(url))
+        a = self._menu.addAction(_icon("quit"), "Quit vinoPop")
         a.triggered.connect(lambda: self._emit("quit", None))
 
     def _emit(self, event: str, value: object) -> None:
