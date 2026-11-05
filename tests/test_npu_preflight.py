@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from core import distro as core_distro
 from vino_ai import doctor, npu_preflight
 
 DRIVER_1_35 = b"npu-linux-driver-ci-1.35.0.20260722\0libopenvino_intel_npu_compiler_l\0"
@@ -131,11 +132,17 @@ def test_no_level_zero_fix_follows_the_distro(tmp_path):
     assert npu_preflight.NPU_RELEASES_URL in notes["level-zero NPU backend"].fix
 
 
-def test_no_level_zero_fix_on_opensuse_skips_the_debs(tmp_path):
-    fix = notes_for(make_tree(tmp_path, driver=None, distro="opensuse-tumbleweed"))[
+def test_no_level_zero_fix_on_opensuse_is_the_package(tmp_path, monkeypatch):
+    fix = notes_for(make_tree(tmp_path / "a", driver=None, distro="opensuse-tumbleweed"))[
         "level-zero NPU backend"
     ].fix
-    assert npu_preflight.NPU_RELEASES_URL in fix and "dpkg" not in fix
+    assert fix == "sudo zypper install libze_intel_npu1"
+    # Aeon, Kalpa, MicroOS: read-only /usr with transactional-update.
+    root = make_tree(tmp_path / "b", driver=None, distro="opensuse-aeon")
+    _write(root / "usr/sbin/transactional-update", "")
+    monkeypatch.setattr(core_distro, "_usr_read_only", lambda _root: True)
+    fix = notes_for(root)["level-zero NPU backend"].fix
+    assert fix == "sudo transactional-update pkg install libze_intel_npu1, then reboot"
 
 
 def test_compiler_missing(tmp_path):
