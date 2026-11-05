@@ -10,10 +10,13 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-05
+
 ### ✨ Features
 
 - One-line install from a GitHub release: `curl -fsSL https://github.com/karanshukla/vinoPop/releases/latest/download/get.sh | bash` (`-s -- --with-ai` for the offline AI). Releases now ship a tarball with a `VERSION` file and `SHA256SUMS`; `get.sh` checks the tarball, unpacks it into `~/.local/share/vinopop` behind an `app` link and runs its `install.sh`.
 - Settings > Advanced > Updates: Check for updates, then Update to vN, then Restart. Nothing goes online until you click it. It runs `vinopop-upgrade`, the copy of `get.sh` the installer keeps.
+- The tray links to vinopilot.ca and the other vinoPilot apps, with the menu icons the other vinoPilot trays use.
 
 ### 🐛 Bug Fixes
 
@@ -269,7 +272,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/karanshukla/vinoPop/compare/v1.1.0...v1.1.1
