@@ -136,13 +136,13 @@ def test_no_level_zero_fix_on_opensuse_is_the_package(tmp_path, monkeypatch):
     fix = notes_for(make_tree(tmp_path / "a", driver=None, distro="opensuse-tumbleweed"))[
         "level-zero NPU backend"
     ].fix
-    assert fix == "sudo zypper install libze_intel_npu1"
+    assert fix == "sudo zypper install libze_intel_npu1 level-zero"
     # Aeon, Kalpa, MicroOS: read-only /usr with transactional-update.
     root = make_tree(tmp_path / "b", driver=None, distro="opensuse-aeon")
     _write(root / "usr/sbin/transactional-update", "")
     monkeypatch.setattr(core_distro, "_usr_read_only", lambda _root: True)
     fix = notes_for(root)["level-zero NPU backend"].fix
-    assert fix == "sudo transactional-update pkg install libze_intel_npu1, then reboot"
+    assert fix == "sudo transactional-update pkg install libze_intel_npu1 level-zero, then reboot"
 
 
 def test_compiler_missing(tmp_path):

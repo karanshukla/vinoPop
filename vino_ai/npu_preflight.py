@@ -111,7 +111,9 @@ def driver_fix(family: str, root: Path = ROOT) -> str:
         # Tumbleweed and Leap 16 package it (checked 2026-11-05). It's the
         # user-mode driver only, built with ENABLE_NPU_COMPILER_BUILD=OFF, so
         # the compiler note still applies; firmware is in kernel-firmware-intel.
-        return distro.install_command(["libze_intel_npu1"], root, fam=family)
+        # It doesn't require the Level Zero loader (level-zero), unlike
+        # Fedora's rpm and Intel's debs, so name it too.
+        return distro.install_command(["libze_intel_npu1", "level-zero"], root, fam=family)
     return (
         "install intel-level-zero-npu, intel-driver-compiler-npu and intel-fw-npu from "
         f"{NPU_RELEASES_URL} (`sudo dpkg -i ./*.deb` on Debian/Ubuntu)"
