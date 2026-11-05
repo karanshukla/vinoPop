@@ -131,6 +131,13 @@ def test_no_level_zero_fix_follows_the_distro(tmp_path):
     assert npu_preflight.NPU_RELEASES_URL in notes["level-zero NPU backend"].fix
 
 
+def test_no_level_zero_fix_on_opensuse_skips_the_debs(tmp_path):
+    fix = notes_for(make_tree(tmp_path, driver=None, distro="opensuse-tumbleweed"))[
+        "level-zero NPU backend"
+    ].fix
+    assert npu_preflight.NPU_RELEASES_URL in fix and "dpkg" not in fix
+
+
 def test_compiler_missing(tmp_path):
     notes = notes_for(make_tree(tmp_path, compiler=False))
     comp = notes["NPU compiler"]
