@@ -165,6 +165,19 @@ def test_level_zero_symlink_points_at_the_older_build(tmp_path):
     assert note.ok is False and note.fix.startswith("sudo ln -sf libze_intel_npu.so.1.35.0 ")
 
 
+def test_fixes_on_fedora_atomic(tmp_path):
+    # Bazzite, Silverblue, Kinoite: dnf can't install and /usr/lib64 is read-only.
+    root = make_tree(tmp_path / "a", driver=None, distro="bazzite")
+    _write(root / "run/ostree-booted", "")
+    fix = notes_for(root)["level-zero NPU backend"].fix
+    assert fix == "rpm-ostree install intel-npu-driver, then reboot"
+    root = make_tree(tmp_path / "b", compiler=False, distro="bazzite")
+    _write(root / "run/ostree-booted", "")
+    note = notes_for(root)["NPU compiler"]
+    assert note.fix == npu_preflight.COMPILER_FIX_OSTREE
+    assert "/usr/lib64/" not in note.fix and "/etc/ld.so.conf.d/" in note.fix
+
+
 def test_ld_library_path_is_read_under_root(tmp_path):
     root = make_tree(tmp_path, compiler=False)
     _write(root / "opt/npu/lib" / npu_preflight.COMPILER_LOADER, b"x")

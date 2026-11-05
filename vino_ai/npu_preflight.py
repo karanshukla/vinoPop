@@ -55,6 +55,16 @@ COMPILER_FIX = (
     "`dpkg-deb -x intel-driver-compiler-npu_*.deb x && sudo install -m 0755 "
     "$(find x -name '*compiler*.so') /usr/lib64/ && sudo ldconfig`"
 )
+# /usr/lib64 is read-only on Fedora Atomic (Silverblue, Kinoite, Bazzite), but
+# /usr/local is /var/usrlocal there and /etc is writable, so the compiler can
+# go in /usr/local/lib64 once ld.so is told to look there.
+COMPILER_FIX_OSTREE = (
+    "no distro packages the NPU compiler, and /usr/lib64 is read-only here: take "
+    "intel-driver-compiler-npu from the linux-npu-driver release matching your driver "
+    f"({NPU_RELEASES_URL}), then `dpkg-deb -x intel-driver-compiler-npu_*.deb x && "
+    "sudo install -Dm 0755 -t /usr/local/lib64 $(find x -name '*compiler*.so') && "
+    "echo /usr/local/lib64 | sudo tee /etc/ld.so.conf.d/npu-compiler.conf && sudo ldconfig`"
+)
 
 
 @dataclass(frozen=True)
@@ -90,8 +100,10 @@ def install_command(package: str, family: str, root: Path = ROOT) -> str:
     return distro.install_command([package], root, fam=family)
 
 
-def driver_fix(family: str) -> str:
+def driver_fix(family: str, root: Path = ROOT) -> str:
     if family == "fedora":
+        if distro.immutable(root) == distro.OSTREE:
+            return distro.install_command(["intel-npu-driver"], root, fam=family)
         return "sudo dnf install -y intel-npu-driver"
     if family == "arch":
         return "paru -S intel-npu-driver (AUR; needs level-zero-loader)"
@@ -250,7 +262,7 @@ def _level_zero_notes(root: Path, env: Mapping[str, str] | None, family: str) ->
                 "level-zero NPU backend",
                 f"no {LEVEL_ZERO_STEM}.1 on the library path, so OpenVINO's NPU plugin "
                 "has nothing to load and the device will not enumerate",
-                driver_fix(family),
+                driver_fix(family, root),
             )
         ]
 
@@ -311,7 +323,7 @@ def _compiler_notes(root: Path = ROOT, env: Mapping[str, str] | None = None) -> 
             "still enumerates, and every compile fails with "
             "ZE_RESULT_ERROR_UNSUPPORTED_FEATURE (Fedora's intel-npu-driver 1.32 ships "
             "without it)",
-            COMPILER_FIX,
+            COMPILER_FIX_OSTREE if distro.immutable(root) == distro.OSTREE else COMPILER_FIX,
         )
     ]
 
@@ -337,5 +349,6 @@ def npu_missing_help(
                 f"{note.label}: {note.detail}" + (f"; fix: {note.fix}" if note.fix else "")
             )
     if not lines:
-        lines.append(f"no cause found; reinstall the NPU driver: {driver_fix(distro_family(root))}")
+        fix = driver_fix(distro_family(root), root)
+        lines.append(f"no cause found; reinstall the NPU driver: {fix}")
     return lines

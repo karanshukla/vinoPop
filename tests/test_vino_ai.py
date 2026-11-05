@@ -962,3 +962,14 @@ def test_worker_drops_a_cancelled_run_quietly(monkeypatch):
     sink = _Sink()
     ai_worker.run_into(sink, "rewrite", "text")
     assert sink.done is None
+
+
+def test_install_hint_follows_the_install(monkeypatch, tmp_path):
+    import vino_ai
+
+    monkeypatch.setenv("XDG_BIN_HOME", str(tmp_path))
+    assert vino_ai.install_hint() == "pip install --user -r requirements-ai.txt"
+    upgrade = tmp_path / "vinopop-upgrade"
+    upgrade.write_text("#!/bin/sh\n")
+    upgrade.chmod(0o755)
+    assert vino_ai.install_hint() == "vinopop-upgrade --with-ai"
