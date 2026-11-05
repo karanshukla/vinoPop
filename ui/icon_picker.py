@@ -21,6 +21,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 from core.xdg_paths import HICOLOR_APPS, USER_ICONS_DIR  # noqa: E402
+from ui import gtk4_app  # noqa: E402
 
 # How many icons to render per "page". GTK FlowBox is fast enough that
 # 1000+ per page is fine on modern hardware; lazy loading was solving a
@@ -122,11 +123,10 @@ class IconPicker:
         user picks an icon or cancels. Returns the icon name or None."""
         self._all_icons = _list_all_icons()
 
-        dlg = Adw.Window(title="Pick an icon", modal=True)
-        if isinstance(self._parent, Gtk.Window):
-            dlg.set_transient_for(self._parent)
-        dlg.set_default_size(640, 520)
-        dlg.set_icon_name("vinopop")
+        # An Adw.Dialog attaches to the recipe wizard it was opened from
+        dlg = Adw.Dialog(title="Pick an Icon")
+        dlg.set_content_width(640)
+        dlg.set_content_height(520)
         self._dialog = dlg
 
         # Header: Cancel on the left, the search entry as the title widget
@@ -137,7 +137,7 @@ class IconPicker:
         header.pack_start(cancel)
 
         self._search = Gtk.SearchEntry()
-        self._search.set_placeholder_text("Search icons… (e.g. folder, mail, save)")
+        self._search.set_placeholder_text("Search icons, like folder or mail")
         # A placeholder isn't a name: without this it reads as a blank field
         self._search.update_property([Gtk.AccessibleProperty.LABEL], ["Search icons"])
         self._search.set_hexpand(True)
@@ -192,21 +192,18 @@ class IconPicker:
         toolbar = Adw.ToolbarView()
         toolbar.add_top_bar(header)
         toolbar.set_content(outer)
-        dlg.set_content(toolbar)
-
-        # Esc anywhere in the dialog → cancel (returns None)
-        keys = Gtk.EventControllerKey()
-        keys.connect("key-pressed", self._on_key)
-        dlg.add_controller(keys)
+        dlg.set_child(toolbar)
+        # Esc anywhere in the dialog cancels (returns None): Adw.Dialog
+        # closes itself on Escape.
+        dlg.set_focus(self._search)
 
         self._loop = GLib.MainLoop()
-        dlg.connect("close-request", self._on_close_request)
 
         # Initial population
         self._apply_filter()
 
-        dlg.present()
-        self._search.grab_focus()
+        parent = self._parent if isinstance(self._parent, Gtk.Widget) else None
+        gtk4_app.present_dialog(dlg, parent, self._on_closed)
         self._loop.run()
         self._loop = None
         return self._chosen
@@ -294,20 +291,13 @@ class IconPicker:
         if adj.get_value() + adj.get_page_size() >= adj.get_upper() - 100:
             self._render_next_page()
 
-    def _on_key(self, _ctrl, keyval, _code, _state) -> bool:
-        if keyval == Gdk.KEY_Escape:
-            self._dialog.close()
-            return True
-        return False
-
     def _on_icon_clicked(self, _btn, name: str) -> None:
         self._chosen = name
         self._dialog.close()
 
-    def _on_close_request(self, _win) -> bool:
+    def _on_closed(self, _dialog) -> None:
         if self._loop is not None and self._loop.is_running():
             self._loop.quit()
-        return False  # let the window close
 
     def _on_link_clicked(self, _label, uri: str) -> bool:
         """Handle the custom vinopop:// link in the empty-state message."""
