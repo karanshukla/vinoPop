@@ -18,6 +18,7 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 ### 🐛 Bug Fixes
 
 - An install without `.git` (a release tarball) showed version 0.0.0; it reads the tarball's `VERSION` file now.
+- Check for updates on a git clone past a tag said "vinoPop 1.3.0-5-g… is the newest release". It says it's a development build and names the newest release.
 
 ### 🎨 Look and feel
 
