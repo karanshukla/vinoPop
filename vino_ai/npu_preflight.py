@@ -108,8 +108,12 @@ def driver_fix(family: str, root: Path = ROOT) -> str:
     if family == "arch":
         return "paru -S intel-npu-driver (AUR; needs level-zero-loader)"
     if family == "suse":
-        # Intel ships .debs only and openSUSE packages neither driver nor compiler.
-        return f"openSUSE doesn't package the NPU driver: build it from source ({NPU_RELEASES_URL})"
+        # Tumbleweed and Leap 16 package it (checked 2026-11-05). It's the
+        # user-mode driver only, built with ENABLE_NPU_COMPILER_BUILD=OFF, so
+        # the compiler note still applies; firmware is in kernel-firmware-intel.
+        # It doesn't require the Level Zero loader (level-zero), unlike
+        # Fedora's rpm and Intel's debs, so name it too.
+        return distro.install_command(["libze_intel_npu1", "level-zero"], root, fam=family)
     return (
         "install intel-level-zero-npu, intel-driver-compiler-npu and intel-fw-npu from "
         f"{NPU_RELEASES_URL} (`sudo dpkg -i ./*.deb` on Debian/Ubuntu)"
