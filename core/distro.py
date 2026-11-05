@@ -43,7 +43,7 @@ _FAMILIES = {
     "opensuse-kalpa": SUSE,
 }
 
-OSTREE = "ostree"  # Fedora Atomic: rpm-ostree
+OSTREE = "ostree"  # Fedora Atomic: rpm-ostree; Endless OS: no rpm-ostree
 TRANSACTIONAL = "transactional"  # openSUSE Aeon / MicroOS / Kalpa
 READ_ONLY = "read-only"  # /usr is read-only and we don't know the tool
 
@@ -109,13 +109,15 @@ def install_command(packages: list[str], root: Path = Path("/"), fam: str | None
     the family read from os-release."""
     pkgs = " ".join(packages)
     kind = immutable(root)
-    if kind == OSTREE:
+    fam = family(root) if fam is None else fam
+    # ostree alone isn't Fedora: Endless OS boots ostree and has no rpm-ostree.
+    if kind == OSTREE and fam == FEDORA:
         return f"rpm-ostree install {pkgs}, then reboot"
     if kind == TRANSACTIONAL:
         return f"sudo transactional-update pkg install {pkgs}, then reboot"
-    if kind == READ_ONLY:
+    if kind:
         return f"install {pkgs} with your distro's image tool (/usr is read-only)"
-    argv = _INSTALL.get(family(root) if fam is None else fam)
+    argv = _INSTALL.get(fam)
     if argv is None:
         return f"install {pkgs} with your package manager"
     return "sudo " + " ".join(argv + packages)

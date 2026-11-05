@@ -68,7 +68,11 @@ pip install --user -r requirements-ai.txt   # optional: the offline AI and OCR
 vinopop
 ```
 
-**Fedora Atomic (Silverblue, Kinoite, Bazzite) and openSUSE Aeon:** vinoPop lives in your home directory, so only the system packages need layering, from a host terminal (not a toolbox: autostart runs vinoPop on the host). `install.sh` names whatever's missing as an `rpm-ostree install` (or `transactional-update pkg install` on Aeon) line. Reboot after layering, then run `install.sh` again. Keep the offline AI in a venv made with `--system-site-packages` inside the checkout (`python3 -m venv --system-site-packages .venv`, then `.venv/bin/pip install -r requirements-ai.txt`): `install.sh` picks up `.venv` on its own.
+**Fedora Atomic (Silverblue, Kinoite, Bazzite):** vinoPop lives in your home directory, so only the system packages need layering, from a host terminal (not a toolbox: autostart runs vinoPop on the host). `install.sh` names whatever's missing as an `rpm-ostree install` line. Reboot after layering, then run `install.sh` again. Keep the offline AI in a venv made with `--system-site-packages` inside the checkout (`python3 -m venv --system-site-packages .venv`, then `.venv/bin/pip install -r requirements-ai.txt`): `install.sh` picks up `.venv` on its own.
+
+**openSUSE Aeon and Kalpa:** expect to layer several packages in one go: `sudo transactional-update pkg install python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 gdk-pixbuf-loader-rsvg` plus your desktop's row above, then a reboot and `install.sh` again. Distrobox doesn't get around this: autostart runs vinoPop on the host, so the packages have to be on the host too.
+
+NixOS and SteamOS aren't supported targets. `install.sh` still names what's missing there, but getting it installed is up to you.
 
 `install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. `bash ~/vinopop/install.sh --uninstall` removes the launchers and lists what it left (settings, clipboard history, the model); add `--purge` to delete those too.
 

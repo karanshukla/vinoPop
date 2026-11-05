@@ -72,6 +72,16 @@ def test_fedora_atomic_layers_with_rpm_ostree(tmp_path):
     assert distro.install_command(["grim"], root) == "rpm-ostree install grim, then reboot"
 
 
+def test_endless_os_is_ostree_without_rpm_ostree(tmp_path):
+    # Debian-based and ostree-booted, with no rpm-ostree to send anyone to.
+    root = _root(tmp_path, 'ID=endless\nID_LIKE="debian"\n', ostree=True)
+    assert distro.immutable(root) == distro.OSTREE
+    assert distro.install_argv(["grim"], root) is None
+    assert distro.install_command(["grim"], root) == (
+        "install grim with your distro's image tool (/usr is read-only)"
+    )
+
+
 def test_aeon_uses_transactional_update(tmp_path, monkeypatch):
     root = _root(tmp_path, 'ID="opensuse-aeon"\nID_LIKE="suse"\n', transactional=True)
     monkeypatch.setattr(distro, "_usr_read_only", lambda _root: True)

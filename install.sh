@@ -42,7 +42,13 @@ if [[ -n "${VINOPOP_PYTHON:-}" ]]; then
 elif [[ -x "$REPO_DIR/.venv/bin/python" ]]; then
     PYTHON="$REPO_DIR/.venv/bin/python"
 else
-    PYTHON="$(command -v python3 || true)"
+    # The distro's own python3 has gi; Homebrew's (Bluefin, Aurora) can come
+    # first on PATH and has none.
+    if [[ -x /usr/bin/python3 ]]; then
+        PYTHON=/usr/bin/python3
+    else
+        PYTHON="$(command -v python3 || true)"
+    fi
 fi
 has() { command -v "$1" >/dev/null 2>&1; }
 
@@ -206,16 +212,21 @@ distro_family() {
 }
 family="$(distro_family)"
 
-# ostree (Fedora Silverblue, Kinoite, Bazzite), transactional (openSUSE
-# Aeon, MicroOS) or nothing. On those /usr is read-only: packages are
-# layered into a new deployment and need a reboot, so the hints change.
-# vinoPop itself installs into $HOME either way.
+# ostree (Fedora Silverblue, Kinoite, Bazzite; also Endless OS),
+# transactional (openSUSE Aeon, MicroOS), read-only (any other read-only
+# /usr: SteamOS, Vanilla OS) or nothing. On those /usr is read-only:
+# packages go into a new deployment and need a reboot, so the hints change.
+# vinoPop itself installs into $HOME either way. Same checks as
+# core/distro.py's immutable().
 image_kind() {
     if [[ -e /run/ostree-booted ]]; then
         echo ostree
-    elif [[ -x /usr/sbin/transactional-update ]] \
-        && findmnt -no OPTIONS -T /usr 2>/dev/null | tr , '\n' | grep -qx ro; then
-        echo transactional
+    elif findmnt -no OPTIONS -T /usr 2>/dev/null | tr , '\n' | grep -qx ro; then
+        if [[ -x /usr/sbin/transactional-update ]]; then
+            echo transactional
+        else
+            echo read-only
+        fi
     fi
 }
 image="$(image_kind)"
@@ -251,8 +262,10 @@ pkg() {
 # The command that installs the given packages on this distro.
 hint() {
     case "$image:$family" in
-        ostree:*) echo "rpm-ostree install $*, then reboot" ;;
+        # ostree isn't always Fedora: Endless OS has no rpm-ostree.
+        ostree:fedora) echo "rpm-ostree install $*, then reboot" ;;
         transactional:*) echo "sudo transactional-update pkg install $*, then reboot" ;;
+        ostree:* | read-only:*) echo "install $* with your distro's image tool (/usr is read-only)" ;;
         *:fedora) echo "sudo dnf install $*" ;;
         *:arch) echo "sudo pacman -S --needed $*" ;;
         *:debian) echo "sudo apt-get install -y $*" ;;

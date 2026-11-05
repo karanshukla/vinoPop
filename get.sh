@@ -117,7 +117,12 @@ main() {
     if [ "$ai" = 1 ]; then
         say "Offline AI packages (in $VENV)"
         # The system Python: GTK's bindings come from the distro, not pip.
-        [ -x "$VENV/bin/python" ] || /usr/bin/python3 -m venv --system-site-packages "$VENV"
+        # /usr/bin/python3 first, since Homebrew's python3 can lead PATH.
+        if [ ! -x "$VENV/bin/python" ]; then
+            local py=/usr/bin/python3
+            [ -x "$py" ] || py="$(command -v python3)" || die "python3 not found"
+            "$py" -m venv --system-site-packages "$VENV"
+        fi
         "$VENV/bin/python" -m pip install --quiet --upgrade -r "$dest/requirements-ai.txt"
     fi
 

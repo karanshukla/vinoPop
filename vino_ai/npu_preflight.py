@@ -107,6 +107,9 @@ def driver_fix(family: str, root: Path = ROOT) -> str:
         return "sudo dnf install -y intel-npu-driver"
     if family == "arch":
         return "paru -S intel-npu-driver (AUR; needs level-zero-loader)"
+    if family == "suse":
+        # Intel ships .debs only and openSUSE packages neither driver nor compiler.
+        return f"openSUSE doesn't package the NPU driver: build it from source ({NPU_RELEASES_URL})"
     return (
         "install intel-level-zero-npu, intel-driver-compiler-npu and intel-fw-npu from "
         f"{NPU_RELEASES_URL} (`sudo dpkg -i ./*.deb` on Debian/Ubuntu)"
