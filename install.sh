@@ -241,6 +241,9 @@ pkg() {
         arch:xlib) echo "python-xlib" ;;
         suse:xlib) echo "python3-python-xlib" ;;
         *:xlib) echo "python3-xlib" ;;
+        arch:dbus) echo "python-dbus" ;;
+        suse:dbus) echo "python3-dbus-python" ;;
+        *:dbus) echo "python3-dbus" ;;
         *) echo "$1" ;;
     esac
 }
@@ -331,6 +334,11 @@ fi
 if [[ "$backend" == "wayland_kde" ]] \
     && ! "$PYTHON" -c "import gi; gi.require_version('Gtk4LayerShell', '1.0')" 2>/dev/null; then
     notes+=("gtk4-layer-shell is not installed, so the popup is placed through XWayland: $(hint "$(pkg layershell)")")
+fi
+# The KDE backend reaches KWin (cursor position, active window) and
+# KGlobalAccel (the hotkey) through dbus-python, and carries on without it.
+if [[ "$backend" == "wayland_kde" ]] && ! "$PYTHON" -c "import dbus" 2>/dev/null; then
+    notes+=("dbus-python is not installed, so on KDE Plasma Wayland the hotkey, popup placement and active-window lookup won't work: $(hint "$(pkg dbus)")")
 fi
 if ! "$PYTHON" -c "import Xlib" 2>/dev/null; then
     # The X11 backend can't run without it. On KDE Plasma Wayland only the

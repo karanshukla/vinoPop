@@ -121,6 +121,10 @@ main() {
         "$VENV/bin/python" -m pip install --quiet --upgrade -r "$dest/requirements-ai.txt"
     fi
 
+    # Before install.sh, so a failed dependency check still leaves the upgrade
+    # to rerun once the packages are in.
+    install -Dm755 "$WORK/get.sh" "$BIN/vinopop-upgrade"
+
     # The launchers run "$APP/vinopop", so the link is all an upgrade moves.
     local previous
     previous="$(readlink "$APP" 2>/dev/null || true)"
@@ -132,7 +136,6 @@ main() {
     else
         bash "$APP/install.sh" </dev/null
     fi
-    install -Dm755 "$WORK/get.sh" "$BIN/vinopop-upgrade"
 
     # A running vinoPop still has the previous release's files open until it
     # restarts, so that one stays; anything older goes.

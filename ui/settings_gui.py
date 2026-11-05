@@ -934,7 +934,12 @@ class SettingsDialog:
             )
             if argv is None:
                 ocr_install_btn.set_sensitive(False)
-                hint = "Install the OCR engine with: pip install --user -r requirements-ai.txt"
+                try:
+                    from vino_ai import install_hint as _ai_install_hint
+
+                    hint = f"Install the OCR engine with: {_ai_install_hint()}"
+                except Exception:
+                    hint = "Install the OCR engine with: pip install --user -r requirements-ai.txt"
                 if "capture tool" in ocr_reason:
                     # No in-place install here (read-only /usr, unknown
                     # package manager): say what to run instead.

@@ -16,6 +16,17 @@ from __future__ import annotations
 import importlib.util
 
 
+def install_hint() -> str:
+    """How to add the offline-AI packages to this install. A release install
+    (get.sh) keeps them in its own venv, which `--with-ai` makes; pip
+    --user there would land outside the interpreter the launchers run."""
+    from core import update
+
+    if update.upgrade_command() is not None:
+        return "vinopop-upgrade --with-ai"
+    return "pip install --user -r requirements-ai.txt"
+
+
 def available() -> tuple[bool, str]:
     """(ok, reason). ok=False means the OpenVINO packages are missing; the
     reason is a short label for the Settings row / a notification."""

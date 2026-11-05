@@ -208,7 +208,7 @@ def _npu(root: Path = npu_preflight.ROOT, env: dict[str, str] | None = None) -> 
         fix = (
             problems[0].fix
             if problems
-            else npu_preflight.driver_fix(npu_preflight.distro_family(root))
+            else npu_preflight.driver_fix(npu_preflight.distro_family(root), root)
         )
         results = [
             Result(WARN, "npu", "not enumerated by OpenVINO; the LLM will use the GPU or CPU", fix)

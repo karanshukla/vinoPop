@@ -183,5 +183,7 @@ def available() -> tuple[bool, str]:
     import importlib.util
 
     if importlib.util.find_spec("openvino") is None or importlib.util.find_spec("rapidocr") is None:
-        return False, "OCR engine not installed (pip install --user -r requirements-ai.txt)"
+        from vino_ai import install_hint
+
+        return False, f"OCR engine not installed ({install_hint()})"
     return True, ""
