@@ -10,6 +10,17 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-05
+
+### 🐛 Bug Fixes
+
+- The NPU doctor's driver and compiler hints work on Fedora Atomic (Bazzite, Silverblue, Kinoite): `rpm-ostree install` and a reboot instead of `dnf`, and the compiler goes in `/usr/local/lib64` with an `ld.so.conf.d` entry instead of the read-only `/usr/lib64`.
+- openSUSE Tumbleweed and Leap 16 get the NPU driver from their own repos (`libze_intel_npu1` with `level-zero`), through `zypper`, or `transactional-update` and a reboot on Aeon, Kalpa and MicroOS.
+- Install hints for other image-based systems: `rpm-ostree` is only suggested on Fedora-family hosts (Endless OS boots ostree without it), and a read-only `/usr` (SteamOS, Vanilla OS) no longer gets `sudo pacman` or `sudo apt` lines.
+- `install.sh` and `get.sh --with-ai` prefer `/usr/bin/python3`, so on Bluefin and Aurora Homebrew's Python (which has no `gi`) isn't written into the launchers.
+- The OCR row tells release installs to run `vinopop-upgrade --with-ai` instead of `pip install --user`, which missed the app's venv.
+- `install.sh` says when dbus-python is missing on KDE Plasma Wayland, where the hotkey otherwise never fires, and `get.sh` writes `vinopop-upgrade` before running `install.sh`, so a failed dependency check can be rerun.
+
 ## [1.4.0] - 2026-11-05
 
 ### ✨ Features
@@ -272,7 +283,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/karanshukla/vinoPop/compare/v1.1.1...v1.2.0
