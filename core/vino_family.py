@@ -15,9 +15,6 @@ from typing import NamedTuple
 SITE = "https://vinopilot.ca/"
 SITE_LABEL = "vinopilot.ca"
 
-# The tray submenu that links to the site and the other apps.
-APPS_MENU = "vinoPilot apps"
-
 
 class App(NamedTuple):
     name: str
@@ -53,8 +50,6 @@ MENU_ICONS = {
     "settings": "preferences-system-symbolic",
     "quit": "application-exit-symbolic",
     "about": "help-about-symbolic",
-    "website": "insert-link-symbolic",
-    "apps": "view-app-grid-symbolic",
     "popup": "open-menu-symbolic",
     "plugins": "preferences-other-symbolic",
 }
