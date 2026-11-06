@@ -18,8 +18,8 @@ import struct
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QCursor, QDesktopServices, QGuiApplication, QIcon
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 # Run as a script, so the repo root (not this folder) has to be on the path
@@ -62,11 +62,6 @@ def _send_message(sock: socket.socket, msg: dict) -> None:
 def _icon(what: str) -> QIcon:
     """A menu icon from the desktop's theme, by what the item does."""
     return QIcon.fromTheme(vino_family.MENU_ICONS[what])
-
-
-def _open(url: str) -> None:
-    """Opens a link in the browser; the tray process is a Qt app already."""
-    QDesktopServices.openUrl(QUrl(url))
 
 
 class TrayQt:
@@ -216,8 +211,9 @@ class TrayQt:
 
     # ─── menu ───
     def _setup_menu(self) -> None:
-        # Icons per vino-ui's tray rules (core/vino_family.py): actions and
-        # submenus get one; the checkable item and the list of apps don't.
+        # Icons per vino-ui's tray rules (core/vino_family.py): actions get
+        # one; the checkable item doesn't. The other vinoPilot apps are on
+        # the About dialog, not here.
         h = self._menu.addAction("vinoPop")
         h.setEnabled(False)
         self._menu.addSeparator()
@@ -235,14 +231,6 @@ class TrayQt:
         a = self._menu.addAction(_icon("about"), "About vinoPop")
         a.triggered.connect(lambda: self._emit("about", None))
         self._menu.addSeparator()
-        apps = self._menu.addMenu(_icon("apps"), vino_family.APPS_MENU)
-        a = apps.addAction(_icon("website"), vino_family.SITE_LABEL)
-        a.triggered.connect(lambda: _open(vino_family.SITE))
-        apps.addSeparator()
-        for app in vino_family.others("vinoPop"):
-            a = apps.addAction(app.name)
-            a.setToolTip(app.blurb)
-            a.triggered.connect(lambda _=False, url=app.page: _open(url))
         a = self._menu.addAction(_icon("quit"), "Quit vinoPop")
         a.triggered.connect(lambda: self._emit("quit", None))
 
