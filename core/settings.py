@@ -225,6 +225,9 @@ DEFAULTS: dict[str, Any] = {
     #   "color" -> vibrant gradient tiles (default)
     #   "glyph" -> uniform mono glyphs that match the plain text-edit icons
     "icon_style": "color",
+    # True -> popup buttons show each action's name as plain text instead
+    # of its icon (icon_style is then ignored in the popup).
+    "popup_text_labels": False,
     # System-tray icon appearance. Auto-recolouring isn't reliable on KDE
     # (plasmashell won't recolour a custom symbolic icon, and the app's own
     # colour scheme can differ from the panel theme), so the user picks:
