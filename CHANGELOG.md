@@ -10,9 +10,18 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-08
+
+1.5.0 is skipped: it was released and withdrawn on 2026-11-05 (it became 1.4.1), so an install that picked it up is offered this one.
+
 ### ✨ Features
 
 - Settings > Text labels: popup buttons show each action's name as plain text instead of its icon.
+- About vinoPop lists vinoPilot, the app that installs and updates the others, with the rest of the family.
+
+### 🐛 Bug Fixes
+
+- Installing from a checkout removes a release install's app link and `vinopop-upgrade`, so the two don't both stay installed.
 
 ### ♻️ Refactor
 
@@ -291,7 +300,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/karanshukla/vinoPop/compare/v1.4.1...v1.6.0
 [1.4.1]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/karanshukla/vinoPop/compare/v1.2.0...v1.3.0
