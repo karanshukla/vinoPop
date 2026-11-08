@@ -5,7 +5,7 @@ from core import vino_family
 
 def test_every_app_has_its_own_page_on_the_site():
     names = [app.name for app in vino_family.APPS]
-    assert len(set(names)) == len(names) == 7
+    assert len(set(names)) == len(names) == 8
     for app in vino_family.APPS:
         assert app.page == f"{vino_family.SITE}apps/#{app.name.lower()}"
         assert app.blurb and not app.blurb.endswith(".")
