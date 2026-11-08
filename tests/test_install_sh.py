@@ -113,3 +113,26 @@ def test_appstream_metainfo_is_installed_for_the_launcher(installed):
     root = ET.parse(home / f".local/share/metainfo/{APP_ID}.metainfo.xml").getroot()
     assert root.findtext("id") == APP_ID
     assert root.findtext("launchable") == f"{APP_ID}.desktop"
+
+
+def test_a_checkout_install_replaces_a_release_one(installed):
+    checkout, home, stubs = installed
+    root = home / ".local/share/vinopop"
+    (root / "v0.9.7").mkdir(parents=True)
+    (root / "app").symlink_to("v0.9.7")
+    (root / "venv").mkdir()
+    (root / "snippets.json").write_text("{}")
+    upgrade = home / ".local/bin/vinopop-upgrade"
+    upgrade.write_text("#!/bin/sh\n")
+    env = {
+        "HOME": str(home),
+        "PATH": f"{stubs}:{os.environ['PATH']}",
+        "VINOPOP_PYTHON": "vinopop-test-python",
+    }
+    subprocess.run(["bash", str(checkout / "install.sh")], env=env, check=True, capture_output=True)
+    assert not (root / "app").is_symlink()
+    assert not (root / "v0.9.7").exists()
+    assert not upgrade.exists()
+    # Not the release's to take: user data, and the venv VINOPOP_PYTHON can reuse.
+    assert (root / "venv").is_dir()
+    assert (root / "snippets.json").is_file()

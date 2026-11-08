@@ -438,6 +438,23 @@ if [[ -f "$REPO_DIR/data/${APP_ID}.metainfo.xml" ]]; then
     install -Dm644 "$REPO_DIR/data/${APP_ID}.metainfo.xml" "$METAINFO_FILE"
 fi
 
+# From a checkout over a release install (get.sh): the release's files stay
+# in $RELEASE_ROOT, its app link is what says "release" to vinoPilot, and its
+# vinopop-upgrade would switch back. The rest of $RELEASE_ROOT is user data,
+# and the offline-AI venv is kept for VINOPOP_PYTHON.
+RELEASE_ROOT="$DATA_HOME/vinopop"
+case "$REPO_DIR/" in
+    "$RELEASE_ROOT/"*) ;;
+    *)
+        if [[ -L "$RELEASE_ROOT/app" ]]; then
+            rm -f "$RELEASE_ROOT/app"
+            rm -rf "$RELEASE_ROOT"/v[0-9]*
+            echo "[install] removed the release install in $RELEASE_ROOT (kept its venv, if any)"
+        fi
+        rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/vinopop-upgrade"
+        ;;
+esac
+
 echo "[install] autostart written to $AUTOSTART_FILE"
 echo "[install] launcher entry written to $APP_FILE"
 echo "[install] vinoPop will start automatically next login,"
