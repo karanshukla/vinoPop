@@ -24,6 +24,11 @@ class App(NamedTuple):
 
 # In the order vinopilot.ca lists them.
 APPS = (
+    App(
+        "vinoPilot",
+        "One app to install and update the rest",
+        "https://vinopilot.ca/apps/#vinopilot",
+    ),
     App("vinoWhisper", "Live captions and voice typing", "https://vinopilot.ca/apps/#vinowhisper"),
     App("vinoAuthFace", "Unlock with your face", "https://vinopilot.ca/apps/#vinoauthface"),
     App(
