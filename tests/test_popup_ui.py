@@ -345,3 +345,18 @@ def test_enter_marks_the_run_as_from_the_keyboard(kbd, popup, monkeypatch):
     assert not popup.activated_by_keyboard()
     p._kbd_key("Return")
     assert popup.activated_by_keyboard()
+
+
+@pytest.mark.parametrize(
+    ("tooltip", "label"),
+    [
+        ("Copy", "Copy"),
+        ("Paste (replace selection with clipboard)", "Paste"),
+        ("Slugify (URL-friendly)", "Slugify"),
+        ("Timestamp ↔ ISO", "Timestamp ↔ ISO"),
+        ("(odd)", "(odd)"),
+        ("", ""),
+    ],
+)
+def test_text_label_drops_trailing_parenthetical(popup, tooltip, label):
+    assert popup._label_text(tooltip) == label

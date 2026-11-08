@@ -10,6 +10,10 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Settings > Text labels: popup buttons show each action's name as plain text instead of its icon.
+
 ### ♻️ Refactor
 
 - The tray menu no longer lists vinopilot.ca and the other vinoPilot apps; About vinoPop still links to them.

@@ -786,6 +786,18 @@ class SettingsDialog:
         _rebuild_icon_preview(_cur_style)
         group.add(icon_preview)
 
+        # ----- Text labels: each action's name instead of its icon -----
+        text_row = self._switch_row(
+            "Text labels",
+            "Show each popup action's name as plain text instead of its icon.",
+            bool(self._settings.get("popup_text_labels", False)),
+        )
+        text_row.connect(
+            "notify::active",
+            lambda r, _p: self._save_key("popup_text_labels", r.get_active()),
+        )
+        group.add(text_row)
+
         # ----- Tray icon: panel-recoloured glyph vs fixed light/dark mono -----
         _cur_tray = self._settings.get("tray_icon_style") or "color"
         if _cur_tray not in ("color", "light", "dark"):

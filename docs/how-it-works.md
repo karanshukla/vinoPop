@@ -85,6 +85,7 @@ Everything the Settings window sets lives in `~/.config/vinopop/settings.json`.
 | `ocr_describe_images` | `false` | After an OCR capture, offer (or run, if no text was found) a Gemma description of the image |
 | `show_welcome_dialog` | `true` | First-run welcome dialog. `false` skips it (screencasts, tests). |
 | `icon_style` | `color` | Popup buttons for branded and converter actions: `color` (vino tiles) or `glyph` (mono glyphs like the system edit icons) |
+| `popup_text_labels` | `false` | Popup buttons show each action's name as plain text instead of its icon |
 | `tray_icon_style` | `color` | Tray icon: `color` (recoloured by the panel), `light` or `dark` (fixed, for panels that don't recolour it) |
 
 ## Demos

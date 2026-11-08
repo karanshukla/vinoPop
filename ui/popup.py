@@ -8,6 +8,7 @@ user clicks outside it.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -87,6 +88,13 @@ button.vinopop-action.vinopop-selected {
     color: #ffffff;
 }
 
+/* Text-label mode (popup_text_labels): the action's name instead of its
+ * icon. */
+button.vinopop-action.vinopop-text {
+    padding-left: __PAD_H_TEXT__px;
+    padding-right: __PAD_H_TEXT__px;
+}
+
 /* Overflow chip - shown when more plugins matched than the popup
  * limit allows. Renders as a "+N" pill with a softer tone so it
  * reads as informational rather than a normal action. */
@@ -163,6 +171,30 @@ def _resolve_button_size() -> int:
     return max(_BUTTON_SIZE_MIN, min(_BUTTON_SIZE_MAX, size))
 
 
+def _text_pad_h(size: int) -> int:
+    """Horizontal padding of a text-label button (wider than an icon's)."""
+    return max(6, size // 3)
+
+
+def _text_labels_on() -> bool:
+    """The popup_text_labels setting: names instead of icons."""
+    try:
+        from core.settings import get_settings
+
+        return bool(get_settings().get("popup_text_labels", False))
+    except Exception:
+        return False
+
+
+def _label_text(tooltip: str) -> str:
+    """Button text for text-label mode: the tooltip without a trailing
+    parenthetical, so "Paste (replace selection with clipboard)" reads
+    "Paste". The full tooltip still shows on hover."""
+    text = (tooltip or "").strip()
+    short = re.sub(r"\s*\([^()]*\)$", "", text).strip()
+    return short or text
+
+
 def _build_css(size: int) -> bytes:
     """Substitute the per-size measurements into the static CSS template.
     Padding, radii and inner gutters scale with button size so the
@@ -180,6 +212,7 @@ def _build_css(size: int) -> bytes:
         .replace(b"__PAD_V__", str(pad_v).encode())
         .replace(b"__PAD_H__", str(pad_h).encode())
         .replace(b"__PAD_H_OVERFLOW__", str(max(pad_h, 8)).encode())
+        .replace(b"__PAD_H_TEXT__", str(_text_pad_h(size)).encode())
         .replace(b"__WIN_PAD__", str(win_pad).encode())
         .replace(b"__WIN_RADIUS__", str(win_radius).encode())
         .replace(b"__BTN_RADIUS__", str(btn_radius).encode())
@@ -637,6 +670,8 @@ class PopupWindow:
         self.win.set_resizable(False)
         self.win.set_title("vinoPop")
         self.win.add_css_class("vinopop-popup")
+        # popup_text_labels, read per show in _present_buttons
+        self._text_labels = False
 
         # Let the platform backend prepare the window before it's ever shown
         # (X11: override-redirect on realize; Wayland/KDE: gtk4-layer-shell).
@@ -776,7 +811,11 @@ class PopupWindow:
         btn.set_focus_on_click(False)
         btn.set_tooltip_text(tooltip)
         btn.add_css_class("vinopop-action")
-        btn.set_child(self._make_icon_image(icon_name))
+        if self._text_labels:
+            btn.add_css_class("vinopop-text")
+            btn.set_child(Gtk.Label(label=_label_text(tooltip)))
+        else:
+            btn.set_child(self._make_icon_image(icon_name))
         btn.connect("clicked", on_click)
         target.append(btn)
         if target is self._row2:
@@ -832,6 +871,10 @@ class PopupWindow:
         # (kept in sync with vinopop.css). Slight overestimate so we
         # don't push a button half-off the line by one pixel.
         approx_button_width = size + 14
+        return max(4, self._row_target_px(anchor) // approx_button_width)
+
+    def _row_target_px(self, anchor: tuple[int, int] | None = None) -> int:
+        """Widest a row may grow, in logical pixels."""
         # GTK 4 can't query the global pointer, so size against the monitor
         # under the popup's anchor (the selection / pointer coords we got).
         if anchor is None:
@@ -844,8 +887,33 @@ class PopupWindow:
             monitor_w = monitor.get_geometry().width if monitor else 1920
         except Exception:
             monitor_w = 1920
-        target_w = min(680, int(monitor_w * 0.5))
-        return max(4, target_w // approx_button_width)
+        return min(680, int(monitor_w * 0.5))
+
+    def _text_button_px(self, tooltip: str) -> int:
+        """Outer width of a text-label button, slightly overestimated."""
+        size = _resolve_button_size()
+        try:
+            text_w, _h = self.win.create_pango_layout(_label_text(tooltip)).get_pixel_size()
+        except Exception:
+            text_w = 8 * len(_label_text(tooltip))
+        return max(size, text_w) + 2 * _text_pad_h(size) + 4
+
+    def _fit_row(self, specs) -> int:
+        """How many of `specs` (from the front) fit on one row. Icon
+        buttons are all one width; text labels are measured, at least one
+        per row even if it's wider than the budget."""
+        if not self._text_labels:
+            return min(len(specs), self._max_per_row())
+        budget = self._row_target_px()
+        used = 0
+        n = 0
+        for _icon, tip, _h in specs:
+            w = self._text_button_px(tip)
+            if n and used + w > budget:
+                break
+            used += w
+            n += 1
+        return n
 
     def _device_scale(self) -> int:
         """The monitor's device-pixel scale (2 on a HiDPI screen), read from
@@ -1186,31 +1254,32 @@ class PopupWindow:
         """Lay out (icon, tooltip, handler) specs into the bar per the user's
         overflow mode, adding the matching overflow affordance. `hidden_count`
         is how many were already dropped by the max_popup_buttons cap."""
-        per_row = self._max_per_row()
+        self._text_labels = _text_labels_on()
         n = len(specs)
         mode = self._overflow_mode()
         if mode == "cap":
-            shown = min(n, per_row)
+            shown = self._fit_row(specs)
             for icon, tip, h in specs[:shown]:
                 self._add_button(icon, tip, h, row=self._row1)
             extra = (n - shown) + hidden_count
             if extra > 0:
                 self._add_overflow_chip(extra, max_btns, row=self._row1)
         elif mode == "expand":
-            first = min(n, per_row)
+            first = self._fit_row(specs)
             for icon, tip, h in specs[:first]:
                 self._add_button(icon, tip, h, row=self._row1)
             rest = specs[first:]
             if rest or hidden_count > 0:
                 self._add_expand_chip(rest, hidden_count, max_btns)
         else:  # 'wrap' - two rows
-            shown = min(n, 2 * per_row)
+            first = self._fit_row(specs)
+            shown = first + self._fit_row(specs[first:])
             for i, (icon, tip, h) in enumerate(specs[:shown]):
-                self._add_button(icon, tip, h, row=self._row1 if i < per_row else self._row2)
+                self._add_button(icon, tip, h, row=self._row1 if i < first else self._row2)
             extra = (n - shown) + hidden_count
             if extra > 0:
                 self._add_overflow_chip(
-                    extra, max_btns, row=self._row2 if shown > per_row else self._row1
+                    extra, max_btns, row=self._row2 if shown > first else self._row1
                 )
 
     def _add_expand_chip(self, rest, hidden_count: int, max_btns: int) -> None:
@@ -1233,8 +1302,7 @@ class PopupWindow:
             # chevron was) outside the popup and start the leave-grace hide.
             self._bar.set_size_request(self._bar.get_width(), -1)
             self._row1.remove(_b)
-            per_row = self._max_per_row()
-            shown2 = min(len(rest), per_row)
+            shown2 = self._fit_row(rest)
             for icon, tip, h in rest[:shown2]:
                 self._add_button(icon, tip, h, row=self._row2)
             extra = (len(rest) - shown2) + hidden_count

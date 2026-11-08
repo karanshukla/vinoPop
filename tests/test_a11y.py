@@ -282,6 +282,55 @@ def test_popup_buttons_are_named(gtk, stub_backend, monkeypatch):
         p.win.destroy()
 
 
+def test_popup_text_labels(gtk, stub_backend, monkeypatch):
+    from core.classifier import ContentType
+    from plugin_system.plugin_base import Plugin
+    from ui import popup
+
+    monkeypatch.setattr(popup, "get_backend", lambda: stub_backend)
+    monkeypatch.setattr(popup, "_text_labels_on", lambda: True)
+    plugins = [
+        Plugin(name="copy", icon="edit-copy-symbolic", tooltip="Copy", handler=print),
+        Plugin(
+            name="paste",
+            icon="edit-paste-symbolic",
+            tooltip="Paste (replace selection with clipboard)",
+            handler=print,
+        ),
+    ]
+    monkeypatch.setattr(popup.plugin_loader, "for_content_type", lambda *_a: list(plugins))
+    p = popup.PopupWindow(initial_grace_ms=0)
+    monkeypatch.setattr(p, "_present_near", lambda *_a, **_k: None)
+    p.show_for("hello", 0, 0, ContentType.PLAIN_TEXT)
+    try:
+        buttons = [b for b in _walk(p.win) if isinstance(b, gtk.Gtk.Button)]
+        assert [b.get_child().get_label() for b in buttons] == ["Copy", "Paste"]
+        assert not any(isinstance(w, gtk.Gtk.Image) for w in _walk(p.win))
+        # The tooltip keeps the long form
+        assert buttons[1].get_tooltip_text() == "Paste (replace selection with clipboard)"
+        _assert_named(p.win, gtk.Gtk, gtk.Adw)
+    finally:
+        p.win.destroy()
+
+
+def test_popup_text_labels_fit_by_width(gtk, stub_backend, monkeypatch):
+    from ui import popup
+
+    monkeypatch.setattr(popup, "get_backend", lambda: stub_backend)
+    p = popup.PopupWindow(initial_grace_ms=0)
+    try:
+        p._text_labels = True
+        monkeypatch.setattr(p, "_row_target_px", lambda *_a: 100)
+        monkeypatch.setattr(p, "_text_button_px", lambda tip: len(tip) * 10)
+        specs = [(None, t, None) for t in ("aaaa", "bbbb", "cccc")]
+        assert p._fit_row(specs) == 2
+        # One label wider than the row still gets a row of its own
+        assert p._fit_row([(None, "x" * 20, None)]) == 1
+        assert p._fit_row([]) == 0
+    finally:
+        p.win.destroy()
+
+
 def test_popup_bar_is_a_toolbar(gtk, stub_backend, monkeypatch):
     from ui import popup
 
