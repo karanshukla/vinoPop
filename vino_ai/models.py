@@ -319,6 +319,81 @@ def ensure_llm(
     return path
 
 
+@dataclass(frozen=True)
+class OnDisk:
+    path: Path
+    label: str  # the model's label, or the folder name for one we don't list
+    size: int  # bytes
+    complete: bool  # False for a partial download or a swapped-out folder
+
+
+def dir_size(path: Path) -> int:
+    """Bytes under `path`, not following symlinks. 0 when it's missing."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def on_disk() -> list[OnDisk]:
+    """What's in MODELS_DIR: each downloaded model, plus any partial
+    download or swapped-out folder (shown so their space isn't hidden).
+    Both Gemma models can be there, since switching never deletes one."""
+    if not MODELS_DIR.is_dir():
+        return []
+    by_name = {model_dir(m).name: m for m in LLM_MODELS.values()}
+    found = []
+    for child in sorted(MODELS_DIR.iterdir()):
+        if not child.is_dir() or child.is_symlink():
+            continue
+        name = child.name
+        model = by_name.get(name)
+        if model is not None:
+            found.append(OnDisk(child, model.label, dir_size(child), _marked(child, model)))
+            continue
+        base = name.lstrip(".").split(".", 1)[0]
+        partial = by_name.get(base)
+        label = f"{partial.label} (unfinished download)" if partial else name
+        found.append(OnDisk(child, label, dir_size(child), False))
+    return found
+
+
+def downloading() -> bool:
+    """True while this process is downloading a model."""
+    return _download_lock.locked()
+
+
+class DownloadRunning(RuntimeError):
+    pass
+
+
+def delete_downloads() -> int:
+    """Delete every model under MODELS_DIR, including partial downloads.
+    Raises DownloadRunning instead of pulling the folder out from under a
+    download. Returns the bytes freed. The next AI action downloads the
+    configured model again."""
+    if not _download_lock.acquire(blocking=False):
+        raise DownloadRunning("A model download is running. Wait for it to finish.")
+    try:
+        freed = 0
+        for item in on_disk():
+            freed += item.size
+            log.info("[vino_ai] deleting %s", item.path)
+            shutil.rmtree(item.path, ignore_errors=True)
+        if MODELS_DIR.is_dir():
+            try:
+                MODELS_DIR.rmdir()  # only when nothing else is in there
+            except OSError:
+                pass
+        return freed
+    finally:
+        _download_lock.release()
+
+
 def prefetch_consented(settings) -> bool:
     """True when the user agreed to download the model at startup. A True
     ai_prefetch_model without ai_prefetch_asked is the old default, which

@@ -389,6 +389,46 @@ def unload_if_idle() -> bool:
         _lock.release()
 
 
+class Busy(RuntimeError):
+    pass
+
+
+def delete_models() -> int:
+    """Unload the LLM, then delete every downloaded model and the LLM
+    compile cache (the OCR cache stays: its model is in the wheel). Raises
+    Busy while an AI action runs, a compile is still going, or a download
+    is running. Returns the bytes freed."""
+    global _idle_timer
+    if not _lock.acquire(blocking=False):
+        raise Busy("An AI action is running. Try again once it's done.")
+    try:
+        with _state_lock:
+            if _inflight:
+                raise Busy("The AI model is still loading. Try again in a minute.")
+            _late.clear()
+        if _idle_timer is not None:
+            _idle_timer.cancel()
+            _idle_timer = None
+        if _pipe is not None:
+            log.info("[vino_ai] unloading the LLM to delete the model")
+        _drop_pipe()
+        try:
+            freed = models.delete_downloads()
+        except models.DownloadRunning as exc:
+            raise Busy(str(exc)) from exc
+        freed += models.dir_size(LLM_CACHE)
+        shutil.rmtree(LLM_CACHE, ignore_errors=True)
+        # loose blobs from versions that wrote straight into ov-cache
+        if OV_CACHE.is_dir():
+            for child in OV_CACHE.iterdir():
+                if child.is_file():
+                    freed += child.stat().st_size
+                    child.unlink(missing_ok=True)
+        return freed
+    finally:
+        _lock.release()
+
+
 def _schedule_unload() -> None:
     global _idle_timer
     minutes = _setting("ai_idle_unload_minutes", IDLE_UNLOAD_MINUTES)
