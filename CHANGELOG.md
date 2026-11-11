@@ -10,6 +10,16 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-11
+
+### ✨ Features
+
+- Settings > Advanced > Offline AI lists the downloaded AI models with their size and deletes them. Deleting also turns off the background download, so the model doesn't come straight back.
+
+### 🐛 Bug Fixes
+
+- Uninstalling deletes the AI model and its compile cache, not only with `--purge`. Settings, snippets and clipboard history stay unless you add `--purge`.
+
 ## [1.6.0] - 2026-11-08
 
 1.5.0 is skipped: it was released and withdrawn on 2026-11-05 (it became 1.4.1), so an install that picked it up is offered this one.
@@ -300,7 +310,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/karanshukla/vinoPop/compare/v1.4.1...v1.6.0
 [1.4.1]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/karanshukla/vinoPop/compare/v1.3.0...v1.4.0
