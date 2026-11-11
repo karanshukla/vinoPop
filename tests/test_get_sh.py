@@ -107,3 +107,20 @@ def test_a_malformed_tag_is_refused(tmp_path, env):
     result = _get(tmp_path, env, "v1;rm")
     assert result.returncode == 1
     assert "not a release tag" in result.stderr
+
+
+def test_uninstall_deletes_the_model_even_from_an_older_release(tmp_path, env):
+    home = Path(env["HOME"])
+    root = home / ".local/share/vinopop"
+    assert _get(_release(tmp_path, "v9.9.0"), env, "v9.9.0").returncode == 0
+    # An older release's install.sh --uninstall kept the model (and here does
+    # nothing at all, so no real vinoPop gets stopped).
+    (root / "app/install.sh").write_text("#!/bin/sh\nexit 0\n")
+    (root / "models/gemma-4-E2B-it-int4-cw-ov").mkdir(parents=True)
+    (home / ".cache/vinopop/ov-cache/llm").mkdir(parents=True)
+    (home / ".cache/vinopop/clipboard").mkdir(parents=True)
+    result = _get(tmp_path, env, "--uninstall")
+    assert result.returncode == 0, result.stderr
+    assert not (root / "models").exists() and not (root / "app").exists()
+    assert not (home / ".cache/vinopop/ov-cache").exists()
+    assert (home / ".cache/vinopop/clipboard").is_dir()

@@ -12,6 +12,7 @@ from vino_ai import ai_worker, devices, doctor, llm, models, npu_canary, ovfetch
 from vino_ai.ocr import _reading_order
 
 _real_stuck = npu_canary.stuck  # the fixture below stubs it for loader tests
+_real_model_dir = models.model_dir  # and model_dir
 
 # ---- OCR reading order ---------------------------------------------------
 
@@ -973,3 +974,74 @@ def test_install_hint_follows_the_install(monkeypatch, tmp_path):
     upgrade.write_text("#!/bin/sh\n")
     upgrade.chmod(0o755)
     assert vino_ai.install_hint() == "vinopop-upgrade --with-ai"
+
+
+# ---- deleting the models -----------------------------------------------------
+
+
+@pytest.fixture
+def models_on_disk(monkeypatch, tmp_path):
+    """Both Gemma folders (one complete, one not marked), a partial
+    download and the compile caches, under tmp."""
+    root = tmp_path / "models"
+    monkeypatch.setattr(models, "MODELS_DIR", root)
+    monkeypatch.setattr(models, "model_dir", _real_model_dir)
+    e2b, e4b = models.LLM_MODELS["gemma-4-e2b"], models.LLM_MODELS["gemma-4-e4b"]
+    done = models.model_dir(e2b)
+    done.mkdir(parents=True)
+    (done / "openvino_language_model.bin").write_bytes(b"x" * 3000)
+    models._mark(done, e2b)
+    models.model_dir(e4b).mkdir()
+    (models.model_dir(e4b) / "openvino_model.bin").write_bytes(b"x" * 1000)
+    partial = models._staging_dir(e4b)
+    partial.mkdir()
+    (partial / "half.bin").write_bytes(b"x" * 500)
+    (llm.LLM_CACHE / "key" / "NPU").mkdir(parents=True)
+    (llm.LLM_CACHE / "key" / "NPU" / "blob").write_bytes(b"x" * 200)
+    (llm.OV_CACHE / "ocr").mkdir()
+    (llm.OV_CACHE / "ocr" / "blob").write_bytes(b"x" * 100)
+    (llm.OV_CACHE / "old.blob").write_bytes(b"x" * 10)
+    return root
+
+
+def test_on_disk_lists_every_model_folder_with_its_size(models_on_disk):
+    items = {i.path.name: i for i in models.on_disk()}
+    e2b = items["gemma-4-E2B-it-int4-cw-ov"]
+    assert e2b.complete and e2b.label.startswith("Gemma 4 E2B") and e2b.size > 3000
+    assert not items["gemma-4-E4B-it-int4-ov"].complete
+    partial = next(i for name, i in items.items() if name.endswith(".partial"))
+    assert "unfinished download" in partial.label and partial.size == 500
+
+
+def test_on_disk_is_empty_without_a_models_folder(monkeypatch, tmp_path):
+    monkeypatch.setattr(models, "MODELS_DIR", tmp_path / "nothing")
+    assert models.on_disk() == []
+
+
+def test_delete_models_unloads_and_deletes_models_and_llm_cache(models_on_disk, monkeypatch):
+    monkeypatch.setattr(llm, "_pipe", object())
+    monkeypatch.setattr(llm, "_pipe_key", ("gemma-4-e2b", "NPU"))
+    monkeypatch.setattr(llm, "_late", {"GPU": (object(), ("gemma-4-e2b", "GPU"))})
+    freed = llm.delete_models()
+    assert freed >= 3000 + 1000 + 500 + 200 + 10
+    assert llm._pipe is None and llm._late == {}
+    assert not models_on_disk.exists()
+    assert not llm.LLM_CACHE.exists() and not (llm.OV_CACHE / "old.blob").exists()
+    assert (llm.OV_CACHE / "ocr" / "blob").is_file()  # the OCR cache stays
+    assert not models.is_downloaded(models.LLM_MODELS["gemma-4-e2b"])
+
+
+def test_delete_models_refuses_during_a_download(models_on_disk):
+    with models._download_lock, pytest.raises(llm.Busy, match="download"):
+        llm.delete_models()
+    assert models_on_disk.is_dir() and llm.LLM_CACHE.is_dir()
+
+
+def test_delete_models_refuses_during_a_run_or_a_compile(models_on_disk, monkeypatch):
+    with llm._lock, pytest.raises(llm.Busy, match="running"):
+        llm.delete_models()
+    monkeypatch.setattr(llm, "_inflight", {"NPU"})
+    with pytest.raises(llm.Busy, match="loading"):
+        llm.delete_models()
+    assert models_on_disk.is_dir()
+    assert not llm._lock.locked()

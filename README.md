@@ -56,7 +56,7 @@ curl -fsSL https://github.com/karanshukla/vinoPop/releases/latest/download/get.s
 vinopop
 ```
 
-`get.sh` checks the release tarball against its `SHA256SUMS`, unpacks it into `~/.local/share/vinopop`, and runs its `install.sh`. To upgrade, use **Check for updates** in Settings > Advanced (nothing goes online until you click it), or run `vinopop-upgrade`. `vinopop-upgrade --uninstall` removes it again.
+`get.sh` checks the release tarball against its `SHA256SUMS`, unpacks it into `~/.local/share/vinopop`, and runs its `install.sh`. To upgrade, use **Check for updates** in Settings > Advanced (nothing goes online until you click it), or run `vinopop-upgrade`. `vinopop-upgrade --uninstall` removes it again, AI model included.
 
 Or from a git clone:
 
@@ -74,7 +74,7 @@ vinopop
 
 NixOS and SteamOS aren't supported targets. `install.sh` still names what's missing there, but getting it installed is up to you.
 
-`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. `bash ~/vinopop/install.sh --uninstall` removes the launchers and lists what it left (settings, clipboard history, the model); add `--purge` to delete those too.
+`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. Settings > Advanced > Offline AI shows the downloaded models and deletes them. `bash ~/vinopop/install.sh --uninstall` removes the launchers, the AI model and its compile cache, and lists what it left (settings, clipboard history); add `--purge` to delete those too.
 
 <details>
 <summary>Odds and ends</summary>

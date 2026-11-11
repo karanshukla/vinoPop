@@ -41,6 +41,12 @@ def _plain(row: Gtk.Widget) -> Gtk.Widget:
     return row
 
 
+def _gb(size: int) -> str:
+    if size >= 10**9:
+        return f"{size / 1e9:.1f} GB"
+    return f"{size / 1e6:.0f} MB"
+
+
 def _open_text_editor_modal(
     parent: Gtk.Window | None,
     title: str,
@@ -1583,7 +1589,98 @@ class SettingsDialog:
             lambda sw, _p: self._save_key("ocr_describe_images", bool(sw.get_active())),
         )
         group.add(describe_row)
+        group.add(self._build_model_row(prefetch_row))
         return group
+
+    def _build_model_row(self, prefetch_row: Adw.SwitchRow) -> Adw.ActionRow:
+        """What's in the models folder, with Delete…: nothing else ever
+        removes a model (switching keeps the old one)."""
+        row = _plain(Adw.ActionRow())
+        row.set_title("Downloaded models")
+        btn = Gtk.Button(label="Delete…")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.add_css_class("destructive-action")
+        row.add_suffix(btn)
+
+        def _refresh() -> None:
+            try:
+                from vino_ai import models
+
+                items = models.on_disk()
+            except Exception:
+                items = []
+            if items:
+                row.set_subtitle(
+                    "\n".join(f"{i.label}: {_gb(i.size)}" for i in items)
+                    + "\nDeleting frees the space. The next AI action downloads "
+                    "the model again."
+                )
+            else:
+                row.set_subtitle("None. The first AI action downloads the model.")
+            btn.set_sensitive(bool(items))
+
+        def _delete() -> None:
+            def _work() -> None:
+                try:
+                    from vino_ai import llm
+
+                    freed, err = llm.delete_models(), None
+                except Exception as exc:  # noqa: BLE001 - shown in the row
+                    freed, err = 0, str(exc)
+                GLib.idle_add(_done, freed, err)
+
+            btn.set_sensitive(False)
+            row.set_subtitle("Deleting…")
+            threading.Thread(target=_work, name="vinopop-model-delete", daemon=True).start()
+
+        def _done(freed: int, err: str | None) -> bool:
+            _refresh()
+            if err is not None:
+                alert = Adw.AlertDialog.new("Couldn't delete the model", err)
+                alert.add_response("close", "Close")
+                alert.present(self._window)
+            elif prefetch_row.get_active():
+                # Left on, the next start would download it straight back.
+                prefetch_row.set_active(False)
+            return False
+
+        def _on_click(_btn: Gtk.Button) -> None:
+            try:
+                from vino_ai import models
+
+                items = models.on_disk()
+                if models.downloading():
+                    alert = Adw.AlertDialog.new(
+                        "A model is downloading",
+                        "Wait for the download to finish, then delete it.",
+                    )
+                    alert.add_response("close", "Close")
+                    alert.present(self._window)
+                    return
+            except Exception:
+                items = []
+            total = sum(i.size for i in items)
+            body = (
+                f"This deletes {_gb(total)} of AI models and their compiled cache. "
+                "Summarize, rewrite, explain, translate and image descriptions "
+                "download the model again the next time you use them."
+            )
+            if prefetch_row.get_active():
+                body += (
+                    "\n\nBackground download is turned off too, so it doesn't come straight back."
+                )
+            confirm = Adw.AlertDialog.new("Delete the AI models?", body)
+            confirm.add_response("cancel", "Cancel")
+            confirm.add_response("delete", "Delete")
+            confirm.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+            confirm.set_default_response("cancel")
+            confirm.set_close_response("cancel")
+            confirm.connect("response", lambda _d, r: _delete() if r == "delete" else None)
+            confirm.present(self._window)
+
+        btn.connect("clicked", _on_click)
+        _refresh()
+        return row
 
     def _on_prefetch_switch(self, switch: Adw.SwitchRow, _param) -> None:
         # Flipping it is an answer, so a stored True now counts as a yes
