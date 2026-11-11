@@ -10,6 +10,7 @@
 #               that sees the system's GTK (--system-site-packages), several
 #               hundred MB. An upgrade keeps and updates the venv if it's there.
 #   --uninstall the release's own install.sh --uninstall, then the files here
+#               and the AI model (--purge also deletes settings and history)
 #
 # It downloads the release's SHA256SUMS and source tarball, refuses the tarball
 # unless it's listed there and matches, and unpacks it into
@@ -67,7 +68,9 @@ main() {
     if [ "$uninstall" = 1 ]; then
         [ -x "$APP/install.sh" ] || [ -f "$APP/install.sh" ] || die "no release install in $APP"
         bash "$APP/install.sh" --uninstall "${passthrough[@]}"
-        rm -rf "$ROOT"/v[0-9]* "$APP" "$VENV"
+        # Older releases' install.sh keeps the AI model, so do it here too
+        rm -rf "$ROOT"/v[0-9]* "$APP" "$VENV" "$ROOT/models" \
+            "${XDG_CACHE_HOME:-$HOME/.cache}/vinopop/ov-cache"
         rm -f "$BIN/vinopop-upgrade"
         echo "vinoPop's release files removed"
         return

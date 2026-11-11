@@ -27,12 +27,15 @@ def home(tmp_path):
     for d in (
         ".config/vinopop/plugins",
         ".cache/vinopop/ov-cache/llm",
+        ".cache/vinopop/clipboard",
         ".local/share/vinopop/models",
         ".local/state/vinopop",
         "intel",
     ):
         (home / d).mkdir(parents=True)
     (home / ".local/share/vinopop/models/weights.bin").write_bytes(b"x" * 4096)
+    (home / ".cache/vinopop/clipboard/history.json").write_text("[]")
+    (home / ".cache/vinopop/ov-cache/llm/blob").write_bytes(b"x" * 1024)
     (home / ".config/kglobalshortcutsrc").write_text(SHORTCUTS)
     for name in ("openvino_telemetry", "openvino_ga_cid", "stats"):
         (home / "intel" / name).write_text("1")
@@ -68,6 +71,10 @@ def test_uninstall_lists_leftovers_and_keeps_them(home):
     for d in (".config/vinopop", ".cache/vinopop", ".local/share/vinopop", ".local/state/vinopop"):
         assert str(home / d) in out.stdout
         assert (home / d).is_dir()
+    # the model and its compile cache go; the clipboard history stays
+    assert not (home / ".local/share/vinopop/models").exists()
+    assert not (home / ".cache/vinopop/ov-cache").exists()
+    assert (home / ".cache/vinopop/clipboard/history.json").is_file()
     assert str(home / "intel") in out.stdout
     assert "[vinopop] shortcuts" in out.stdout
     assert "--purge" in out.stdout
@@ -87,12 +94,15 @@ def test_purge_with_yes_deletes_them(home):
     assert any("--key vinopop-popup" in line for line in deleted)
 
 
-def test_purge_without_a_terminal_or_yes_deletes_nothing(home):
+def test_purge_without_a_terminal_or_yes_deletes_nothing_else(home):
+    # The model goes either way; the user's data waits for the answer.
     home, stubs, _ = home
     out = _run(home, stubs, "--uninstall", "--purge", stdin="y\n")
     assert out.returncode == 1
     assert "--yes" in out.stdout
-    assert (home / ".local/share/vinopop/models/weights.bin").is_file()
+    assert not (home / ".local/share/vinopop/models").exists()
+    assert (home / ".cache/vinopop/clipboard/history.json").is_file()
+    assert (home / ".config/vinopop").is_dir()
 
 
 def test_intel_with_other_files_is_kept(home):
@@ -131,3 +141,30 @@ def test_purge_alone_is_refused(home):
     out = _run(home, stubs, "--purge")
     assert out.returncode == 2
     assert (home / ".config/vinopop").is_dir()
+
+
+def test_uninstall_deletes_the_model_under_xdg_dirs(home, tmp_path):
+    home, stubs, _log = home
+    data, cache = tmp_path / "xdg-data", tmp_path / "xdg-cache"
+    (data / "vinopop/models/gemma").mkdir(parents=True)
+    (cache / "vinopop/ov-cache/ocr").mkdir(parents=True)
+    (cache / "vinopop/clipboard").mkdir(parents=True)
+    (cache / "vinospeak").mkdir(parents=True)
+    env = {
+        "HOME": str(home),
+        "PATH": f"{stubs}:{os.environ['PATH']}",
+        "XDG_DATA_HOME": str(data),
+        "XDG_CACHE_HOME": str(cache),
+    }
+    out = subprocess.run(
+        ["bash", str(INSTALL_SH), "--uninstall"], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr
+    assert not (data / "vinopop/models").exists()
+    assert not (cache / "vinopop/ov-cache").exists()
+    assert (data / "vinopop").is_dir() and (cache / "vinopop/clipboard").is_dir()
+    # vinoSpeak's voice is shared: named, never deleted
+    assert (cache / "vinospeak").is_dir()
+    assert "shared with vinoSpeak" in out.stdout
+    # the ones under HOME belong to nobody here
+    assert (home / ".local/share/vinopop/models").is_dir()

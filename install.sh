@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # vinoPop installer - sets up autostart for the current user.
 # Usage: bash install.sh                          # install
-#        bash install.sh --uninstall              # remove launchers, list what's left
+#        bash install.sh --uninstall              # remove launchers and the AI model,
+#                                                 # list what's left
 #        bash install.sh --uninstall --purge      # and delete that too (asks first;
 #                                                 # --yes to skip the question)
 
@@ -100,8 +101,21 @@ intel_is_telemetry_only() {
     done
 }
 
-# What --uninstall leaves: settings, plugins, snippets, clipboard history,
-# the AI model and its compile cache. Prints them; with --purge, deletes them.
+# The offline AI model (4-5 GB each, both Gemma models can be there) and the
+# OpenVINO compile caches built from it go with a plain uninstall. Only those
+# two folders: $CACHE_HOME/vinopop also holds the clipboard history, and
+# $DATA_HOME/vinopop is the release install's root.
+remove_models() {
+    local dir
+    for dir in "$DATA_HOME/vinopop/models" "$CACHE_HOME/vinopop/ov-cache"; do
+        [[ -e "$dir" ]] || continue
+        echo "[install] removing $(du -sh -- "$dir" 2>/dev/null | cut -f1)	$dir"
+        rm -rf -- "$dir"
+    done
+}
+
+# What --uninstall leaves: settings, plugins, snippets, clipboard history.
+# Prints them; with --purge, deletes them.
 leftovers() {
     local purge="$1" assume_yes="$2" found=() dir keys key answer
     for dir in "$CONFIG_HOME/vinopop" "$CACHE_HOME/vinopop" "$DATA_HOME/vinopop" "$STATE_HOME/vinopop"; do
@@ -113,12 +127,15 @@ leftovers() {
         echo "[install] nothing else of vinoPop's is left"
         return 0
     fi
-    echo "[install] left behind (settings, snippets, clipboard history, the AI model):"
+    echo "[install] left behind (settings, snippets, clipboard history):"
     for dir in "${found[@]}"; do
         echo "[install]   $(du -sh -- "$dir" 2>/dev/null | cut -f1)	$dir"
     done
     if [[ -n "$keys" ]]; then
         echo "[install]   the [vinopop] shortcuts in $SHORTCUTS_FILE"
+    fi
+    if [[ -d "$CACHE_HOME/vinospeak" ]]; then
+        echo "[install] kept: $CACHE_HOME/vinospeak (the read-aloud voice, shared with vinoSpeak)"
     fi
     if [[ "$purge" != true ]]; then
         echo "[install] to delete them too: bash $0 --uninstall --purge"
@@ -170,6 +187,7 @@ for arg in "$@"; do
 done
 if [[ "$mode" == uninstall ]]; then
     uninstall
+    remove_models
     leftovers "$purge" "$assume_yes" || exit 1
     exit 0
 elif $purge || $assume_yes; then
@@ -465,4 +483,4 @@ case ":$PATH:" in
     *":$(dirname "$BIN_FILE"):"*) echo "[install] to start now: vinopop" ;;
     *) echo "[install] to start now: $BIN_FILE ($(dirname "$BIN_FILE") is not on your PATH)" ;;
 esac
-echo "[install] uninstall: bash $0 --uninstall (add --purge to delete settings and the AI model too)"
+echo "[install] uninstall: bash $0 --uninstall (deletes the AI model; add --purge to delete settings and history too)"
