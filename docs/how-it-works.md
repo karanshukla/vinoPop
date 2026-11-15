@@ -87,6 +87,61 @@ Everything the Settings window sets lives in `~/.config/vinopop/settings.json`.
 | `icon_style` | `color` | Popup buttons for branded and converter actions: `color` (vino tiles) or `glyph` (mono glyphs like the system edit icons) |
 | `popup_text_labels` | `false` | Popup buttons show each action's name as plain text instead of its icon |
 | `tray_icon_style` | `color` | Tray icon: `color` (recoloured by the panel), `light` or `dark` (fixed, for panels that don't recolour it) |
+| `tray_idle_minutes` | `0` | Minutes without a popup before the tray icon hides; the next popup brings it back. `0` keeps it shown. |
+
+### Why the defaults are what they are
+
+Only keys you set are written to the file, so a default changed in a later release reaches everyone who never touched it.
+
+**Privacy switches are off until you turn them on.**
+
+- `double_click_popup_enabled` watches every mouse click (the X11 RECORD extension, or `/dev/input` on KDE Wayland) to spot the chord. Nothing is logged or sent. The modifier is required so the gesture doesn't collide with an app's own double-click-to-select. `double_click_modifier` is read on each click, so changing it needs no restart.
+- `snippet_triggers_enabled` watches keystrokes the same way. They are matched against your snippet triggers locally and never logged or sent. `trigger_blocklist_patterns` silences expansion in password managers, terminals or your bank's site without turning triggers off everywhere.
+- `snippet_shell_enabled` lets `{shell:CMD}` run bash (5 s timeout) and paste its output. Treat it like enabling macros in a document: an imported snippet with a hostile `{shell:...}` would run on your machine.
+- `clipboard_history_enabled: false` means the selection watcher thread never starts, the picker hotkey does nothing and the popup button is hidden.
+- `ai_prefetch_model` downloads about 4 GB, so it waits for a yes from onboarding or Settings > Advanced. It used to default to `true` and older versions wrote every default into the file, which is why a stored `true` only counts once `ai_prefetch_asked` is set.
+
+**Hotkeys.**
+
+- The format is `<modifiers>+<key>`: `super+shift+y`, `ctrl+alt+y`, `super+space`. Empty or `null` disables one.
+- `clipboard_hotkey` avoids `Meta+V`, which KDE's Klipper and other clipboard managers grab.
+- `hotkey_use_polling` is on because Cinnamon's muffin defers Super-key dispatch to tell a tap from a hold and eats the first press of Shift+Super combos (linuxmint/cinnamon #549). Polling costs under 0.1 % CPU per hotkey in `top`. Turn it off for the event-driven `XGrabKey` path.
+- `popup_force_all_modifier` is empty because every choice collides with something: Alt+drag moves windows on Cinnamon and GNOME, Super is often the window manager's own modifier, Ctrl+drag selects word by word or adds cursors in editors and browsers, and Shift extends a selection everywhere. Pick the least bad one in Settings > Activation. It is for when the classifier got the selection wrong and the button you want was filtered out.
+
+**Timing.**
+
+- `auto_hide_initial_ms`: 6.5 s is long enough to read the buttons; 8 s felt sluggish.
+- `auto_hide_leave_ms`: 4 s forgives leaving and coming back; 1.5 s felt twitchy.
+- `selection_debounce_ms`: each extension of a drag fires a selection event, so some wait is needed for the drag to settle. People rarely extend again within 150 ms, and 150 ms doesn't read as a delay.
+- `min_selection_length`: 2 filters stray single-letter selections without blocking short words. It only applies with `min_selection_length_enabled`, and never to the hotkey.
+
+**Popup.**
+
+- `theme` is `dark` because the palette was designed against it. `system` follows the GTK theme name and its prefer-dark flag.
+- `max_popup_buttons` bounds every `popup_overflow_mode`. 24 fits a typical 12 to 20 enabled plugins.
+- `popup_text_labels` overrides `icon_style` in the popup.
+- `popup_anchor_to_selection` does nothing unless `editable_atspi_listener_enabled` is on and the focused app exposes accessibility; otherwise the popup sits at the pointer.
+- `readonly_app_classes` adds to a built-in list (Evince, Okular, image viewers, file managers) and is only consulted when AT-SPI gave no definite answer.
+
+**Clipboard history.**
+
+- `clipboard_history_size`: 25 reaches back about a day of work; more makes the picker harder to search.
+- `clipboard_history_max_text_kb` and `clipboard_history_max_image_mb` exist because history is rewritten to disk on every copy, and a 20 MB log would be rewritten each time.
+- `snippet_variables` are shared values (email, signature, phone) that snippets pull in with `{var:NAME}`.
+
+**Offline AI.**
+
+- `ai_device: auto` puts the LLM on the NPU and OCR on the CPU, with the other devices as fallback.
+- `ai_load_timeout_seconds`: a slow first NPU compile keeps running in the background after the fallback, and the model moves to the NPU once it is done.
+- `ai_idle_unload_minutes` frees about 4 GB (LLM) and 1 GB (OCR). The compile cache keeps the next load quick.
+- `ocr_describe_images` adds a Describe image button to the OCR notification when text was found, and runs straight away when none was. About 10 s per image on the NPU.
+
+**Other.**
+
+- `terminal_confirm_run` protects against highlighting a hostile-looking string and clicking the wrong button. With `terminal_keep_open: false` the terminal closes as soon as the command exits and its output is lost.
+- `search_engine_custom_url` must contain `{q}`, which is replaced with the URL-encoded selection, as in `https://searx.example.com/search?q={q}`.
+- `tray_icon_style` is a manual choice because plasmashell won't recolour a custom symbolic icon reliably: `light` is for dark panels, `dark` for light ones.
+- `editable_atspi_listener_enabled` tells "cursor in the chat input" from "cursor in the chat history" in Electron apps. It left the Settings window on 2026-05-29: modifier + double-click covers the main case, and AT-SPI was correlated with a Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw `ATK_IS_STATE_SET` assertions and cinnamon dereferenced a freed GObject). It stays as a hidden key.
 
 ## Demos
 
