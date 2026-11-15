@@ -231,22 +231,10 @@ class X11Backend(PlatformBackend):
         x11_move_popup_window(win, x, y)
 
 
-# ---------------------------------------------------------------------------
-# Keystrokes, typing and window activation in python-xlib, in place of the
-# xdotool and xprop processes this used to spawn. Keys go over XTEST, which is
-# what `xdotool key` used too: let go of the modifiers the user is still
-# holding (its --clearmodifiers), press the chord, then put the held ones
-# back, so a hotkey's Super/Shift doesn't turn Ctrl+V into something else. A
-# keysym the current layout lacks (an accented letter on a US layout, an
-# emoji) is bound to a spare keycode for the duration, and the keycode is
-# given back afterwards. Unlike xdotool, each missing keysym gets its own
-# spare keycode: rebinding one keycode per character raced the client, which
-# under load read a character against the next one's binding (2026-10-20,
-# Plasma XWayland, all cores busy: 3 of 6 runs mangled). Like xdotool, the
-# events reach X11 clients only (XWayland ones on a Wayland desktop).
-# Everything here runs on the shared _pointer_dpy connection under
-# _pointer_lock.
-# ---------------------------------------------------------------------------
+# Keystrokes, typing and window activation over XTEST, on the shared
+# _pointer_dpy connection under _pointer_lock. Design and measurements:
+# docs/how-it-works.md#keystrokes-on-x11. tests/test_x11_keys.py pins the
+# modifier handling and one spare keycode per missing keysym.
 
 # How long a scratch keycode stays bound after its key events before it's
 # rebound, when there are more missing keysyms than spare keycodes, so the
@@ -611,18 +599,10 @@ def window_wm_class(wid: int | str) -> str:
     return _on_shared_display(run, "")
 
 
-# ---------------------------------------------------------------------------
-# Floating-window placement on X11 / XWayland.
-#
-# GTK 4 has no Gtk.Window.move(), no POPUP window type and no type hints, so
-# we do what GTK 3's POPUP/POPUP_MENU windows did ourselves with python-xlib:
-# mark the X window override-redirect right after GTK creates it (before it is
-# ever mapped), so the WM neither decorates, focuses, places nor lists it, and
-# move it with XMoveWindow. Override-redirect windows never receive focus from
-# the WM, which also gives us GTK 3's accept_focus=False for free - paste keeps
-# going to the app the text came from. Shared with WaylandKdeBackend, which
-# falls back to this when the process runs on XWayland (no gtk4-layer-shell).
-# ---------------------------------------------------------------------------
+# Floating-window placement on X11 / XWayland: the window is marked
+# override-redirect before it is mapped and moved with XMoveWindow
+# (docs/how-it-works.md#popup-placement-on-x11). WaylandKdeBackend falls
+# back to this without gtk4-layer-shell.
 
 # Own Xlib connection for window attribute/move requests (main thread only).
 _win_dpy = None

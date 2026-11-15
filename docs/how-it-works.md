@@ -143,6 +143,20 @@ Only keys you set are written to the file, so a default changed in a later relea
 - `tray_icon_style` is a manual choice because plasmashell won't recolour a custom symbolic icon reliably: `light` is for dark panels, `dark` for light ones.
 - `editable_atspi_listener_enabled` tells "cursor in the chat input" from "cursor in the chat history" in Electron apps. It left the Settings window on 2026-05-29: modifier + double-click covers the main case, and AT-SPI was correlated with a Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw `ATK_IS_STATE_SET` assertions and cinnamon dereferenced a freed GObject). It stays as a hidden key.
 
+## Keystrokes on X11
+
+Paste, Cut, typing and window activation go through python-xlib and the X server's XTEST extension, in place of the `xdotool` and `xprop` processes vinoPop used to spawn. Like `xdotool`, the events reach X11 clients only (XWayland ones on a Wayland desktop).
+
+- **Held modifiers are lifted first** (what `xdotool key --clearmodifiers` did), the chord is pressed, and the held ones are put back, so a hotkey's Super or Shift doesn't turn Ctrl+V into something else.
+- **A keysym the layout lacks** (an accented letter on a US layout, an emoji) is bound to a spare keycode for the duration and given back afterwards.
+- **Each missing keysym gets its own spare keycode**, unlike `xdotool`. Rebinding one keycode per character raced the client, which under load read a character against the next one's binding: 3 of 6 runs came out mangled on Plasma XWayland with all cores busy (2026-10-20).
+
+`tests/test_x11_keys.py` pins all three.
+
+## Popup placement on X11
+
+GTK 4 has no `Gtk.Window.move()`, no POPUP window type and no type hints, so vinoPop does what GTK 3's POPUP windows did itself: it marks the X window override-redirect right after GTK creates it, before it is ever mapped, and moves it with `XMoveWindow`. The window manager then neither decorates, focuses, places nor lists it. An override-redirect window never gets focus from the window manager either, which is what GTK 3's `accept_focus=False` gave: paste keeps going to the app the text came from. The KDE Wayland backend uses the same code when the process runs on XWayland (no `gtk4-layer-shell`).
+
 ## Threads and X11
 
 Notes on two things the daemon deliberately does not do.
