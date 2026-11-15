@@ -2015,26 +2015,26 @@ def render_placeholders(
 
     def expand(match: re.Match[str]) -> str:
         nonlocal clipboard_value
-        token = match.group(1)
+        placeholder = match.group(1)
         now = time.localtime()
-        if token in _STRFTIME_TOKENS:
-            return time.strftime(_STRFTIME_TOKENS[token], now)
-        kind, _, argument = token.partition(":")
+        if placeholder in _STRFTIME_TOKENS:
+            return time.strftime(_STRFTIME_TOKENS[placeholder], now)
+        kind, _, argument = placeholder.partition(":")
         if kind == "date":
             try:
                 return _render_date_token(argument, now)
             except (ValueError, TypeError):
                 return match.group(0)
-        if token == "name":
+        if placeholder == "name":
             return _full_user_name()
-        if token == "clipboard":
+        if placeholder == "clipboard":
             # Read once, before the paste puts the snippet on the clipboard
             if clipboard_value is None:
                 clipboard_value = _read_clipboard_text() or ""
             return clipboard_value
-        if token == "selection":
+        if placeholder == "selection":
             return _read_primary_selection()
-        if token == "cursor":
+        if placeholder == "cursor":
             return _CURSOR_SENTINEL
         if kind == "ask":
             label, _options = _parse_ask_field(argument)
