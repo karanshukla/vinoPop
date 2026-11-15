@@ -17,30 +17,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
 from ui import gtk4_app, sidebar_window  # noqa: E402
-
-# libhandy needed two tree-walking hacks here (_unwrap_subtitle_labels and
-# _unellipsize_tab_labels) because HdyActionRow ellipsised subtitles and
-# HdyViewSwitcherButton cropped tab labels in C. Adw.ActionRow wraps its
-# subtitle by default (subtitle-lines=0) and Adw.ViewSwitcher sizes its
-# labels properly, so both are gone.
-
-
-def _force_to_front(window: Gtk.Window) -> None:
-    """Bring the window to the foreground. GTK 4 has no keep_above /
-    GdkWindow.raise_() any more; present() is the only portable request
-    and the compositor decides the rest."""
-    try:
-        window.unminimize()
-    except Exception:
-        pass
-    window.present()
-
-
-def _plain(row: Gtk.Widget) -> Gtk.Widget:
-    """Adw rows parse title/subtitle as Pango markup by default; plugin
-    titles and descriptions are plain text (they contain '&', '<' ...)."""
-    row.set_use_markup(False)
-    return row
+from ui.sidebar_window import force_to_front as _force_to_front  # noqa: E402
+from ui.sidebar_window import plain_text_row as _plain  # noqa: E402
 
 
 def _icon_button(icon_name: str, tooltip: str | None = None) -> Gtk.Button:

@@ -23,7 +23,9 @@ from pathlib import Path
 
 from core.xdg_paths import CACHE_DIR
 
-from . import devices, failures, models, npu_canary, telemetry
+from . import devices, failures, idle, models, npu_canary, telemetry
+from .idle import IDLE_UNLOAD_MINUTES
+from .idle import float_setting as _setting
 
 log = logging.getLogger("vinopop")
 
@@ -40,7 +42,6 @@ _PROMPT_MARGIN = 96
 # compile of a big model can take minutes; it carries on in the background
 # (see _construct) instead of holding the click hostage.
 LOAD_TIMEOUT = 120.0
-IDLE_UNLOAD_MINUTES = 5.0
 
 _PROMPTS = {
     "summarize": (
@@ -89,16 +90,6 @@ _last_used = 0.0
 _idle_timer: threading.Timer | None = None
 # The stuck-NPU notification went out; again only once the NPU has recovered.
 _told_stuck = False
-
-
-def _setting(key: str, default: float) -> float:
-    try:
-        from core.settings import get_settings
-
-        value = get_settings().get(key)
-        return default if value is None else float(value)
-    except Exception:
-        return default
 
 
 def _load_timeout() -> float:
@@ -432,14 +423,7 @@ def delete_models() -> int:
 def _schedule_unload() -> None:
     global _idle_timer
     minutes = _setting("ai_idle_unload_minutes", IDLE_UNLOAD_MINUTES)
-    if _idle_timer is not None:
-        _idle_timer.cancel()
-        _idle_timer = None
-    if minutes <= 0:
-        return
-    _idle_timer = threading.Timer(minutes * 60 + 1, unload_if_idle)
-    _idle_timer.daemon = True
-    _idle_timer.start()
+    _idle_timer = idle.rearm(_idle_timer, minutes, unload_if_idle)
 
 
 def _count_tokens(tok, s: str) -> int | None:

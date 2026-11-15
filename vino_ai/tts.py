@@ -26,12 +26,12 @@ import threading
 import time
 from typing import Any
 
-from . import devices, telemetry
+from . import devices, idle, telemetry
+from .idle import IDLE_UNLOAD_MINUTES
 
 log = logging.getLogger("vinopop")
 
 ORDER = ("NPU", "GPU", "CPU")
-IDLE_UNLOAD_MINUTES = 5.0
 # Speech is synthesized a sentence or so at a time, so length costs nothing
 # up front; this only stops a select-all from talking for an hour.
 MAX_CHARS = 20000
@@ -183,14 +183,7 @@ def _schedule_unload() -> None:
     global _idle_timer
     minutes = _idle_minutes()
     with _lock:
-        if _idle_timer is not None:
-            _idle_timer.cancel()
-            _idle_timer = None
-        if minutes <= 0:
-            return
-        _idle_timer = threading.Timer(minutes * 60 + 1, _unload_or_wait)
-        _idle_timer.daemon = True
-        _idle_timer.start()
+        _idle_timer = idle.rearm(_idle_timer, minutes, _unload_or_wait)
 
 
 def _unload_or_wait() -> None:

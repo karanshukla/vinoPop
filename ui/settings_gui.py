@@ -24,21 +24,11 @@ from gi.repository import Adw, Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from core.settings import get_settings  # noqa: E402
 from ui import gtk4_app, sidebar_window  # noqa: E402
+from ui.sidebar_window import force_to_front as _force_to_front  # noqa: E402
+from ui.sidebar_window import plain_text_row as _plain  # noqa: E402
 
 if TYPE_CHECKING:
     from ui.plugin_manager import PluginManagerDialog
-
-# libhandy needed _unwrap_subtitle_labels() here: HdyActionRow baked
-# ellipsize=END / lines=1 into its subtitle label, so we walked the realised
-# tree after show_all() to patch it. Adw.ActionRow wraps its subtitle by
-# default (subtitle-lines=0 means unlimited), so the hack is gone.
-
-
-def _plain(row: Gtk.Widget) -> Gtk.Widget:
-    """Adw rows parse title/subtitle as Pango markup by default; ours are
-    plain text (they contain '&', '<', quotes ...), so turn that off."""
-    row.set_use_markup(False)
-    return row
 
 
 def _gb(size: int) -> str:
@@ -299,17 +289,6 @@ def _hotkey_bindable(combo: str) -> bool:
         return get_backend().can_bind_hotkey(combo)
     except Exception:
         return True
-
-
-def _force_to_front(window: Gtk.Window) -> None:
-    """Bring the window to the foreground. GTK 4 dropped keep_above and
-    GdkWindow.raise_(), so present() (with an unminimize first) is the
-    only portable request; the compositor arbitrates the rest."""
-    try:
-        window.unminimize()
-    except Exception:
-        pass
-    window.present()
 
 
 _MODIFIER_KEYVALS = {
