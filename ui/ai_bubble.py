@@ -26,6 +26,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from platform_backend.monitors import clamp_to_area, monitor_at, to_logical, usable_area  # noqa: E402
+from ui import keyboard_nav  # noqa: E402
 
 log = logging.getLogger("vinopop")
 
@@ -344,11 +345,7 @@ class ResultBubble:
             self.dismiss()
             return True
         if self._kbd_grab is not None:
-            name = Gdk.keyval_name(keyval) or ""
-            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-            if name == "ISO_Left_Tab":
-                name, shift = "Tab", True
-            return self._kbd_key(name, shift)
+            return self._kbd_key(*keyboard_nav.key_from_event(keyval, state))
         return False
 
     # ---- keyboard (#124) -------------------------------------------------
@@ -381,16 +378,11 @@ class ResultBubble:
             except Exception:
                 pass
             self._kbd_xdpy = None
-        for chip in self._chips:
-            chip.remove_css_class("vinopop-selected")
+        keyboard_nav.clear_highlight(self._chips)
 
     def _kbd_select(self, index: int) -> None:
         self._kbd_index = index % len(self._chips)
-        for i, chip in enumerate(self._chips):
-            if i == self._kbd_index:
-                chip.add_css_class("vinopop-selected")
-            else:
-                chip.remove_css_class("vinopop-selected")
+        keyboard_nav.highlight_only(self._chips, self._kbd_index)
         self._announce_chip()
 
     def _chip_name(self, chip: Gtk.Button) -> str:

@@ -31,6 +31,7 @@ from core.classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
 from platform_backend.monitors import clamp_to_area, monitor_at, usable_area  # noqa: E402
 from plugin_system import plugin_loader
+from ui import keyboard_nav
 
 log = logging.getLogger("vinopop")
 
@@ -1565,28 +1566,25 @@ class PopupWindow:
         if grab is not None:
             grab.stop()
         if was_on:
-            for btns in self._rows():
-                for btn in btns:
-                    btn.remove_css_class("vinopop-selected")
+            keyboard_nav.clear_highlight(self._buttons())
 
     def _kbd_drain(self) -> None:
         """_tick calls this: its queries share the grab's Xlib connection."""
         if self._kbd_grab is not None:
             self._kbd_grab.drain()
 
+    def _buttons(self) -> list[Gtk.Widget]:
+        return [button for row in self._rows() for button in row]
+
     def _kbd_select(self, index: int) -> None:
-        flat = [b for btns in self._rows() for b in btns]
-        if not flat:
+        buttons = self._buttons()
+        if not buttons:
             return
-        self._kbd_index = max(0, min(index, len(flat) - 1))
-        for i, btn in enumerate(flat):
-            if i == self._kbd_index:
-                btn.add_css_class("vinopop-selected")
-            else:
-                btn.remove_css_class("vinopop-selected")
-        # The popup never has focus, so a screen reader can't follow the
-        # highlight on its own: say which action Enter would run.
-        _announce(flat[self._kbd_index], flat[self._kbd_index].get_tooltip_text() or "")
+        self._kbd_index = max(0, min(index, len(buttons) - 1))
+        keyboard_nav.highlight_only(buttons, self._kbd_index)
+        # Without focus a screen reader can't follow the highlight
+        selected = buttons[self._kbd_index]
+        _announce(selected, selected.get_tooltip_text() or "")
 
     def _kbd_key(self, name: str, shift: bool = False) -> bool:
         """Handle one navigation key; returns whether it was one."""
@@ -1834,11 +1832,7 @@ class PopupWindow:
             self.hide()
             return True
         if self._kbd_nav:
-            name = Gdk.keyval_name(keyval) or ""
-            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-            if name == "ISO_Left_Tab":
-                name, shift = "Tab", True
-            return self._kbd_key(name, shift)
+            return self._kbd_key(*keyboard_nav.key_from_event(keyval, state))
         return False
 
     def _on_button_press(self, gesture, _n_press, x, y) -> None:
