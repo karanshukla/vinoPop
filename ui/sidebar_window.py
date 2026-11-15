@@ -1,6 +1,7 @@
-"""The sidebar-and-pages layout shared by the Settings and Plugin Manager
-windows: a page list on the left, the selected page on the right under a
-header bar that names it, collapsing to one pane at a time when narrow."""
+"""What the Settings and Plugin Manager windows share: raising the window,
+plain-text rows, and the sidebar-and-pages layout (a page list on the left,
+the selected page on the right under a header bar that names it, collapsing
+to one pane at a time when narrow)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,24 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk  # noqa: E402
+
+
+def force_to_front(window: Gtk.Window) -> None:
+    """Bring the window to the foreground. GTK 4 has no keep_above or
+    GdkWindow.raise_(): present() is the only portable request and the
+    compositor decides the rest."""
+    try:
+        window.unminimize()
+    except Exception:
+        pass
+    window.present()
+
+
+def plain_text_row(row: Gtk.Widget) -> Gtk.Widget:
+    """Adw rows parse title and subtitle as Pango markup by default; ours
+    are plain text (they contain '&', '<', quotes ...)."""
+    row.set_use_markup(False)
+    return row
 
 
 def build(
