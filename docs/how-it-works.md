@@ -143,6 +143,13 @@ Only keys you set are written to the file, so a default changed in a later relea
 - `tray_icon_style` is a manual choice because plasmashell won't recolour a custom symbolic icon reliably: `light` is for dark panels, `dark` for light ones.
 - `editable_atspi_listener_enabled` tells "cursor in the chat input" from "cursor in the chat history" in Electron apps. It left the Settings window on 2026-05-29: modifier + double-click covers the main case, and AT-SPI was correlated with a Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw `ATK_IS_STATE_SET` assertions and cinnamon dereferenced a freed GObject). It stays as a hidden key.
 
+## Threads and X11
+
+Notes on two things the daemon deliberately does not do.
+
+- **No `XInitThreads`.** Several threads touch X (selection watcher, hotkeys, the popup tick, the clipboard watcher), and calling `XInitThreads` at import was tried. With python-xlib and PyGObject in one process the hotkey threads then silently fail to grab keys. python-xlib has its own socket and lock per `Display`, so it doesn't need it: GTK's own lock plus a separate `Display` per thread is the isolation vinoPop relies on. If `XIO: fatal IO error` crashes show up under load, give each Xlib user its own connection (mostly the case already) instead of turning `XInitThreads` back on.
+- **`SIGCHLD` is not ignored.** `SIG_IGN` was a cheap way to reap subprocess zombies, and it was reverted: on Python 3.12, with the background watcher, many short-lived `xclip` calls and the GTK main loop, `subprocess.run()` intermittently froze the UI when the clipboard picker opened. A few zombie PIDs over the daemon's uptime are the lesser evil until there is a periodic reaper.
+
 ## Demos
 
 The animations in the README are drawn, not recorded. `python3 docs/media/demos.py` regenerates `popup.svg` and `clipboard.svg`.

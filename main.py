@@ -108,17 +108,8 @@ from core.xdg_paths import (  # noqa: E402
 )
 from platform_backend import get_backend  # noqa: E402
 
-# XInitThreads is intentionally NOT called here. We tried it (since
-# multiple threads touch X - watcher, hotkey, popup tick, clipboard
-# watcher) but it interacts badly with the python-xlib + PyGObject mix
-# in this process: the hotkey threads silently fail to grab keys when
-# XInitThreads runs at import time. Python-xlib uses its own per-Display
-# socket and Python-level Lock, so it doesn't actually need XInitThreads;
-# Gdk/GTK's internal lock plus separate-Display-per-thread is the
-# isolation we rely on. If "XIO: fatal IO error" crashes start showing
-# up under load, revisit by giving each Xlib-using component its own
-# connection (already mostly the case) rather than re-enabling
-# XInitThreads.
+# No XInitThreads: with it the hotkey threads silently fail to grab keys
+# (docs/how-it-works.md#threads-and-x11).
 from plugin_system import plugin_loader  # noqa: E402
 from triggers.editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
 from triggers.toggle import CLOSE, OPEN, HotkeyToggle  # noqa: E402
@@ -269,30 +260,19 @@ class App:
         self.ocr_hotkey = None
         # Open/close/ignore for presses of the popup hotkey (#44)
         self._popup_toggle = HotkeyToggle()
-        # Optional global double-click watcher. Created lazily when the
-        # double_click_popup_enabled setting is on - PopClip-style
-        # click-in-text-field popup.
+        # Created once double_click_popup_enabled is on.
         self.dblclick_watcher = None
-        # Debounce id for plugin reloads triggered by settings saves -
-        # prevents a load_all storm when many keys change in quick
-        # succession (textarea editing, bulk toggles).
         self._reload_pending_id: int | None = None
-        # Track what's actually grabbed right now, independent of the
-        # settings singleton. The on_changed callback fires AFTER
-        # settings_gui has already mutated the singleton, so comparing
-        # "new setting" vs "current singleton" never sees a diff. These
-        # mirrors are the source of truth for the live-rebind diff.
+        # What is grabbed right now. Settings saves are diffed against these:
+        # the dialog has already changed the settings singleton by then.
         self._bound_hotkey: str = ""
         self._bound_clipboard_hotkey: str = ""
         self._bound_ocr_hotkey: str = ""
-        # Same mirror for the polling toggle - flipping it has to
-        # rebuild both hotkey threads (poll vs grab is decided at
-        # thread start, not per-event).
+        # Poll or grab is decided when a hotkey thread starts.
         self._bound_use_polling: bool = bool(self.settings.get("hotkey_use_polling", False))
         self._watcher_active = False
         self.tray = None
         self.restart_requested = False
-        # Single-instance dialogs: created lazily, reused on subsequent opens
         self._settings_dialog = None
         self._plugin_dialog = None
         # Background model download, so a second start (Settings switch,
@@ -367,13 +347,8 @@ class App:
 
     def _prepare_popup(self, text: str, x: int, y: int, via_hotkey: bool = False) -> None:
         """Worker thread: filters and probes, then shows on the GTK thread."""
-        # No min-length check here on purpose - that filter belongs to
-        # the watcher (auto-popup on selection), not to this routine.
-        # show_popup_now() routes empty text into the no-selection
-        # paste menu, but non-empty text of *any* length should still
-        # surface the selection popup when the user explicitly fires
-        # the hotkey. PopClip works the same way: 'minimum size' is
-        # an auto-popup filter, long-press always shows the popup.
+        # No minimum length here: that filter is the watcher's alone
+        # (tests/test_min_selection.py).
         if not text:
             log.info("[show-for] suppressed -- empty text")
             return
@@ -383,9 +358,6 @@ class App:
         # One active-window lookup shared by the blocklist and the
         # read-only check (on KDE each one is a KWin round-trip).
         haystacks = _once(get_backend().active_window_haystacks)
-        # Skip when the active app/site is on the user's blocklist.
-        # Checked here (just before the popup would appear) so plugins
-        # and the watcher don't have to know about it.
         patterns = list(self.settings.get("blocklist_patterns") or [])
         if _active_window_blocked(patterns, haystacks):
             log.info("[blocked] suppressed popup -- active window matches blocklist")
@@ -394,17 +366,9 @@ class App:
         # What was selected only at --debug: it can be a password or a token.
         log.info("[%s] %d-char selection", ctype.value, len(text))
         log.debug("[%s] %r", ctype.value, text[:60].replace("\n", "↵"))
-        # AT-SPI / WM_CLASS probe - drives which plugins are eligible.
-        # Done here (not in popup.show_for) so the popup module stays
-        # accessibility-agnostic and we can pipe extra user blocklist
-        # classes in from settings without circular imports.
         extra_ro = tuple(self.settings.get("readonly_app_classes") or [])
         editable = is_focus_editable(extra_readonly_classes=extra_ro, haystacks=haystacks)
-        # Try to anchor the popup to the selected-text rectangle (via
-        # AT-SPI screen-coord extents) instead of the mouse pointer. Returns
-        # None - and we fall back to (x, y) - whenever AT-SPI is off /
-        # unavailable / the app exposes no selection geometry, so this is a
-        # zero-regression enhancement. Gated behind popup_anchor_to_selection.
+        # None (AT-SPI off, or no selection geometry) anchors to the pointer.
         rect = None
         if bool(self.settings.get("popup_anchor_to_selection")):
             try:
@@ -442,10 +406,8 @@ class App:
         self._off_main(self._gather_hotkey_popup, via_hotkey, drop_if_busy=True)
 
     def _gather_hotkey_popup(self, via_hotkey: bool = False) -> None:
-        # Stamped so a "had to press the hotkey 3 times" report comes
-        # with breadcrumbs in vinopop.log: did the trigger reach us at
-        # all? did xclip return empty? did the popup get suppressed by
-        # the min-length / blocklist filters?
+        # Timed and logged, so a "had to press it three times" report shows
+        # whether the trigger arrived and what the selection read returned.
         t0 = time.monotonic()
         source = self.settings.get("hotkey_source") or "primary"
         text = _read_selection(source)
@@ -460,12 +422,6 @@ class App:
         except Exception:
             x, y = 0, 0
         if not text:
-            # PopClip-style: hotkey without a selection still shows a
-            # popup, but populated with paste-oriented entry points
-            # (clipboard history, snippets) instead of the usual
-            # transforms-and-actions for the selected text. The popup is
-            # the single portal; the dedicated clipboard hotkey stays
-            # available as a power-user shortcut.
             log.info("[hotkey-fire] no selection - showing paste menu")
             self._prepare_no_selection_popup(x, y, via_hotkey)
             return
@@ -600,15 +556,9 @@ class App:
             return
 
         def on_selection(text: str, x: int, y: int) -> None:
-            # Watcher-only filter, opt-in via settings:
-            # 'min_selection_length_enabled' gates whether we trim
-            # very short selections at all. Default off (PopClip
-            # convention - show the popup for any selection).
-            # The hotkey path bypasses this entirely; see
-            # _show_for_text's docstring.
             if not text:
                 return
-            if bool(self.settings.get("min_selection_length_enabled")) and len(text) < self.min_len:
+            if self._below_min_selection(text):
                 log.info("[watcher] skipping short selection (%d < %d)", len(text), self.min_len)
                 return
             self._show_for_text(text, x, y)
@@ -620,6 +570,10 @@ class App:
         self.watcher.start()
         self._watcher_active = True
         log.info("selection watcher started")
+
+    def _below_min_selection(self, text: str) -> bool:
+        """The auto-popup's opt-in filter for very short selections."""
+        return bool(self.settings.get("min_selection_length_enabled")) and len(text) < self.min_len
 
     def _stop_watcher(self) -> None:
         if self.watcher is not None:
@@ -879,16 +833,11 @@ class App:
                 return
 
             def on_changed():
-                # Compare against what's currently *grabbed*, NOT the settings
-                # singleton - settings_gui already mutated the singleton
-                # before reaching us, so a singleton-vs-singleton diff
-                # always reports "no change".
                 self.settings = get_settings()
                 self.min_len = self.settings.get_int("min_selection_length")
                 self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
                 self.popup._initial_grace_ms = self.settings.get_int("auto_hide_initial_ms")
                 self.popup._leave_grace_ms = self.settings.get_int("auto_hide_leave_ms")
-                # Live-update the tray icon if the user changed its style.
                 if self.tray is not None:
                     try:
                         self.tray.reload_icon()
@@ -897,13 +846,9 @@ class App:
                 self._sync_watcher_with_settings()
                 if self.watcher is not None:
                     self.watcher.set_debounce_ms(self.settings.get_int("selection_debounce_ms"))
-                # Reload plugins so settings that gate plugin registration
-                # (e.g. ai_services) take effect immediately. Debounced so
-                # a burst of saves (textarea editing, multi-toggle bulk
-                # changes) only triggers one reload after activity quiets.
+                # Debounced: a burst of saves reloads the plugins once.
                 self._schedule_plugin_reload()
                 self._apply_hotkey_settings()
-                # Live-apply the double-click watcher toggle.
                 self._maybe_start_dblclick_watcher()
                 # The model download switch starts it now, not at next launch.
                 self._maybe_prefetch_model()
@@ -1097,25 +1042,18 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging(args.debug)
     log.info("[display] %s", _GDK_BACKEND_CHOICE)
     get_backend().check_session()
-    # Single-instance guard - refuses to start a second copy. Run BEFORE
-    # any GTK init or hotkey grabs so the second copy exits before
-    # interfering with the existing instance.
+    # Before GTK init and hotkey grabs, so a second copy exits without
+    # disturbing the running one.
     _acquire_single_instance_lock()
     from core import autostart
 
     if autostart.migrate_from_main_py():
         log.info("[autostart] now starts the vinopop launcher instead of main.py")
 
-    # NOTE: previously we set SIGCHLD = SIG_IGN here as a cheap way to
-    # auto-reap subprocess zombies. Reverted because it has been observed
-    # to interact badly with subprocess.run() on Python 3.12 in this
-    # process layout (background watcher + many short-lived xclip
-    # calls + GTK main loop), producing intermittent UI freezes when the
-    # clipboard picker is opened. Accepting some zombie PIDs over uptime
-    # is the lesser evil; a proper periodic reaper can come later.
+    # SIGCHLD stays at its default: SIG_IGN froze the UI
+    # (docs/how-it-works.md#threads-and-x11).
 
-    # GTK 4 + libadwaita init (opens the display chosen by
-    # _choose_gdk_backend). Replaces Gtk.init via `import Gtk` in GTK 3.
+    # Opens the display _choose_gdk_backend picked.
     gtk4_app.init()
     theme.install_premium_theme(get_settings().get("theme", "dark") or "dark")
 
@@ -1131,8 +1069,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     print("[vinopop] running - Ctrl+C to quit. Logs at " + str(LOG_FILE))
 
-    # Freeze the startup object graph so the GC never re-scans it. Cheap one-line
-    # win for a long-running daemon - recommended by Python gc docs.
+    # The startup object graph lives as long as the daemon: stop re-scanning it.
     def _freeze_gc_after_startup():
         import gc
 
