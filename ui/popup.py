@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from typing import NamedTuple
 
 import gi
 
@@ -31,6 +32,7 @@ from core.classifier import ContentType
 from platform_backend import get_backend  # noqa: E402
 from platform_backend.monitors import clamp_to_area, monitor_at, usable_area  # noqa: E402
 from plugin_system import plugin_loader
+from ui import keyboard_nav
 
 log = logging.getLogger("vinopop")
 
@@ -642,6 +644,73 @@ class _XInputPoll:
         return self._id is not None
 
 
+_EDGE_PAD = 4
+# How far outside the popup, and beside the straight path to it from the
+# selection, the pointer may stray without starting the hide countdown
+_POPUP_MARGIN = 12
+_CORRIDOR_PAD = 24
+_SELECTION_GAP = 10
+# The pointer sits mid-line, so the popup clears a whole line of text
+# (about 24 px) and a gap. On Wayland the pointer is all there is, and it
+# sits inside or under the selection, so the popup is lifted further.
+_POINTER_CLEARANCE = (28, 32)  # above, below
+_WAYLAND_POINTER_CLEARANCE = (64, 56)
+
+
+class _Spot(NamedTuple):
+    """Where a popup goes, in logical pixels: its left edge, its top edge
+    above the text and below it, and the point it is for."""
+
+    x: int
+    above_y: int
+    below_y: int
+    origin: tuple[float, float]
+
+
+def _rect_centre(rect: tuple[int, int, int, int]) -> tuple[float, float]:
+    x, y, width, height = rect
+    return x + width / 2, y + height / 2
+
+
+def _spot_over_selection(
+    rect: tuple[int, int, int, int], width: int, height: int, pixels_per_unit: float
+) -> _Spot:
+    """Centred on the selection's box, just above its top edge or just
+    below its bottom one."""
+    x, y, rect_width, rect_height = rect
+    centre_x = (x + rect_width / 2) / pixels_per_unit
+    top, bottom = y / pixels_per_unit, (y + rect_height) / pixels_per_unit
+    return _Spot(
+        x=int(centre_x - width / 2),
+        above_y=int(top - height - _SELECTION_GAP),
+        below_y=int(bottom + _SELECTION_GAP),
+        origin=(centre_x, (top + bottom) / 2.0),
+    )
+
+
+def _spot_over_pointer(
+    x: float, y: float, width: int, height: int, pixels_per_unit: float, is_wayland: bool
+) -> _Spot:
+    """Centred on the pointer, clear of the line of text it is on."""
+    above, below = _WAYLAND_POINTER_CLEARANCE if is_wayland else _POINTER_CLEARANCE
+    pointer_x, pointer_y = x / pixels_per_unit, y / pixels_per_unit
+    return _Spot(
+        x=int(pointer_x - width / 2),
+        above_y=int(pointer_y - height - above),
+        below_y=int(pointer_y + below),
+        origin=(pointer_x, pointer_y),
+    )
+
+
+def _max_popup_buttons() -> int:
+    try:
+        from core.settings import get_settings
+
+        return get_settings().get_int("max_popup_buttons") or 10
+    except Exception:
+        return 10
+
+
 class PopupWindow:
     def __init__(
         self,
@@ -649,38 +718,63 @@ class PopupWindow:
         leave_grace_ms: int = 600,
         on_open_plugin_order: Callable[[], None] | None = None,
     ) -> None:
-        # on_open_plugin_order is invoked when the user clicks the
-        # overflow chip - lets us route them straight to Plugin Manager
-        # → Order so they can fix what's been hidden.
+        # Called when the overflow chip is clicked, to open Plugin Manager > Order
         self._on_open_plugin_order = on_open_plugin_order
         _install_css()
+        self._text_labels = False  # popup_text_labels, read on each show
+        self._build_window()
+        self._build_bar()
+        self._attach_controllers()
 
-        # GTK 4 has no window types, type hints, keep-above or accept-focus,
-        # so a plain undecorated Gtk.Window is handed to the platform backend,
-        # which owns stacking/placement/focus: on X11 it becomes an
-        # override-redirect window (never focused, so paste still goes to the
-        # text-source app; re-raised on every move so it can't end up under
-        # an open Settings / Plugin Manager window, the old Cinnamon bug the
-        # GTK 3 TOPLEVEL + POPUP_MENU hint worked around); on Wayland a
-        # gtk4-layer-shell OVERLAY surface with keyboard mode NONE.
-        # Esc-to-dismiss is handled via the Xlib keymap poll in _tick(),
-        # not via GTK key events, so we don't lose that flow.
+        self._current_text: str = ""
+        # Where the popup is anchored, in the backend's coordinates: picks
+        # the monitor for row sizing and icon scale before the window maps
+        self._anchor: tuple[int, int] = (0, 0)
+        self._hide_timeout_id: int | None = None
+        self._tracker_id: int | None = None
+        # Two auto-hide timers: one from the show until the pointer first
+        # reaches the popup, one from when it leaves the popup and the text
+        self._initial_hide_id: int | None = None
+        self._initial_grace_ms = initial_grace_ms
+        self._leave_grace_ms = leave_grace_ms
+        # Logical pixels around the selection that still count as on the text
+        self._text_zone_radius = 80
+        self._origin_logical: tuple[float, float] = (0.0, 0.0)
+        self._popup_rect: tuple[int, int, int, int] = (0, 0, 0, 0)  # x, y, w, h logical
+        self._scale: int = 1
+        self._open_xlib_display()
+        self._prev_button_pressed = False
+        self._prev_esc_pressed = False
+        # The popup never auto-hides with the pointer on it. On Wayland this
+        # enter/leave flag is what keeps it up: _tick's screen-space maths
+        # can't work there (the pointer position is surface-local).
+        self._pointer_in_popup = False
+        # When the hotkey last showed the popup (time.monotonic()), None when
+        # it is up for a selection; main.py's hotkey toggle reads it
+        self.hotkey_shown_at: float | None = None
+        # Keyboard navigation (#44), on while a hotkey-opened popup is up
+        self._kbd_nav = False
+        self._kbd_index = 0
+        self._kbd_grab: _KeyGrab | None = None
+
+    def _build_window(self) -> None:
+        """A plain undecorated window, handed to the platform backend for
+        stacking, placement and focus: override-redirect on X11, a
+        layer-shell overlay on Wayland. Neither is ever focused, so a paste
+        still lands in the app the text came from (docs/how-it-works.md,
+        "The popup window")."""
         self.win = Gtk.Window()
         self.win.set_decorated(False)
         self.win.set_resizable(False)
         self.win.set_title("vinoPop")
         self.win.add_css_class("vinopop-popup")
-        # popup_text_labels, read per show in _present_buttons
-        self._text_labels = False
-
-        # Let the platform backend prepare the window before it's ever shown
-        # (X11: override-redirect on realize; Wayland/KDE: gtk4-layer-shell).
         try:
             get_backend().prepare_popup_window(self.win)
         except Exception as exc:  # noqa: BLE001
             print(f"[popup] backend window init failed: {exc}")
 
-        # Outer container so the rounded HBox has breathing room from window edges
+    def _build_bar(self) -> None:
+        """The rounded bar and its two rows of buttons, inside a 1 px margin."""
         self._outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._outer.set_margin_top(1)
         self._outer.set_margin_bottom(1)
@@ -688,8 +782,6 @@ class PopupWindow:
         self._outer.set_margin_end(1)
         self.win.set_child(self._outer)
 
-        # _bar is the rounded pill background. It stacks one or two
-        # rows vertically depending on how many actions matched.
         # A toolbar to assistive tech, so its buttons read as a set of actions
         self._bar = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
@@ -704,12 +796,10 @@ class PopupWindow:
         self._row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._bar.append(self._row1)
         self._bar.append(self._row2)
-        # Row 2 stays out of the layout entirely until needed; without
-        # this it would leave a faint baseline gap below row 1 even when
-        # empty.
+        # An empty visible row 2 leaves a gap under row 1
         self._row2.set_visible(False)
 
-        # Enter/leave + key + click tracking via GTK 4 event controllers.
+    def _attach_controllers(self) -> None:
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         motion.connect("leave", self._on_leave)
@@ -721,42 +811,21 @@ class PopupWindow:
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_press)
         self.win.add_controller(keys)
-        # Capture-phase click gesture: sees every press before the button
-        # under it, records the modifier state (for Shift-click = copy) and
-        # handles presses that land outside the bar. Never claims, so the
-        # buttons still get their clicks.
+        # Capture phase, never claimed: it records the modifiers of every
+        # press (Shift+click copies) and sees presses outside the bar, and
+        # the buttons still get their clicks
         click = Gtk.GestureClick()
         click.set_button(0)
         click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", self._on_button_press)
         self.win.add_controller(click)
         self._last_press_state = Gdk.ModifierType(0)
-        # Focus loss (GTK 3's focus-out-event). The backend keeps the popup
-        # unfocused, so this only fires if a WM focused it anyway.
+        # Only fires if a window manager focused the popup anyway
         self.win.connect("notify::is-active", self._on_active_changed)
 
-        self._current_text: str = ""
-        # Raw (backend-space) coords the popup is anchored to; used to pick
-        # the monitor for row sizing / icon scale before the window maps.
-        self._anchor: tuple[int, int] = (0, 0)
-        self._hide_timeout_id: int | None = None
-        self._tracker_id: int | None = None
-        # Absolute ceiling on time the popup will linger if the user
-        # never moves the mouse into it. Armed in show_for, cancelled
-        # the moment the pointer enters the popup. Independent of the
-        # leave-grace timer so a stationary cursor still triggers hide.
-        self._initial_hide_id: int | None = None
-        self._initial_grace_ms = initial_grace_ms  # before mouse enters
-        self._leave_grace_ms = leave_grace_ms  # after mouse leaves popup AND text zone
-        # Logical-pixel radius around the original selection cursor that counts
-        # as "still over the text" - keeps popup alive while user looks at it.
-        self._text_zone_radius = 80
-        self._origin_logical: tuple[float, float] = (0.0, 0.0)
-        self._popup_rect: tuple[int, int, int, int] = (0, 0, 0, 0)  # x, y, w, h logical
-        self._scale: int = 1
-        # Xlib display used for polling pointer button state + Esc key.
-        # X11 only - the Wayland/KDE backend dismisses via GTK events
-        # (leave/focus-out/key-press), so we never open an Xlib display there.
+    def _open_xlib_display(self) -> None:
+        """X11 only: _tick polls the pointer buttons and Esc over it. The
+        Wayland backend dismisses through GTK events instead."""
         self._xdpy = None
         self._esc_keycode = 0
         if get_backend().popup_uses_xlib and xdisplay is not None:
@@ -767,34 +836,12 @@ class PopupWindow:
                 print(f"[popup] could not open Xlib display: {exc}")
                 self._xdpy = None
                 self._esc_keycode = 0
-        self._prev_button_pressed = False
-        self._prev_esc_pressed = False
-        # True while the pointer is over the popup. The popup must never
-        # auto-hide while this holds (user is reading / about to click).
-        # On Wayland this enter/leave signal is reliable; the tick's
-        # screen-space safe-zone math is not (pointer.get_position() is
-        # surface-local there), so Wayland persistence is driven from here.
-        self._pointer_in_popup = False
-        # When the hotkey last showed the popup (time.monotonic()), or None
-        # when it's up for a selection; main.py's hotkey toggle reads it.
-        self.hotkey_shown_at: float | None = None
-        # Keyboard navigation (#44), on while a hotkey-opened popup is up:
-        # the highlighted button, and the X11 key grabs that drive it.
-        self._kbd_nav = False
-        self._kbd_index = 0
-        self._kbd_grab: _KeyGrab | None = None
 
     def _clear_buttons(self) -> None:
-        # remove() drops the box's (only) GTK reference, which releases the
-        # button's signal-handler GClosures and its child image. GTK 4 has no
-        # Gtk.Widget.destroy(); unparenting is the whole teardown.
+        # GTK 4 has no destroy(): unparenting releases a button and its handlers
         for row in (self._row1, self._row2):
-            child = row.get_first_child()
-            while child is not None:
-                nxt = child.get_next_sibling()
-                row.remove(child)
-                child = nxt
-        # Collapse row 2 until something gets added to it.
+            while (button := row.get_first_child()) is not None:
+                row.remove(button)
         self._row2.set_visible(False)
         self._bar.set_size_request(-1, -1)  # drop _expand's width hold
 
@@ -1081,115 +1128,69 @@ class PopupWindow:
         via_hotkey: bool = False,
     ) -> None:
         if self.win.get_visible() and self._pointer_in_popup:
-            # The user is reaching for a button, so this isn't a selection
-            # they just made. On Wayland it's usually an app re-claiming
-            # PRIMARY on focus (a terminal with old text selected), and
-            # swapping the buttons now would run them on that text.
+            # Not a selection the user just made: on Wayland it is usually an
+            # app re-claiming PRIMARY on focus, and swapping the buttons under
+            # the pointer would run them on that text
             log.info("[popup] ignored a selection change while the pointer is on the popup")
             return
         self._current_text = text
         self._anchor = (int(x), int(y))
         self._clear_buttons()
 
-        # Force-all escape hatch: when the user is holding the configured
-        # modifier (default Alt) at the moment we render the popup, skip
-        # the classifier's content-type filter and surface every plugin
-        # that matches the text - lets the user override a misclassified
-        # selection ("Channel | Title" wrongly tagged as COMMAND, etc.)
-        # without changing settings. Editable filter still applies so
-        # Cut/Paste don't appear in read-only contexts.
-        force_all = self._force_all_held()
-        if force_all:
-            plugins = plugin_loader.all_plugins()
-            # Still keep only plugins that match this text via their
-            # matches() method - e.g. calculator filters out non-math
-            # selections by content. That's intent-preserving, not
-            # classifier-based, so it's fine to leave.
-            plugins = [p for p in plugins if p.matches(text)]
-            # Sort the same way for_content_type does so plugin_order
-            # is honoured in the expanded view too.
-            try:
-                from core.settings import get_settings as _gs
-
-                order = list(_gs().get("plugin_order") or [])
-            except Exception:
-                order = []
-            order_index = {n: i for i, n in enumerate(order)}
-            big = len(order) + 1_000_000
-            plugins.sort(
-                key=lambda p: (
-                    (0, order_index[p.name], p.priority)
-                    if p.name in order_index
-                    else (1, big, p.priority)
-                )
-            )
-        else:
-            plugins = plugin_loader.for_content_type(content_type, text)
-        # Strip out plugins that only make sense in editable widgets
-        # (Cut/Paste/Backspace/Bold/Italic/Underline) when the focused
-        # context is read-only. Callers pass editable=False after probing
-        # the focused widget - see main.py / editable_detect.py.
-        if not editable:
-            plugins = [p for p in plugins if not p.requires_editable]
-        # Hard cap so the popup doesn't grow to 25 icons across when
-        # many plugins are installed. for_content_type already returns
-        # in priority/custom-order, so the first N are the highest-
-        # ranked. Users who want everything raise max_popup_buttons.
-        try:
-            from core.settings import get_settings as _gs
-
-            max_btns = _gs().get_int("max_popup_buttons") or 10
-        except Exception:
-            max_btns = 10
+        plugins = self._plugins_for(text, content_type, editable)
+        max_buttons = _max_popup_buttons()
         hidden_count = 0
-        if max_btns > 0 and len(plugins) > max_btns:
-            hidden_count = len(plugins) - max_btns
-            print(f"[popup] capping {len(plugins)} plugins to {max_btns} (max_popup_buttons)")
-            plugins = plugins[:max_btns]
+        if max_buttons > 0 and len(plugins) > max_buttons:
+            hidden_count = len(plugins) - max_buttons
+            print(f"[popup] capping {len(plugins)} plugins to {max_buttons} (max_popup_buttons)")
+            plugins = plugins[:max_buttons]
         if not plugins:
             print(f"[popup] no plugins for {content_type.value} (editable={editable})")
             return
 
-        def make_handler(p):
-            def _on_click(_btn):
-                # Snapshot text at click time + run on a worker thread so
-                # blocking handlers (network, subprocess, key injection) don't
-                # freeze the GTK main loop.
-                text_snapshot = self._current_text
-                plugin_name = p.name
-                # Read the modifier state on the GTK event that
-                # triggered this click. Shift means 'copy the
-                # result instead of pasting it back' (PopClip
-                # convention) - relevant when the plugin uses
-                # actions.replace_selection() for an in-place
-                # transform. Plugins that don't paste are
-                # unaffected by the flag.
-                shift_held = self._shift_held()
-
-                def _worker():
-                    try:
-                        if shift_held:
-                            with actions.force_copy_mode():
-                                p.execute(text_snapshot)
-                        else:
-                            p.execute(text_snapshot)
-                    except Exception:  # noqa: BLE001
-                        log.exception("[popup] plugin '%s' failed", plugin_name)
-
-                threading.Thread(
-                    target=_worker,
-                    daemon=True,
-                    name=f"plugin-{plugin_name}",
-                ).start()
-                self.hide()
-
-            return _on_click
-
-        # The tooltip is the button's only name (it's icon-only), so a plugin
-        # or recipe without one falls back to its name rather than going blank.
-        specs = [(p.icon, p.tooltip or p.name, make_handler(p)) for p in plugins]
-        self._present_buttons(specs, hidden_count, max_btns)
+        # The tooltip is an icon-only button's name, so a plugin without one
+        # is named after itself
+        specs = [(p.icon, p.tooltip or p.name, self._runs_plugin(p)) for p in plugins]
+        self._present_buttons(specs, hidden_count, max_buttons)
         self._present_near(x, y, rect=rect, via_hotkey=via_hotkey)
+
+    def _plugins_for(self, text: str, content_type: ContentType, editable: bool) -> list:
+        """The plugins to offer, in the user's order. Holding the force-all
+        modifier skips the classifier and offers every plugin whose own
+        matches() accepts the text, for a selection it got wrong."""
+        if self._force_all_held():
+            plugins = [p for p in plugin_loader.all_plugins() if p.matches(text)]
+            plugins = plugin_loader.in_user_order(plugins)
+        else:
+            plugins = plugin_loader.for_content_type(content_type, text)
+        if not editable:
+            plugins = [p for p in plugins if not p.requires_editable]
+        return plugins
+
+    def _runs_plugin(self, plugin):
+        """A click handler that runs `plugin` on the text the popup is for.
+        Off the main thread: a handler may block on the network, a
+        subprocess or key injection."""
+
+        def on_click(_btn):
+            text = self._current_text
+            # Shift+click copies the result instead of pasting it back
+            copy_instead = self._shift_held()
+
+            def run():
+                try:
+                    if copy_instead:
+                        with actions.force_copy_mode():
+                            plugin.execute(text)
+                    else:
+                        plugin.execute(text)
+                except Exception:  # noqa: BLE001
+                    log.exception("[popup] plugin '%s' failed", plugin.name)
+
+            threading.Thread(target=run, daemon=True, name=f"plugin-{plugin.name}").start()
+            self.hide()
+
+        return on_click
 
     def _add_overflow_chip(
         self,
@@ -1386,138 +1387,68 @@ class PopupWindow:
         rect: tuple[int, int, int, int] | None = None,
         via_hotkey: bool = False,
     ) -> None:
-        """Render the popup near physical screen coords (x, y) and arm
-        the tracking/auto-hide machinery. Extracted from show_for so
-        both show_for() and show_actions() share the same positioning
-        + lifecycle code path.
-
-        When `rect` (x, y, w, h in screen pixels - the selected-text
-        bounding box from AT-SPI) is supplied, the popup centres
-        horizontally on the selection and sits just above its top edge
-        (dropping below the bottom edge when there's no room above),
-        instead of being placed relative to the mouse pointer. Falls back
-        to the (x, y) pointer behaviour when `rect` is None."""
-        # Park the window off-screen and realize it so the backend has its
-        # surface (X11: override-redirect set) and GTK can do a full layout
-        # pass: get_preferred_size() then returns the real size. Nothing is
-        # mapped until the real position is set below, so the compositor
-        # never renders a frame at (-10000, -10000) - the first visible
-        # frame is already at the correct position.
+        """Show the popup near screen point (x, y), or over `rect` (the
+        selection's box from AT-SPI) when there is one, and arm the
+        tracking and auto-hide. tests/test_popup_show.py pins the placement."""
+        # Parked off-screen and realized so GTK can lay it out and report
+        # its real size. Nothing is mapped yet, so no frame is drawn there.
         get_backend().move_popup_window(self.win, -10000, -10000)
         self.win.realize()
-
         _, natural = self.win.get_preferred_size()
-        w = max(natural.width, 1)
-        h = max(natural.height, 1)
+        width, height = max(natural.width, 1), max(natural.height, 1)
 
-        # X11 root coords come in physical pixels; GTK move() takes logical.
-        # Convert via the monitor's scale factor before doing layout math.
-        # Wayland/KDE pointer + AT-SPI screen coords are already logical
-        # (same space as the monitor geometry), so don't divide by scale -
-        # doing so would place the popup at half the real position.
+        # X11 root coordinates are physical pixels; Wayland's are logical
+        # already, and dividing those by the scale halves the position
         is_logical = get_backend().pointer_is_logical
-        display = self.win.get_display()
-
-        # Anchor point: the selection centre when we have its rect,
-        # otherwise the mouse pointer.
-        if rect is not None:
-            rx, ry, rw, rh = rect
-            anchor_x, anchor_y = rx + rw / 2, ry + rh / 2
-        else:
-            anchor_x, anchor_y = x, y
-        monitor = _monitor_for_point(display, anchor_x, anchor_y, is_logical)
+        anchor_x, anchor_y = _rect_centre(rect) if rect is not None else (x, y)
+        monitor = _monitor_for_point(self.win.get_display(), anchor_x, anchor_y, is_logical)
         scale = monitor.get_scale_factor() if monitor else 1
-
-        def _lg(v: float) -> float:
-            return float(v) if is_logical else v / scale
+        pixels_per_unit = 1 if is_logical else scale
 
         if rect is not None:
-            # Anchor to the selection box: centre horizontally on it and
-            # sit just above its top edge. We know the real edge here, so a
-            # small gap is enough (no need for the pointer path's guesswork
-            # lift). `below_y` drops past the bottom edge if there's no room.
-            lcx = _lg(rx + rw / 2)
-            ltop = _lg(ry)
-            lbot = _lg(ry + rh)
-            _GAP = 10
-            target_x = int(lcx - w / 2)
-            target_y = int(ltop - h - _GAP)
-            below_y = int(lbot + _GAP)
-            lx, ly = lcx, (ltop + lbot) / 2.0
+            spot = _spot_over_selection(rect, width, height, pixels_per_unit)
         else:
-            lx = _lg(x)
-            ly = _lg(y)
-            # Cursor Y is the mouse position, which sits in the middle of the
-            # selected line. We need to clear the whole line (~24 px tall in
-            # most fonts) plus a small visual gap, otherwise the popup lands
-            # on top of the text it's supposed to act on.
-            _LINE_CLEARANCE = 28
-            _BELOW_GAP = 32  # used when there isn't room above
-            if is_logical:
-                # Wayland: we only have the pointer, which sits inside/under
-                # the selection rather than above it. Lift the popup further
-                # so it clears the copied text instead of covering it.
-                _LINE_CLEARANCE = 64
-                _BELOW_GAP = 56
-            # Place the popup horizontally centered on (lx,ly), above ly
-            target_x = int(lx - w / 2)
-            target_y = int(ly - h - _LINE_CLEARANCE)
-            below_y = int(ly + _BELOW_GAP)
-
-        # Keep inside the monitor's usable area (also in logical coords)
+            spot = _spot_over_pointer(x, y, width, height, pixels_per_unit, is_logical)
+        target_x, target_y = spot.x, spot.above_y
         if monitor is not None:
             area = usable_area(monitor)
-            if target_y < area.y + 4:
-                # Not enough room above: show below the selection/pointer
-                # instead, with a gap so we don't overlap downward.
-                target_y = below_y
-            target_x, target_y = clamp_to_area(target_x, target_y, w, h, area)
+            if target_y < area.y + _EDGE_PAD:
+                target_y = spot.below_y
+            target_x, target_y = clamp_to_area(target_x, target_y, width, height, area)
 
-        # Move to the real position, then map. X11: XMoveWindow on the
-        # still-unmapped override-redirect window; Wayland: layer-shell
-        # margins, applied with the first commit - so the window appears
-        # directly at the correct spot. set_visible() rather than present():
-        # present() also asks for keyboard focus, which the popup must not
-        # take. Already visible (re-shown for a new selection): the move
-        # alone repositions it and GTK resizes it to the new buttons.
+        # Moved while unmapped, so the first frame is already in place.
+        # set_visible(), not present(): present() also asks for focus.
         get_backend().move_popup_window(self.win, target_x, target_y)
         self.win.set_visible(True)
-        # Fresh show: the pointer is at the selection, not on the popup yet.
-        # Reset so a stale True from a prior show can't suppress dismissal.
+        # The pointer is at the selection: a True left from the last show
+        # would suppress dismissal
         self._pointer_in_popup = False
 
-        # Record safe zones for the cursor-tracking loop
-        self._origin_logical = (lx, ly)
-        self._popup_rect = (target_x, target_y, w, h)
+        self._origin_logical = spot.origin
+        self._popup_rect = (target_x, target_y, width, height)
         self._scale = scale
-        # Edge-detector seed: read the actual button/Esc state right now.
-        # The old "always True" seed swallowed the very first click-outside
-        # if no key was actually held, because the rising-edge detector
-        # never saw a 0→1 transition (state started at 1). Reading the
-        # real state means stuck-held inputs from a previous popup are
-        # still suppressed, but a truly idle pointer is correctly tracked.
-        if self._xdpy is not None:
-            try:
-                pressed, _rx, _ry, esc = _x11_input_state(self._xdpy, self._esc_keycode)
-                self._prev_button_pressed = pressed
-                self._prev_esc_pressed = esc
-            except Exception:
-                # Fall back to the old conservative seed if Xlib query fails.
-                self._prev_button_pressed = True
-                self._prev_esc_pressed = True
-        else:
-            self._prev_button_pressed = True
-            self._prev_esc_pressed = True
+        self._seed_press_detectors()
         self._start_tracking()
-        # Arm the initial-grace timer: if the user never moves the
-        # pointer into the popup, hide it after _initial_grace_ms
-        # regardless of where the cursor is sitting. Cancelled by
-        # _on_enter when the pointer actually reaches the popup.
         self._arm_initial_hide()
         self.hotkey_shown_at = time.monotonic() if via_hotkey else None
         self._kbd_stop()
         if via_hotkey:
             self._kbd_start()
+
+    def _seed_press_detectors(self) -> None:
+        """_tick acts on a button or Esc going down. Seeded with what is
+        held right now: a fixed True swallowed the first click outside, and
+        a fixed False would act on a key still held from the last popup."""
+        self._prev_button_pressed = True
+        self._prev_esc_pressed = True
+        if self._xdpy is None:
+            return
+        try:
+            pressed, _rx, _ry, esc = _x11_input_state(self._xdpy, self._esc_keycode)
+            self._prev_button_pressed = pressed
+            self._prev_esc_pressed = esc
+        except Exception:
+            pass
 
     def hide(self) -> None:
         self._cancel_hide_timeout()
@@ -1527,16 +1458,7 @@ class PopupWindow:
         self.hotkey_shown_at = None
         self.win.set_visible(False)
 
-    # ---- keyboard navigation (#44) -----------------------------------------
-    #
-    # The popup never takes keyboard focus, so the paste or keystroke an
-    # action sends still lands in the app the text came from. When the hotkey
-    # opened it the hands are on the keyboard, so on X11 the navigation keys
-    # are grabbed on the root window while it's up: arrows / Tab / Home / End
-    # move a highlight, Enter / Space run the highlighted button, Esc closes.
-    # _on_key_press routes the same keys if a WM focuses the popup anyway.
-    # Wayland has no such grab (the layer surface is keyboard mode NONE), so
-    # there the popup stays mouse-only for now.
+    # Keyboard navigation (#44): docs/how-it-works.md, "The popup window"
 
     def _rows(self) -> list[list[Gtk.Widget]]:
         rows = []
@@ -1565,28 +1487,25 @@ class PopupWindow:
         if grab is not None:
             grab.stop()
         if was_on:
-            for btns in self._rows():
-                for btn in btns:
-                    btn.remove_css_class("vinopop-selected")
+            keyboard_nav.clear_highlight(self._buttons())
 
     def _kbd_drain(self) -> None:
         """_tick calls this: its queries share the grab's Xlib connection."""
         if self._kbd_grab is not None:
             self._kbd_grab.drain()
 
+    def _buttons(self) -> list[Gtk.Widget]:
+        return [button for row in self._rows() for button in row]
+
     def _kbd_select(self, index: int) -> None:
-        flat = [b for btns in self._rows() for b in btns]
-        if not flat:
+        buttons = self._buttons()
+        if not buttons:
             return
-        self._kbd_index = max(0, min(index, len(flat) - 1))
-        for i, btn in enumerate(flat):
-            if i == self._kbd_index:
-                btn.add_css_class("vinopop-selected")
-            else:
-                btn.remove_css_class("vinopop-selected")
-        # The popup never has focus, so a screen reader can't follow the
-        # highlight on its own: say which action Enter would run.
-        _announce(flat[self._kbd_index], flat[self._kbd_index].get_tooltip_text() or "")
+        self._kbd_index = max(0, min(index, len(buttons) - 1))
+        keyboard_nav.highlight_only(buttons, self._kbd_index)
+        # Without focus a screen reader can't follow the highlight
+        selected = buttons[self._kbd_index]
+        _announce(selected, selected.get_tooltip_text() or "")
 
     def _kbd_key(self, name: str, shift: bool = False) -> bool:
         """Handle one navigation key; returns whether it was one."""
@@ -1632,9 +1551,7 @@ class PopupWindow:
 
     def _on_initial_timeout(self) -> bool:
         self._initial_hide_id = None
-        # Never give up while the pointer is actually on the popup - the
-        # user is reading it / reaching for a button. _on_leave will arm
-        # the leave-grace once they move off it.
+        # Not while the pointer is on the popup; _on_leave starts the next countdown
         if self._pointer_in_popup:
             return False
         # Otherwise honour the contract: after N ms without pointer entry,
@@ -1653,10 +1570,8 @@ class PopupWindow:
 
     def _on_hide_timeout(self) -> bool:
         self._hide_timeout_id = None
-        # Hide via the full path so the tracker tick is cancelled too.
-        # Calling self.win.hide() alone leaves _tracker_id pointing at a
-        # GLib source that fires once after the next show_for, racing
-        # the new tick's setup and reading stale _popup_rect.
+        # self.hide(), not win.hide(): the tracker tick has to be cancelled
+        # too, or it fires once into the next show with a stale _popup_rect
         self.hide()
         return False
 
@@ -1734,11 +1649,8 @@ class PopupWindow:
             except Exception as exc:  # noqa: BLE001
                 print(f"[popup] xlib query failed: {exc}")
 
-        # Wayland: pointer.get_position() is surface-local, so the screen-
-        # space safe-zone math below is wrong (it would mis-fire and hide
-        # the popup while the cursor is right on it). Persistence there is
-        # driven entirely by enter/leave (_pointer_in_popup + _on_leave's
-        # grace), so skip this block.
+        # Wayland's pointer position is surface-local, so the safe zone
+        # can't be computed there; enter and leave keep the popup up instead
         if self._xdpy is None or px is None:
             return True
         in_safe = self._in_safe_zone(px, py)
@@ -1756,35 +1668,29 @@ class PopupWindow:
         return x <= lx <= x + w and y <= ly <= y + h
 
     def _in_safe_zone(self, px: int, py: int) -> bool:
-        # Three overlapping regions that all keep the popup alive:
-        #   (a) the popup window itself (with a small fudge margin so a
-        #       diagonal approach to a corner doesn't trip the leave-grace
-        #       just because the pointer is 1-2 px outside the frame).
-        #   (b) a generous circle around the original selection cursor.
-        #   (c) the bounding rectangle spanning both - i.e. the corridor
-        #       between text and popup. This is what was missing: moving
-        #       the cursor from selection to popup along the natural
-        #       diagonal path used to leave the radius briefly, arming
-        #       the hide timer; users on faster mice saw the popup vanish
-        #       mid-reach.
+        """Whether a pointer at (px, py) keeps the popup up: on or just
+        around the popup, near the selection, or in the corridor between
+        the two (a fast diagonal reach leaves the circle before it arrives).
+        tests/test_popup_show.py pins each edge."""
         x, y, w, h = self._popup_rect
-        fudge = 12
-        if (x - fudge) <= px <= (x + w + fudge) and (y - fudge) <= py <= (y + h + fudge):
+        near_popup = (
+            x - _POPUP_MARGIN <= px <= x + w + _POPUP_MARGIN
+            and y - _POPUP_MARGIN <= py <= y + h + _POPUP_MARGIN
+        )
+        if near_popup:
             return True
-        ox, oy = self._origin_logical
-        dx = px - ox
-        dy = py - oy
-        if (dx * dx + dy * dy) <= (self._text_zone_radius * self._text_zone_radius):
+        origin_x, origin_y = self._origin_logical
+        dx, dy = px - origin_x, py - origin_y
+        if dx * dx + dy * dy <= self._text_zone_radius * self._text_zone_radius:
             return True
-        # Corridor: rect from selection cursor to popup centre, padded.
-        cx = x + w / 2
-        cy = y + h / 2
-        pad = 24
-        lo_x = min(ox, cx) - pad
-        hi_x = max(ox, cx) + pad
-        lo_y = min(oy, cy) - pad
-        hi_y = max(oy, cy) + pad
-        return lo_x <= px <= hi_x and lo_y <= py <= hi_y
+        centre_x, centre_y = x + w / 2, y + h / 2
+        in_corridor_x = (
+            min(origin_x, centre_x) - _CORRIDOR_PAD <= px <= max(origin_x, centre_x) + _CORRIDOR_PAD
+        )
+        in_corridor_y = (
+            min(origin_y, centre_y) - _CORRIDOR_PAD <= py <= max(origin_y, centre_y) + _CORRIDOR_PAD
+        )
+        return in_corridor_x and in_corridor_y
 
     def _shift_held(self) -> bool:
         """True if Shift was held for the press that triggered the current
@@ -1807,10 +1713,7 @@ class PopupWindow:
         self._was_active = win.is_active()
 
     def _on_enter(self, _controller, _x, _y) -> None:
-        # The motion controller only reports crossings of the window as a
-        # whole (GTK 3 needed the NotifyType.INFERIOR filter for that).
-        # User reached the popup - it must not auto-hide while they're on
-        # it. Cancel BOTH the initial-grace and any leave-grace countdown.
+        # On the popup, neither countdown may run
         self._pointer_in_popup = True
         self._cancel_initial_hide()
         self._cancel_hide_timeout()
@@ -1821,11 +1724,8 @@ class PopupWindow:
 
     def _on_leave(self, _controller) -> None:
         self._pointer_in_popup = False
-        # On X11 the tracker tick (screen-space safe-zone) governs hiding,
-        # so leaving the popup alone isn't enough - the cursor may still be
-        # over the selected text. On Wayland the tick can't do that math, so
-        # arm the leave-grace here: the popup lingers briefly (covering a
-        # cursor that's still very near) then hides.
+        # On X11 _tick's safe zone decides (the pointer may still be on the
+        # text). Wayland has no safe zone, so the leave countdown starts here.
         if self._xdpy is None and self.win.get_visible():
             self._arm_hide_timeout(self._leave_grace_ms)
 
@@ -1834,11 +1734,7 @@ class PopupWindow:
             self.hide()
             return True
         if self._kbd_nav:
-            name = Gdk.keyval_name(keyval) or ""
-            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
-            if name == "ISO_Left_Tab":
-                name, shift = "Tab", True
-            return self._kbd_key(name, shift)
+            return self._kbd_key(*keyboard_nav.key_from_event(keyval, state))
         return False
 
     def _on_button_press(self, gesture, _n_press, x, y) -> None:

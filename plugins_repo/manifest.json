@@ -77,7 +77,7 @@
   },
   {
     "file": "clipboard_history.py",
-    "version": 5,
+    "version": 6,
     "title": "Clipboard history & snippets",
     "description": "Recent clipboard entries (text + images) plus saved snippets with triggers, placeholders, and variables. The picker is the home of both.",
     "category": "Snippets & Clipboard",

@@ -193,24 +193,26 @@ def for_content_type(content_type: ContentType, text: str | None = None) -> list
     matched = [p for p in _PLUGINS if p.handles(content_type)]
     if text is not None:
         matched = [p for p in matched if p.matches(text)]
-    # User-defined order takes precedence; plugins listed earlier come first.
-    # Plugins not in the order list fall back to their built-in priority.
+    return in_user_order(matched)
+
+
+def in_user_order(plugins: list[Plugin]) -> list[Plugin]:
+    """`plugins` as the popup shows them: those in the plugin_order setting
+    first, in that order, then the rest by their built-in priority."""
     try:
         from core.settings import get_settings
 
         order = list(get_settings().get("plugin_order") or [])
     except Exception:
         order = []
-    order_index = {name: i for i, name in enumerate(order)}
-    big = len(order) + 1_000_000
+    position = {name: i for i, name in enumerate(order)}
 
-    def sort_key(p: Plugin):
-        if p.name in order_index:
-            return (0, order_index[p.name], p.priority)
-        return (1, big, p.priority)
+    def sort_key(plugin: Plugin):
+        if plugin.name in position:
+            return (0, position[plugin.name], plugin.priority)
+        return (1, 0, plugin.priority)
 
-    matched.sort(key=sort_key)
-    return matched
+    return sorted(plugins, key=sort_key)
 
 
 def _register_builtins() -> None:
