@@ -688,3 +688,25 @@ def test_history_uses_the_backends_clipboard_tool(ch, monkeypatch, backend, argv
     monkeypatch.setattr(ch.subprocess, "run", lambda args, **_k: runs.append(args))
     ch._write_clipboard("text", b"hi")
     assert runs == [argv]
+
+
+def _named_snippet(ch, times_used):
+    return ch.Entry(
+        id="s", timestamp=0, kind="text", text="Regards\nK", name="Sig", usage_count=times_used
+    )
+
+
+def test_a_snippet_row_says_how_often_it_was_used_from_the_third_time(ch):
+    assert ch._snippet_subtitle(_named_snippet(ch, 3)) == "Regards ↵ K  ·  used 3 times"
+
+
+def test_a_snippet_used_twice_shows_only_its_body(ch):
+    assert ch._snippet_subtitle(_named_snippet(ch, 2)) == "Regards ↵ K"
+
+
+def test_snippets_without_a_category_sort_after_the_named_ones(ch):
+    def snippet(name, category):
+        return ch.Entry(id=name, timestamp=0, kind="text", name=name, category=category)
+
+    snippets = [snippet("b", ""), snippet("z", "Work"), snippet("a", "email"), snippet("c", "")]
+    assert [s.name for s in sorted(snippets, key=ch._category_sort_key)] == ["a", "z", "b", "c"]

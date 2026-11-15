@@ -169,3 +169,104 @@ def test_without_xclip_nothing_is_deleted(ch, x11, monkeypatch):
     monkeypatch.setattr(ch.shutil, "which", lambda tool: None)
     ch._fire_trigger_expansion("brb", "brb", " ", _snippet(ch, "be right back"))
     assert x11.keys == [] and x11.writes == []
+
+
+# ── which trigger was typed ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def triggers(ch, monkeypatch):
+    def index(*names):
+        monkeypatch.setattr(ch, "_trigger_index", {name: _snippet(ch, name) for name in names})
+
+    return index
+
+
+def test_the_longest_trigger_the_text_ends_with_wins(ch, triggers):
+    triggers("cd", "abcd")
+    trigger, typed, snippet = ch._match_typed_trigger("ABcd")
+    assert (trigger, typed, snippet.text) == ("abcd", "ABcd", "abcd")
+
+
+def test_a_trigger_inside_a_word_is_not_matched(ch, triggers):
+    triggers("brb")
+    assert ch._match_typed_trigger("herbrb") is None
+    assert ch._match_typed_trigger("ok brb")[0] == "brb"
+
+
+def test_the_watcher_forgets_what_was_typed_at_a_boundary(ch, triggers, monkeypatch):
+    triggers("brb")
+    fired = []
+    monkeypatch.setattr(ch.GLib, "idle_add", lambda fn, *args: fired.append(args))
+    watcher = ch._TriggerWatcher()
+    for char in "Brb brb":
+        watcher._handle_char(char)
+    assert [(trig, typed, boundary) for trig, typed, boundary, _s in fired] == [("brb", "Brb", " ")]
+    assert watcher._buffer == list("brb")
+
+
+def test_the_watcher_keeps_only_the_newest_characters(ch):
+    watcher = ch._TriggerWatcher()
+    for char in "x" * ch._TRIGGER_BUFFER_MAX + "y":
+        watcher._handle_char(char)
+    assert len(watcher._buffer) == ch._TRIGGER_BUFFER_MAX
+    assert watcher._buffer[-1] == "y"
+
+
+# ── the Wayland worker ───────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def wayland(ch, x11, monkeypatch):
+    """The X11 fakes, on a Wayland session: ydotool's argv lands in `runs`,
+    and PRIMARY holds `primary` until the expansion is staged there."""
+    x11.runs = []
+    x11.primary = "highlighted"
+    monkeypatch.setattr(ch, "_is_wayland", lambda: True)
+    monkeypatch.setattr(ch, "_wl_clipboard", lambda: True)
+    monkeypatch.setattr(ch, "_ydotool_env", lambda: {"YDOTOOL_SOCKET": "/sock"})
+    monkeypatch.setattr(ch.subprocess, "run", lambda argv, **kw: x11.runs.append((argv, kw)))
+    monkeypatch.setattr(ch, "_read_primary_selection", lambda: x11.primary)
+
+    def write(kind, data, primary=False):
+        x11.writes.append((kind, data.decode(), primary))
+        if primary:
+            x11.primary = data.decode()
+        else:
+            x11.clip = data.decode()
+
+    monkeypatch.setattr(ch, "_write_clipboard", write)
+    return x11
+
+
+def test_wayland_deletes_with_ydotool_and_pastes_with_shift_insert(ch, wayland):
+    ch._fire_trigger_expansion(";p", ";p", " ", _snippet(ch, "({cursor}))", literal=False))
+    env = {"env": {"YDOTOOL_SOCKET": "/sock"}, "check": False}
+    assert wayland.runs == [
+        (["ydotool", "key"] + ["14:1", "14:0"] * 3, env),
+        (["ydotool", "key", "42:1", "110:1", "110:0", "42:0"], env),
+        (["ydotool", "key"] + ["105:1", "105:0"] * 2, env),
+    ]
+    assert wayland.keys == []  # nothing goes over XTEST
+
+
+def test_wayland_stages_clipboard_and_primary_and_puts_both_back(ch, wayland):
+    ch._fire_trigger_expansion("brb", "brb", " ", _snippet(ch, "be right back"))
+    assert wayland.writes == [
+        ("text", "be right back", False),
+        ("text", "be right back", True),
+        ("text", "old", False),
+        ("text", "highlighted", True),
+    ]
+
+
+def test_wayland_ignores_its_own_keystrokes_while_injecting(ch, wayland, monkeypatch):
+    monkeypatch.setattr(ch.time, "monotonic", lambda: 100.0)
+    ch._fire_trigger_expansion("brb", "brb", " ", _snippet(ch, "be right back"))
+    assert ch._kbd_suppress_until == pytest.approx(100.25)
+
+
+def test_wayland_without_ydotool_deletes_nothing(ch, wayland, monkeypatch):
+    monkeypatch.setattr(ch.shutil, "which", lambda tool: None)
+    ch._fire_trigger_expansion("brb", "brb", " ", _snippet(ch, "be right back"))
+    assert wayland.runs == [] and wayland.writes == []

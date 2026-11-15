@@ -157,6 +157,47 @@ Paste, Cut, typing and window activation go through python-xlib and the X server
 
 GTK 4 has no `Gtk.Window.move()`, no POPUP window type and no type hints, so vinoPop does what GTK 3's POPUP windows did itself: it marks the X window override-redirect right after GTK creates it, before it is ever mapped, and moves it with `XMoveWindow`. The window manager then neither decorates, focuses, places nor lists it. An override-redirect window never gets focus from the window manager either, which is what GTK 3's `accept_focus=False` gave: paste keeps going to the app the text came from. The KDE Wayland backend uses the same code when the process runs on XWayland (no `gtk4-layer-shell`).
 
+## Clipboard history and snippets
+
+The plugin is one file, `plugins_repo/clipboard_history.py`, because the Plugin Manager installs and updates a plugin by copying one file into `~/.config/vinopop/plugins` and compares that file's version with the catalogue's. It holds the stores (`history.json`, `snippets.json`), the clipboard watcher, the trigger watchers, the placeholder engine and the picker window.
+
+### Snippet trigger timing
+
+Typing a trigger and a space deletes both and pastes the snippet. The waits between the steps each cover a race seen on a real desktop.
+
+| Step | Wait | Why |
+|---|---|---|
+| Before the first synthetic key | 60 ms | The boundary key (space, tab, enter) is still physically down. Sending keys then left Ctrl logically stuck in the receiving app, which showed as scroll zooming. |
+| Between BackSpaces (X11) | 16 ms | With no gap, Electron and Chrome drop events. A frame at 60 Hz is quick enough that the typed characters are never seen. |
+| After the BackSpaces | 80 ms on X11, 30 ms with ydotool | The app settles before the clipboard is staged. |
+| After the paste key, before Left arrows | 50 ms | The paste has to land before the caret moves to `{cursor}`. |
+| Before releasing modifiers (X11) | 20 ms | Putting held modifiers back races the user's own key-up and sometimes left Ctrl or Shift down (Firefox zooming on scroll), so they are released outright. |
+| Before the clipboard is put back | 300 ms | The app asks for the clipboard after the paste key arrives. Too short and it pastes the old clipboard. |
+
+The BackSpaces go out without lifting modifiers first: BackSpace ignores them, and lifting them occasionally left Ctrl stuck.
+
+On Wayland the expansion goes on the clipboard and on PRIMARY and is pasted with Shift+Insert. `ydotool type` maps through a US keycode table and drops characters like æ, ø and å, and ydotool's Ctrl chords don't register on KWin. The watcher ignores `/dev/input` for 1.2 s plus 20 ms per injected key, then for 250 ms after the last one, so it doesn't read its own keystrokes back.
+
+`{ask:}` snippets don't expand from a trigger, since a dialog mid-keystroke is jarring. They still work from the picker.
+
+### Pasting from the clipboard picker
+
+The picker takes focus, so pasting has to give it back to the window it was opened over.
+
+- 60 ms after the click, every modifier is released. The hotkey (Super+Shift+V, say) leaves them logically held until the user lets go, and a paste sent meanwhile lands as garbage or not at all.
+- The target is activated twice, over Xlib and with `wmctrl -ia` when it is installed. On muffin the first can return before focus has moved.
+- Then 180 ms, or 300 ms for a terminal. Cinnamon queues the activation for the next compositor frame and 100 ms wasn't enough. VTE commits its focus-in about 50 ms after activation.
+- If the target still isn't the active window it is activated once more, with a 120 ms wait.
+- A single line of up to 2,048 characters is typed over XTEST, not pasted. Electron editors (Slack, Discord, Notion and the like) silently drop a synthetic Ctrl+V, and a terminal's bracketed paste gets out of step with readline. Text with a newline is pasted, because typed into a shell each line would run, and longer text is pasted because typing it is slow. If typing fails, the paste key is sent.
+
+`tests/test_clipboard_paste.py` and `tests/test_trigger_expansion.py` pin the order of these steps with X11 and the clipboard faked. The waits themselves have only ever been tuned by hand on a desktop.
+
+### The picker window
+
+- It is an `Adw.Window` so its prompts open as sheets inside it. It stays resizable even when undecorated, because a non-resizable `AdwWindow` floats its alert dialogs as separate windows.
+- On X11 it has no decoration and opens at the pointer; the title row is the drag handle. On KDE Wayland a client can't place its own toplevel, so the picker keeps its decoration and the compositor places it.
+- It closes when it loses focus, but only if focus is still elsewhere 120 ms later: IBus and Cinnamon take focus for a frame and hand it back. A prompt or a drag in progress suspends this.
+
 ## Threads and X11
 
 Notes on two things the daemon deliberately does not do.
