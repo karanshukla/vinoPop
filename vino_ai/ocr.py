@@ -21,8 +21,9 @@ import time
 
 from core.xdg_paths import CACHE_DIR
 
-from . import devices, telemetry
-from .llm import IDLE_UNLOAD_MINUTES, _setting
+from . import devices, idle, telemetry
+from .idle import IDLE_UNLOAD_MINUTES
+from .idle import float_setting as _setting
 
 log = logging.getLogger("vinopop")
 
@@ -118,14 +119,7 @@ def unload_if_idle() -> bool:
 def _schedule_unload() -> None:
     global _idle_timer
     minutes = _setting("ai_idle_unload_minutes", IDLE_UNLOAD_MINUTES)
-    if _idle_timer is not None:
-        _idle_timer.cancel()
-        _idle_timer = None
-    if minutes <= 0:
-        return
-    _idle_timer = threading.Timer(minutes * 60 + 1, unload_if_idle)
-    _idle_timer.daemon = True
-    _idle_timer.start()
+    _idle_timer = idle.rearm(_idle_timer, minutes, unload_if_idle)
 
 
 def _reading_order(boxes, texts) -> str:
