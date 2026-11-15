@@ -15,7 +15,6 @@ Select some text and a little bar shows up right over it. Copy it, search it, tr
 - **Private.** Your text stays on your machine unless you click something that obviously goes online, like web search or opening a link. Nothing phones home.
 
 Runs natively on KDE Plasma 6 / Wayland, and through XWayland on GNOME, sway, Hyprland and other Wayland desktops. A plain Xorg session (Cinnamon, XFCE, MATE ...) works best-effort.
-
 ## Requirements
 
 - GTK 4.14+ and libadwaita 1.5+: Ubuntu 24.04, Fedora 40, Debian 13 or newer.
@@ -41,69 +40,38 @@ sudo zypper install python3 python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-
     typelib-1_0-Adw-1 gdk-pixbuf-loader-rsvg xdg-utils python3-pyside6
 ```
 
-Then the packages for your desktop (same names everywhere, except `python3-xlib` is `python-xlib` on Arch and `python3-python-xlib` on openSUSE, and `gtk4-layer-shell` is `typelib-1_0-Gtk4LayerShell-1_0` on openSUSE):
+Your desktop needs a few more ([which ones and why](docs/install.md#packages-for-your-desktop)):
 
-| Desktop | Install | Why |
-|---|---|---|
-| GNOME, sway, Hyprland and other Wayland desktops except KDE | `xclip python3-xlib` | vinoPop runs on XWayland. Selection and clipboard go through `xclip` and the compositor's X selection bridge (`wl-clipboard` isn't used: GNOME's mutter has no data-control protocol for it); keystrokes, typing and window focus through Xlib and the X server's XTEST extension, so no `xdotool` |
-| KDE Plasma Wayland | `wl-clipboard`, plus `gtk4-layer-shell` for native popup placement (`gir1.2-gtk4layershell-1.0` on Debian 13 / Ubuntu 24.10+) and `ydotool` if you want Paste/Cut without KDE's Remote Control prompt | Native Wayland; `xclip` isn't used. `python3-xlib` only matters without `gtk4-layer-shell` |
-| Plain Xorg (Cinnamon, XFCE, MATE ...), best-effort | same as the first row | Same code path as XWayland, less tested |
+| Desktop | Install |
+|---|---|
+| GNOME, sway, Hyprland and other non-KDE Wayland desktops, and plain Xorg | `xclip python3-xlib` |
+| KDE Plasma Wayland | `wl-clipboard`, plus `gtk4-layer-shell` and `ydotool` (both optional) |
 
-Then vinoPop, from the latest release (no sudo; add `-s -- --with-ai` after `bash` for the offline AI and OCR, in a venv that sees the system's GTK):
+Then vinoPop, from the latest release (no sudo; add `-s -- --with-ai` after `bash` for the offline AI and OCR):
 
 ```sh
 curl -fsSL https://github.com/karanshukla/vinoPop/releases/latest/download/get.sh | bash
 vinopop
 ```
 
-`get.sh` checks the release tarball against its `SHA256SUMS`, unpacks it into `~/.local/share/vinopop`, and runs its `install.sh`. To upgrade, use **Check for updates** in Settings > Advanced (nothing goes online until you click it), or run `vinopop-upgrade`. `vinopop-upgrade --uninstall` removes it again, AI model included.
+`get.sh` checks the release tarball against its `SHA256SUMS`, unpacks it into `~/.local/share/vinopop`, and runs its `install.sh`, which checks your dependencies and sets up autostart, the app launcher and a `vinopop` command in `~/.local/bin`.
 
-Or from a git clone:
+- **AI model:** about 4 GB, downloaded once, when onboarding asks or on the first AI action. After that nothing goes online.
+- **Upgrade:** **Check for updates** in Settings > Advanced (nothing goes online until you click it), or `vinopop-upgrade`.
+- **Uninstall:** `vinopop-upgrade --uninstall`, AI model included.
 
-```sh
-git clone https://github.com/karanshukla/vinoPop.git ~/vinopop
-cd ~/vinopop
-bash install.sh
-pip install --user -r requirements-ai.txt   # optional: the offline AI and OCR
-vinopop
-```
-
-**Fedora Atomic (Silverblue, Kinoite, Bazzite):** vinoPop lives in your home directory, so only the system packages need layering, from a host terminal (not a toolbox: autostart runs vinoPop on the host). `install.sh` names whatever's missing as an `rpm-ostree install` line. Reboot after layering, then run `install.sh` again. Keep the offline AI in a venv made with `--system-site-packages` inside the checkout (`python3 -m venv --system-site-packages .venv`, then `.venv/bin/pip install -r requirements-ai.txt`): `install.sh` picks up `.venv` on its own.
-
-**openSUSE Aeon and Kalpa:** expect to layer several packages in one go: `sudo transactional-update pkg install python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 gdk-pixbuf-loader-rsvg` plus your desktop's row above, then a reboot and `install.sh` again. Distrobox doesn't get around this: autostart runs vinoPop on the host, so the packages have to be on the host too.
-
-NixOS and SteamOS aren't supported targets. `install.sh` still names what's missing there, but getting it installed is up to you.
-
-`install.sh` checks your dependencies, sets up autostart and the app launcher, and puts a `vinopop` command in `~/.local/bin`. The AI model (about 4 GB) downloads once, when onboarding asks or on the first AI action; after that nothing goes online. Settings > Advanced > Offline AI shows the downloaded models and deletes them. `bash ~/vinopop/install.sh --uninstall` removes the launchers, the AI model and its compile cache, and lists what it left (settings, clipboard history); add `--purge` to delete those too.
-
-<details>
-<summary>Odds and ends</summary>
-
-- PySide6 is only for the tray icon. Without it vinoPop runs fine with no tray; `--no-tray` skips the attempt, and `python3 -m ui.settings_gui` / `python3 -m ui.plugin_manager` (from the checkout) open the windows directly.
-- `qrencode` enables the QR plugin.
-- On Debian/Ubuntu, whose system Python refuses `pip --user`, add `--break-system-packages` or use a venv created with `--system-site-packages` so it still sees PyGObject.
-- From a checkout without installing, run `./vinopop`. It shows up as `vinopop` in `ps`, so `pkill -x vinopop` stops it.
-- `vinopop --doctor` (add `--json` for a bug report) checks the AI packages, the devices OpenVINO sees and whether the model is downloaded.
-- Upgrading from LinuxPop? On first run its config, cache and data folders are renamed to `vinopop`, so settings, plugins, snippets and history carry over.
-
-</details>
+[docs/install.md](docs/install.md) covers installing from a git clone, Fedora Atomic, openSUSE Aeon and Kalpa, running without a tray, and what uninstall keeps.
 
 ## Use it
 
 - **Select text** in any app and the bar appears above it.
 - **`Super+Shift+Y`** pops the bar at the cursor with whatever's selected, and closes it again. On X11 the arrow keys and Tab then move between its buttons and Enter or Space runs one.
-- **`Super+Shift+V`** opens clipboard history and snippets. **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog. Drag a box, or from the keyboard: arrows place and move it, Shift+arrows resize, Enter reads it (or the whole screen if nothing is placed), Escape cancels.
+- **`Super+Shift+V`** opens clipboard history and snippets.
+- **`Shift+Super+O`** OCRs a screen region, for text you can't select: a PDF scan, a video frame, an error dialog. Drag a box, or [drive it from the keyboard](docs/install.md#ocr-from-the-keyboard).
 - **Modifier + double-click** a word pops the bar too, on real Wayland and not just XWayland. Off by default.
 - `Esc`, a click elsewhere, or a few seconds' wait dismisses it. The tray icon toggles auto-popup and opens Settings and Plugins.
 
-**Off KDE, bind the hotkeys in your desktop instead.** On GNOME, sway, Hyprland and COSMIC the built-in hotkeys are X11 grabs through XWayland, which only fire while an X11 window has focus. A shortcut your desktop runs works in every app: point it at `vinopop --trigger popup` (or `ocr`, `clipboard`, `settings`) and clear the matching hotkey in vinoPop's Settings so the two don't fight.
-
-| Desktop | Where |
-|---|---|
-| GNOME | Settings → Keyboard → Custom Shortcuts, command `/home/you/.local/bin/vinopop --trigger popup` (GNOME doesn't expand `~`) |
-| sway | `bindsym $mod+Shift+y exec ~/.local/bin/vinopop --trigger popup` |
-| Hyprland | `bind = SUPER SHIFT, Y, exec, ~/.local/bin/vinopop --trigger popup` |
-| COSMIC | Settings → Keyboard → Custom shortcuts, same command as GNOME |
+**Off KDE, bind the hotkeys in your desktop instead**, to `vinopop --trigger popup` (or `ocr`, `clipboard`, `settings`). The built-in ones only fire while an X11 window has focus. [Per-desktop lines](docs/install.md#hotkeys-off-kde).
 
 <p align="center"><img src="docs/media/clipboard.svg" width="800" alt="In a reply drafted in Kate, Super+Shift+V opens the vinoPop clipboard picker on its Recent tab: a GitHub link, a screenshot, a modprobe command and a pinned note. Tab switches to Snippets, typing sig filters to ;sig and ;sign-off, and Enter pastes Thanks, Karan and today's date where the caret was."></p>
 
@@ -111,27 +79,7 @@ NixOS and SteamOS aren't supported targets. `install.sh` still names what's miss
 
 Right-click the tray icon for **Settings**, or edit `~/.config/vinopop/settings.json`. [How it works](docs/how-it-works.md#settings) has every key.
 
-**Plugins…** in the tray menu adds or removes the bundled ones and builds no-code recipes under **Custom**. Searches for Wikipedia, Maps, YouTube, Stack Overflow, MDN, GitHub, PyPI and npm ship as recipes. For your own, drop a `.py` file into `~/.config/vinopop/plugins/` with a `register` function:
-
-```python
-from classifier import ContentType
-from plugin_base import Plugin
-
-
-def register(register_plugin) -> None:
-    register_plugin(
-        Plugin(
-            name="my-plugin",
-            icon="emblem-favorite-symbolic",
-            tooltip="Do something",
-            handler=lambda text: print("got:", text),
-            content_types=(ContentType.PLAIN_TEXT,),
-            priority=50,
-        )
-    )
-```
-
-[CONTRIBUTING.md](CONTRIBUTING.md) has the full plugin API.
+**Plugins…** in the tray menu adds or removes the bundled ones and builds no-code recipes under **Custom**. Searches for Wikipedia, Maps, YouTube, Stack Overflow, MDN, GitHub, PyPI and npm ship as recipes. Your own plugin is a `.py` file with a `register` function in `~/.config/vinopop/plugins/`: [CONTRIBUTING.md](CONTRIBUTING.md#writing-a-plugin) has an example and the full API.
 
 ## Known rough edges
 
@@ -142,6 +90,7 @@ def register(register_plugin) -> None:
 
 ## More
 
+- [Install notes](docs/install.md): per-desktop packages, git clone, immutable distros, hotkeys off KDE.
 - [How it works](docs/how-it-works.md): backends, the offline AI setup, every setting.
 - [Fedora KDE notes](docs/FEDORA-KDE.md).
 - [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
