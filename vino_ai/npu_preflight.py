@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core import distro
+from core.version_numbers import leading_numbers
 
 ROOT = Path("/")
 NPU_RELEASES_URL = "https://github.com/intel/linux-npu-driver/releases"
@@ -224,15 +225,6 @@ def find_library(name: str, root: Path = ROOT, env: Mapping[str, str] | None = N
     return None
 
 
-def _version_tuple(text: str) -> tuple[int, ...]:
-    parts: list[int] = []
-    for part in text.split("."):
-        if not part.isdigit():
-            break
-        parts.append(int(part))
-    return tuple(parts)
-
-
 def _marker(path: Path, pattern: re.Pattern[bytes]) -> str | None:
     try:
         with (
@@ -279,7 +271,7 @@ def _level_zero_notes(root: Path, env: Mapping[str, str] | None, family: str) ->
 
     installed = sorted(
         (path for path in target.parent.glob(f"{LEVEL_ZERO_STEM}.*") if not path.is_symlink()),
-        key=lambda path: _version_tuple(path.name.split(".so.", 1)[-1]),
+        key=lambda path: leading_numbers(path.name.split(".so.", 1)[-1]),
     )
     if installed and installed[-1] != target:
         newer = installed[-1]
