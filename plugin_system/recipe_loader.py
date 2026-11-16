@@ -24,7 +24,6 @@ quoting is automatic: `notify-send {text}` is safe for any selection.
 from __future__ import annotations
 
 import json
-import os
 import random as _random
 import re
 import shlex
@@ -36,6 +35,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.classifier import ContentType
+from core.json_file import write_json
 from core.xdg_paths import CONFIG_DIR
 from plugin_system.plugin_base import Plugin
 
@@ -907,7 +907,7 @@ def list_recipes() -> list[tuple[Path, dict]]:
 
 
 def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
-    """Persist a recipe as <name>.json (or to the supplied path). Atomic write."""
+    """Persist a recipe as <name>.json (or to the supplied path)."""
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
     if target_path is None:
         name = str(recipe.get("name") or "")
@@ -920,16 +920,7 @@ def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
             unique, n = f"{name}-{n}", n + 1
         recipe = {**recipe, "name": unique}
         target_path = RECIPES_DIR / f"{unique}.json"
-    tmp = target_path.with_suffix(target_path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(recipe, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-        f.flush()
-        try:
-            os.fsync(f.fileno())
-        except OSError:
-            pass
-    os.replace(tmp, target_path)
+    write_json(target_path, recipe)
     return target_path
 
 
