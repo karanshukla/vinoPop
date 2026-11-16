@@ -157,6 +157,19 @@ Only keys you set are written to the file, so a default changed in a later relea
 
 `tests/test_wayland_watcher.py` and `tests/test_placement.py` pin the burst, the anchor, the pointer cache, the double-click window and the margins. None of it has a compositor under it in the tests.
 
+## Telling a command from prose
+
+`core/classifier.py` decides whether a selection gets Run in terminal. Every non-blank line votes: command, prose, or neither (comments, `fi` and `done`, backslash continuations, heredoc bodies, bare assignments). The selection is a command when at least one line is and commands aren't outnumbered by prose, so a comment above a command doesn't hide it and one line starting "at the end" doesn't turn a paragraph into a script. A shebang or a `$ ` prompt line settles it.
+
+- **Ambiguous first words.** `make`, `file`, `python`, `go` and the like are also everyday words. They count only with evidence in the same segment: a flag, a path, `=`, a glob, a redirect, a known subcommand or a known command after them. Subcommands are kept to verbs prose rarely puts there, so there is no `go run` ("go run errands").
+- **An unknown tool** counts only as `tool --flag`. An unknown word before a path is as often prose ("in /etc you'll find").
+- **A single pipe** counts only when its left side is a command. As a whole-text hint it flagged every title with a separator ("Channel Name | Category") and hid the AI buttons. Flags, paths and redirects are per-segment evidence for the same reason: searched for anywhere, they flagged "Settings > Privacy" and "Set `foo` to true".
+- **`&&`, `||`, `$(`, `${` and a heredoc** are enough anywhere in a selection under 4,000 characters (500 at first, raised so pasted scripts classify). Prose almost never has them, and a Run button on technical writing that quotes shell is fine. The length is checked first so no regex runs over a huge selection.
+- **Hyphenated tools** (`xdg-settings`, `systemd-run`) that are normally run with a bare argument are listed by name. A hyphenated first word alone needs a flag or a path.
+- **The regexes are linear.** The old email pattern, `[^@\s]+\.[^@\s]+`, could split `b.b.b...` in more than one way and took 0.6 s on 8k characters and 7 s on 32k (minified CSS with one `@`), on the GTK thread. The old hyphenated-name hint, `[a-z]+(?:-[a-z][\w-]*)+`, was exponential on `x-a-a-a-...!`.
+
+`tests/test_classifier.py` holds the commands and the prose that must stay on their side, and the timing limits.
+
 ## Keystrokes on X11
 
 Paste, Cut, typing and window activation go through python-xlib and the X server's XTEST extension, in place of the `xdotool` and `xprop` processes vinoPop used to spawn. Like `xdotool`, the events reach X11 clients only (XWayland ones on a Wayland desktop).
