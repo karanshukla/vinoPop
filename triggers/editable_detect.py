@@ -1,24 +1,7 @@
-"""Is the currently-focused widget editable?
-
-vinoPop uses this to hide actions like Cut / Paste / Backspace / Bold
-when the user has selected text in a read-only context. Showing them
-there would just be a tease.
-
-Two-layer detection:
-  1. AT-SPI - per-widget probe. Needed for apps where the same window
-     has both editable and read-only areas (Claude desktop, Slack,
-     Discord, web browsers). Time-bounded so it can't freeze the
-     popup path. Returns three states: True / False / None (no answer).
-  2. Window-class blocklist - coarse but predictable. Catches pure-viewer
-     apps that don't respond to AT-SPI (Evince, image viewers, file
-     managers, media players). The class comes from the platform
-     backend's active_window_haystacks(): xprop on X11, KWin on KDE
-     Wayland.
-
-Strategy: trust AT-SPI when it answers. Otherwise consult the blocklist.
-Default to True (editable) when neither produces a signal - better to
-show a button that does nothing than to hide one the user wanted.
-"""
+"""Is the focused widget editable? Cut, Paste and the like are hidden
+when it isn't. AT-SPI answers per widget when it is opted into; otherwise a
+list of viewer window classes does, and no answer means editable.
+docs/how-it-works.md, "Editable detection"."""
 
 from __future__ import annotations
 
@@ -31,39 +14,22 @@ from platform_backend import get_backend
 
 _log = logging.getLogger("vinopop")
 
-# Cache of the latest focus event from the AT-SPI listener. Updated
-# asynchronously every time any accessible reports gaining STATE_FOCUSED.
-# This is the ONLY way to get useful per-widget signal out of Chromium /
-# Electron apps - their accessibility tree exposes the top-level frame
-# without STATE_FOCUSED propagation, so synchronous tree-walks return
-# 'no focused descendant' and we have to fall back to WM_CLASS. The
-# event bridge does fire when the user clicks an editable element vs
-# the page body, even though the tree doesn't reflect it cleanly.
+# The widget that last gained focus, from the AT-SPI listener's thread
 _focus_cache: dict = {
-    "editable": None,  # True / False / None (no event yet)
-    "timestamp": 0.0,  # monotonic time of last update
-    "role": "",  # for diagnostics
+    "editable": None,  # None until an event arrives
+    "timestamp": 0.0,  # monotonic
+    "role": "",
 }
 _focus_cache_lock = threading.Lock()
 _focus_listener_started = False
-_focus_listener_ref = None  # keep listener alive (GC would otherwise drop it)
+_focus_listener_ref = None  # the C side holds no reference to the listener
+_FOCUS_SEARCH_DEPTH = 10
+_FALLBACK_LINE_HEIGHT_PX = 24
 
 
-# AT-SPI is optional. If gi bindings aren't installed we skip to the
-# WM_CLASS fallback only - no hard dependency.
-#
-# Two-step defensive probe before letting any code path call Atspi:
-#   1. Our own at-spi bus socket must exist at the XDG path and be
-#      r/w by us.
-#   2. There must be NO at-spi-bus-launcher running as another user.
-#      A foreign-uid launcher (typically a root one left behind by
-#      sudo'd interactions) can route our dbus query to its bus -
-#      we then crash on first use via glib dbind-ERROR (SIGTRAP,
-#      uncatchable from Python).
-# When either check fails, skip the Atspi import entirely and fall
-# back to the WM_CLASS heuristic. The walker still works fine,
-# just without per-widget editable detection inside Electron apps.
 def _atspi_environment_safe() -> tuple[bool, str]:
+    """Whether loading Atspi is safe, and why not. Another user's
+    at-spi-bus-launcher can take our query and abort the process (SIGTRAP)."""
     import glob as _glob
     import os as _os
 
@@ -112,8 +78,7 @@ else:
     _log.info("[editable] AT-SPI skipped (%s) - using WM_CLASS only", _atspi_skip_reason)
 
 
-# WM_CLASS substrings (case-insensitive) for apps where the focused
-# widget is virtually always read-only.
+# WM_CLASS substrings of apps whose focused widget is almost always read-only
 _READONLY_APP_CLASSES = (
     # PDF / document viewers
     "evince",
@@ -137,7 +102,7 @@ _READONLY_APP_CLASSES = (
     "smplayer",
     "totem",
     "celluloid",
-    # File managers (rename in-place exists but it's a tiny corner of usage)
+    # File managers (renaming in place is the rare exception)
     "nautilus",
     "nemo",
     "caja",
@@ -151,17 +116,12 @@ _READONLY_APP_CLASSES = (
 
 
 def _on_focus_event(event) -> None:
-    """AT-SPI calls this every time an accessible reports gaining or
-    losing STATE_FOCUSED. We only care about gains (detail1 == 1) and
-    we cache the editable status of the newly-focused widget.
-
-    Runs in the AT-SPI worker thread - _focus_cache_lock protects the
-    cross-thread read in is_focus_editable().
-    """
+    """Remember whether the widget that gained focus is editable. Runs on
+    the AT-SPI listener's thread."""
     try:
         if event is None or event.source is None:
             return
-        # detail1 is 1 for 'focused gained', 0 for 'focused lost'
+        # detail1: 1 gained, 0 lost
         if int(getattr(event, "detail1", 0)) != 1:
             return
         source = event.source
@@ -181,19 +141,11 @@ def _on_focus_event(event) -> None:
 
 
 def _start_focus_listener() -> None:
-    """Register the AT-SPI focus-change listener. Idempotent - first
-    caller wins, the listener runs for the daemon's lifetime.
-
-    Gated on the 'editable_atspi_listener_enabled' setting, which
-    defaults off. Registration was correlated with a Cinnamon panel
-    segfault on 2026-05-25. Falling back
-    to the synchronous tree-walk + WM_CLASS path is safe; users who
-    want the Electron-specific smartness can opt in.
-    """
+    """Register the AT-SPI focus listener, once, for the daemon's lifetime,
+    and only with editable_atspi_listener_enabled on."""
     global _focus_listener_started, _focus_listener_ref
     if _focus_listener_started or not _HAS_ATSPI:
         return
-    # Local import - avoids settings module circulars at module load.
     try:
         from core.settings import get_settings
 
@@ -212,20 +164,15 @@ def _start_focus_listener() -> None:
 
     def runner():
         try:
-            # init() is mostly a no-op after first call but guarantees
-            # the DBus connection is up before we register listeners.
             try:
                 Atspi.init()
             except Exception:
                 pass
             listener = Atspi.EventListener.new(_on_focus_event)
             listener.register("object:state-changed:focused")
-            # Keep the Python wrapper alive so it isn't GC'd out
-            # from under the C-side registration.
             global _focus_listener_ref
             _focus_listener_ref = listener
             _log.info("[editable] AT-SPI focus listener registered - starting event loop")
-            # Blocking call - runs the AT-SPI event dispatch loop.
             Atspi.event_main()
         except Exception as exc:
             _log.info("[editable] AT-SPI listener init failed: %s", exc)
@@ -234,14 +181,8 @@ def _start_focus_listener() -> None:
 
 
 def _cached_focus_editable(max_age_s: float = 30.0) -> bool | None:
-    """Return the cached editable state if a focus event has fired
-    recently enough. None means 'no usable cache value'.
-
-    max_age_s caps how long we trust the cache - if the user hasn't
-    interacted in a while, their last focus event might no longer
-    reflect reality (they could have switched apps without us seeing).
-    Recent focus events stay authoritative.
-    """
+    """What the last focus event said, or None when there was none within
+    `max_age_s`: the user may have switched apps since without an event."""
     with _focus_cache_lock:
         editable = _focus_cache["editable"]
         ts = _focus_cache["timestamp"]
@@ -258,8 +199,8 @@ def _cached_focus_editable(max_age_s: float = 30.0) -> bool | None:
 
 
 def _find_focused_in(node, max_depth: int = 10):
-    """Depth-limited DFS for an accessible with STATE_FOCUSED. Bounded
-    so a huge accessibility tree can't outrun our timeout budget."""
+    """The first accessible under `node` with STATE_FOCUSED, searched
+    `max_depth` levels down so a huge tree can't outlast the timeout."""
     if node is None or max_depth <= 0:
         return None
     try:
@@ -276,41 +217,38 @@ def _find_focused_in(node, max_depth: int = 10):
     return None
 
 
-def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
-    """Probe AT-SPI for the editable state of the currently-focused
-    accessible widget.
-
-    Strategy (matters!): walk every app on the desktop, but only look
-    inside its windows that have STATE_ACTIVE set. STATE_ACTIVE marks
-    the WM-foreground window - exactly one across the whole desktop.
-    Inside it, find the descendant with STATE_FOCUSED; that's the
-    widget the user is typing/selecting in.
-
-    The previous implementation looked for STATE_FOCUSED anywhere in
-    any app's tree and returned the FIRST hit. On Cinnamon the shell's
-    own panel/desktop window is permanently marked FOCUSED (it's the
-    GNOME-shell-equivalent root accessible), so we always returned
-    'cinnamon: editable=False' regardless of which real app the user
-    was in. Filtering on STATE_ACTIVE first skips that trap.
-
-    Returns True / False on an authoritative AT-SPI answer, None when
-    we couldn't reach one (no AT-SPI, timeout, no active window, etc.)
-    - caller falls back to the WM_CLASS heuristic on None.
-    """
-    if not _HAS_ATSPI:
-        return None
-    # Gate the walker behind the same setting that gates the focus
-    # listener. AT-SPI on this machine has a habit of crashing the
-    # whole daemon via dbind-ERROR when a foreign-uid bus-launcher
-    # is in play; if the user hasn't explicitly opted in via Settings
-    # > Advanced > "Smarter editable detection", we don't even try.
-    # WM_CLASS fallback handles the common case fine.
+def _atspi_opted_in() -> bool:
     try:
         from core.settings import get_settings
 
-        if not bool(get_settings().get("editable_atspi_listener_enabled")):
-            return None
+        return bool(get_settings().get("editable_atspi_listener_enabled"))
     except Exception:
+        return False
+
+
+def _active_windows(desktop):
+    """(app, window) for each window with STATE_ACTIVE, the one in the
+    foreground. test_only_the_active_window_is_searched_for_the_focused_widget"""
+    for i in range(desktop.get_child_count()):
+        try:
+            app = desktop.get_child_at_index(i)
+            n_win = app.get_child_count() if app is not None else 0
+        except Exception:
+            continue
+        for j in range(n_win):
+            try:
+                win = app.get_child_at_index(j)
+                if win is None or not win.get_state_set().contains(Atspi.StateType.ACTIVE):
+                    continue
+            except Exception:
+                continue
+            yield app, win
+
+
+def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
+    """Whether the focused widget of the active window is editable, or None
+    when AT-SPI has no answer within `timeout`."""
+    if not _HAS_ATSPI or not _atspi_opted_in():
         return None
 
     result: list[bool | None] = [None]
@@ -322,67 +260,32 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
             if desktop is None:
                 diag.append("desktop=None")
                 return
-            n_apps = desktop.get_child_count()
-            for i in range(n_apps):
-                try:
-                    app = desktop.get_child_at_index(i)
-                except Exception:
-                    continue
-                if app is None:
-                    continue
-                # Iterate the app's top-level windows; pick the one
-                # whose window has STATE_ACTIVE (= WM-frontmost).
-                try:
-                    n_win = app.get_child_count()
-                except Exception:
-                    continue
-                for j in range(n_win):
-                    try:
-                        win = app.get_child_at_index(j)
-                    except Exception:
-                        continue
-                    if win is None:
-                        continue
-                    try:
-                        win_state = win.get_state_set()
-                    except Exception:
-                        continue
-                    if not win_state.contains(Atspi.StateType.ACTIVE):
-                        continue
-                    # Active window found. Find focused descendant.
-                    focused = _find_focused_in(win, max_depth=10)
-                    if focused is None:
-                        # Window is active but accessibility tree doesn't
-                        # expose a STATE_FOCUSED widget. Common with
-                        # Electron apps (Claude desktop, VSCode, Slack)
-                        # whose Chromium layer can't always be drilled
-                        # into via at-spi2. The window-frame itself isn't
-                        # 'editable' even when its embedded input is, so
-                        # checking the frame would lie. Return None to
-                        # punt to WM_CLASS heuristic, which defaults to
-                        # editable=True for unknown apps and lets the
-                        # buttons show.
-                        diag.append(
-                            f"app={app.get_name()!r} "
-                            f"win.role={win.get_role_name()} "
-                            f"-- no focused descendant (likely Electron) "
-                            f"-- punting to WM_CLASS"
-                        )
-                        return  # result[0] stays None
-                    try:
-                        fstate = focused.get_state_set()
-                        editable = bool(fstate.contains(Atspi.StateType.EDITABLE))
-                        result[0] = editable
-                        diag.append(
-                            f"app={app.get_name()!r} "
-                            f"win.role={win.get_role_name()} "
-                            f"focused.role={focused.get_role_name()} "
-                            f"editable={editable}"
-                        )
-                    except Exception as exc:
-                        diag.append(f"state-fetch failed: {exc}")
+            for app, win in _active_windows(desktop):
+                focused = _find_focused_in(win, max_depth=_FOCUS_SEARCH_DEPTH)
+                if focused is None:
+                    # The frame's own state would lie about the input inside it:
+                    # test_an_active_window_with_no_focused_widget_gives_no_answer
+                    diag.append(
+                        f"app={app.get_name()!r} "
+                        f"win.role={win.get_role_name()} "
+                        f"-- no focused descendant (likely Electron) "
+                        f"-- punting to WM_CLASS"
+                    )
                     return
-            diag.append(f"no active window across {n_apps} apps")
+                try:
+                    fstate = focused.get_state_set()
+                    editable = bool(fstate.contains(Atspi.StateType.EDITABLE))
+                    result[0] = editable
+                    diag.append(
+                        f"app={app.get_name()!r} "
+                        f"win.role={win.get_role_name()} "
+                        f"focused.role={focused.get_role_name()} "
+                        f"editable={editable}"
+                    )
+                except Exception as exc:
+                    diag.append(f"state-fetch failed: {exc}")
+                return
+            diag.append(f"no active window across {desktop.get_child_count()} apps")
         except Exception as exc:
             diag.append(f"atspi error: {exc}")
 
@@ -398,16 +301,13 @@ def _atspi_focus_editable(timeout: float = 0.15) -> bool | None:
 
 
 def _selection_rect_of(acc) -> tuple[int, int, int, int] | None:
-    """Screen-coord bounding box (x, y, w, h) of the text currently
-    selected inside an accessible, or None. Uses the AT-SPI Text
-    interface: get_n_selections -> get_selection (a Range) ->
-    get_range_extents(COORD_TYPE_SCREEN). Returns None when the widget
-    exposes no Text interface, has no selection, or reports a degenerate
-    rectangle - the caller then falls back to the mouse pointer."""
+    """Screen rectangle (x, y, w, h) of the text selected in an accessible,
+    or None: no Text interface, nothing selected, or a rectangle no toolkit
+    could mean."""
     try:
         n_sel = Atspi.Text.get_n_selections(acc)
     except Exception:
-        return None  # widget doesn't implement the Text interface
+        return None
     if not n_sel or n_sel <= 0:
         return None
     try:
@@ -424,42 +324,19 @@ def _selection_rect_of(acc) -> tuple[int, int, int, int] | None:
     if r is None:
         return None
     x, y, w, h = int(r.x), int(r.y), int(r.width), int(r.height)
-    # A real horizontal selection must have width. Height, however, is
-    # often reported as 0 by some toolkits - notably KTextEditor (Kate /
-    # KWrite) returns 0-height text extents - so synthesize a sane line
-    # height rather than discarding an otherwise-correct anchor (we place
-    # the popup above `y`, so only the below-fallback needs the height).
     if w <= 0:
         return None
-    if h <= 0:
-        h = 24
-    # Reject sentinel / absurd rectangles toolkits emit when they can't
-    # really answer (offscreen -1s, absurdly large).
+    if h <= 0:  # KTextEditor (Kate, KWrite) reports 0-height extents
+        h = _FALLBACK_LINE_HEIGHT_PX
     if w > 100_000 or h > 100_000 or x < -50_000 or y < -50_000:
         return None
     return (x, y, w, h)
 
 
 def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] | None:
-    """Bounding rectangle of the SELECTED text in the focused widget, in
-    absolute SCREEN pixels (x, y, width, height), or None.
-
-    Mirrors _atspi_focus_editable's walk (active window -> focused
-    descendant) and then reads the selection extents via the AT-SPI Text
-    interface. Lets the popup anchor to the selection itself instead of
-    the mouse pointer (the user's explicit request). Returns None - so
-    the caller falls back to mouse positioning - whenever AT-SPI is off,
-    unavailable, times out, the widget exposes no Text interface, or
-    nothing is selected. Gated on the same editable_atspi_listener_enabled
-    setting as the rest of the AT-SPI machinery."""
-    if not _HAS_ATSPI:
-        return None
-    try:
-        from core.settings import get_settings
-
-        if not bool(get_settings().get("editable_atspi_listener_enabled")):
-            return None
-    except Exception:
+    """Screen rectangle (x, y, width, height) of the text selected in the
+    focused widget, or None when AT-SPI is off, too slow or has no answer."""
+    if not _HAS_ATSPI or not _atspi_opted_in():
         return None
 
     result: list[tuple[int, int, int, int] | None] = [None]
@@ -469,34 +346,11 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
             desktop = Atspi.get_desktop(0)
             if desktop is None:
                 return
-            for i in range(desktop.get_child_count()):
-                try:
-                    app = desktop.get_child_at_index(i)
-                except Exception:
-                    continue
-                if app is None:
-                    continue
-                try:
-                    n_win = app.get_child_count()
-                except Exception:
-                    continue
-                for j in range(n_win):
-                    try:
-                        win = app.get_child_at_index(j)
-                    except Exception:
-                        continue
-                    if win is None:
-                        continue
-                    try:
-                        if not win.get_state_set().contains(Atspi.StateType.ACTIVE):
-                            continue
-                    except Exception:
-                        continue
-                    focused = _find_focused_in(win, max_depth=10)
-                    if focused is None:
-                        return
+            for _app, win in _active_windows(desktop):
+                focused = _find_focused_in(win, max_depth=_FOCUS_SEARCH_DEPTH)
+                if focused is not None:
                     result[0] = _selection_rect_of(focused)
-                    return
+                return
         except Exception:
             return
 
@@ -512,14 +366,9 @@ def focused_selection_rect(timeout: float = 0.15) -> tuple[int, int, int, int] |
 
 
 def _window_class(haystacks: list[str]) -> str:
-    """The focused window's class, lower-cased, from the backend's
-    active-window haystacks, or '' when unknown.
-
-    Only the class is matched, never the title: needles like "eog" or "feh"
-    would hit titles such as "Geography notes". X11 returns [title, xprop
-    WM_CLASS line] (`wm_class(string) = "instance", "class"`, so either field
-    can match); KDE Wayland returns [resourceClass, caption] via KWin.
-    """
+    """The focused window's class from the backend's haystacks, or ''. Never
+    the title: test_a_title_that_contains_a_viewers_name_is_not_a_viewer.
+    X11 gives [title, xprop's WM_CLASS line], KDE [resourceClass, caption]."""
     for h in haystacks:
         if h.startswith("wm_class"):
             return h
@@ -532,21 +381,9 @@ def is_focus_editable(
     extra_readonly_classes: tuple[str, ...] = (),
     haystacks: Callable[[], list[str]] | None = None,
 ) -> bool:
-    """True if the focused widget accepts edits.
-
-    Resolution order, most-precise first:
-      1. AT-SPI focus-event cache (async listener) - works for Electron
-         apps where the tree-walk fails. Recent events authoritative.
-      2. AT-SPI tree walk (synchronous probe) - works for GTK/Qt/Firefox.
-      3. Window-class blocklist - coarse but predictable, catches
-         pure-viewer apps that don't expose accessibility at all. The class
-         comes from the platform backend (xprop on X11, KWin on KDE Wayland).
-      4. Permissive default (True) - better to show a button that does
-         nothing than to hide one the user wanted.
-
-    Logs every decision so a tail of vinopop.log shows which path fired.
-    """
-    # Make sure the async listener is up; first call kicks it off.
+    """True if the focused widget accepts edits. Tried in order: a recent
+    focus event, the AT-SPI walk, the window-class list, and True.
+    `haystacks` lets the caller share one active-window lookup."""
     _start_focus_listener()
 
     cached = _cached_focus_editable()
@@ -558,8 +395,6 @@ def is_focus_editable(
         _log.info("[editable] AT-SPI tree-walk authoritative: editable=%s", atspi_answer)
         return atspi_answer
 
-    # Through the backend so it also works on native Wayland windows, which
-    # xdotool/xprop can't see. `haystacks` lets the caller share one lookup.
     try:
         wm = _window_class((haystacks or get_backend().active_window_haystacks)())
     except Exception as exc:  # noqa: BLE001

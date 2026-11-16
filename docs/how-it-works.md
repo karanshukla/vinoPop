@@ -189,6 +189,21 @@ bash expands the reference once and never parses the result as code, so no quoti
 
 `tests/test_recipes.py` runs the hostile templates and selections through a real bash; `tests/test_recipe_rules.py` pins the chain and the seeding.
 
+## Editable detection
+
+Cut, Paste and the other editing buttons are hidden when the selection is in something read-only (`triggers/editable_detect.py`). The answers are tried in this order:
+
+1. **The last focus event**, for 30 s. With `editable_atspi_listener_enabled` on, an AT-SPI listener records whether each widget that gains focus is editable. It is the only per-widget signal Chromium and Electron apps give: their accessibility tree shows the top-level frame without a focused descendant, but the event still fires when the user clicks an input and not the page. After 30 s the user may have switched apps without an event, so the answer is no longer trusted.
+2. **A walk of the accessibility tree**, with the same setting, bounded to 150 ms and ten levels so it can't hold up the popup. It looks only inside the window marked active, then for the focused widget in it. The first version took the first focused widget in any app, and on Cinnamon the shell's own desktop window is permanently focused, so every app read as "cinnamon, not editable". An active window with no focused widget (Electron again) gives no answer: the frame itself isn't editable even when the input inside it is.
+3. **The window class**, against a list of viewers (PDF and image viewers, media players, file managers, ebook readers) plus the user's own. Only the class is matched, never the title: "eog" would match a window titled "Geography notes". The class comes from the backend, `xprop` on X11 and KWin on KDE Wayland, so native Wayland windows are covered.
+4. **Editable**, when nothing answered. A button that does nothing is better than a missing one the user wanted.
+
+The same walk gives the popup the selected text's rectangle to anchor to. Kate and KWrite report text extents with zero height, so a zero height becomes 24 px; a zero width, or coordinates no screen has, means no anchor and the pointer is used.
+
+AT-SPI is not loaded at all unless the user's own bus socket exists and no `at-spi-bus-launcher` is running as another user. One left behind by a `sudo` session can take the query, and the process then dies in glib (`dbind-ERROR`, a SIGTRAP Python can't catch). The setting is off by default for the reason given under [the defaults](#why-the-defaults-are-what-they-are).
+
+`tests/test_editable_detect.py` runs the order and the walk against a fake desktop. Nothing here has run against a real accessibility bus in the tests.
+
 ## Keystrokes on X11
 
 Paste, Cut, typing and window activation go through python-xlib and the X server's XTEST extension, in place of the `xdotool` and `xprop` processes vinoPop used to spawn. Like `xdotool`, the events reach X11 clients only (XWayland ones on a Wayland desktop).
