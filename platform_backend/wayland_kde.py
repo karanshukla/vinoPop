@@ -1,21 +1,6 @@
-"""KDE Plasma 6 / Wayland platform backend.
-
-Proven on Fedora 44 KDE Plasma (KWin 6.6.5) during the Fase 0 spike:
-  - clipboard / primary    -> wl-clipboard (wl-copy / wl-paste)
-  - selection change watch  -> `wl-paste --primary --watch`
-  - global pointer position -> KWin `workspace.cursorPos` over DBus
-                               (see _kwin_cursor.py; asked through one
-                               long-lived _kwin_query.py process)
-  - keystroke injection     -> wtype
-  - popup positioning        -> gtk4-layer-shell (anchor top-left + margins);
-                               XWayland override-redirect when it's missing
-  - global hotkey            -> KGlobalAccel over DBus (best-effort, see below)
-
-The global hotkey path is the one piece that cannot be verified without a
-physical key press; its Qt-keycode/flags encoding is a researched best-guess.
-It is fully guarded and non-fatal: if registration fails the app runs normally
-and auto-popup-on-selection (the headline feature) is unaffected.
-"""
+"""KDE Plasma 6 / Wayland platform backend: wl-clipboard for the selection,
+KWin scripting for the pointer and the active window, gtk4-layer-shell for
+the popup. docs/how-it-works.md, "The KDE Wayland backend"."""
 
 from __future__ import annotations
 
@@ -37,9 +22,8 @@ _LAYER = None
 
 
 def _kwin_subprocess_env() -> dict:
-    """Environment for the `python3 -m platform_backend._kwin_*` helper
-    subprocesses. Puts the package root on PYTHONPATH so the child can
-    import platform_backend even when its cwd isn't the app directory."""
+    """The environment with the app's folder on PYTHONPATH, so
+    `python3 -m platform_backend._kwin_*` imports from any cwd."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = dict(os.environ)
     existing = env.get("PYTHONPATH", "")
@@ -47,8 +31,6 @@ def _kwin_subprocess_env() -> dict:
     return env
 
 
-# Kept apart from the imports above so this module's input pieces can change
-# without touching the GTK/layer-shell ones.
 from .evdev_input import InputEvent, get_input_hub
 from .gestures import GESTURE_LEAD_S, SelectionGestures
 from .kde_hotkey import WaylandKdeHotkey, _qt_keycode  # noqa: F401 - re-exported
@@ -57,11 +39,8 @@ from .xkb import detect_kbd_rmlvo as _detect_kbd_rmlvo
 
 
 def _layer_shell():
-    """Import Gtk4LayerShell lazily so importing this module doesn't hard-fail
-    when the typelib is missing (we want a clear error only when we actually
-    try to show the popup). main.py preloads libgtk4-layer-shell before GTK
-    so its Wayland hooks are in place; without the typelib main.py has already
-    moved the process onto XWayland and this is never reached."""
+    """Gtk4LayerShell, imported on first use: without its typelib main.py has
+    put the process on XWayland and this is never reached."""
     global _LAYER
     if _LAYER is None:
         import gi
@@ -74,21 +53,13 @@ def _layer_shell():
 
 
 def _die_with_parent() -> None:
-    """preexec_fn: SIGTERM this child when the daemon dies, however it dies.
-    Without it every restart left a `wl-paste --watch` behind, all of them
-    pulling each new selection out of the source app."""
+    """preexec_fn: SIGTERM this child when the daemon dies, however it dies,
+    so a restart leaves no `wl-paste --watch` behind."""
     import ctypes
     import signal
 
     PR_SET_PDEATHSIG = 1
     ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
-
-
-# ---------------------------------------------------------------------------
-# Selection watcher: `wl-paste --primary --watch` notifies us; we then read
-# the primary selection and the cursor position, mirroring the X11 watcher's
-# event->read design.
-# ---------------------------------------------------------------------------
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -103,7 +74,12 @@ def _reap(proc: subprocess.Popen) -> None:
 
 
 class WaylandSelectionWatcher:
+    """`wl-paste --watch` pings on every change; once the pings go quiet the
+    selection is read and shown at the pointer's last position."""
+
     _MAX_BACKOFF_S = 30.0
+    _WAKE_S = 0.5  # how long stop() can go unnoticed
+    _MIN_SETTLE_S = 0.2
 
     def __init__(
         self,
@@ -173,9 +149,8 @@ class WaylandSelectionWatcher:
                 pass
 
     def _supervise(self, args: list[str], consume: Callable[[int], None]) -> None:
-        """Run `args` and feed its stdout to `consume` until stop(). wl-paste
-        exits when the compositor restarts; restart it with backoff rather
-        than leave auto-popup dead while the setting says on."""
+        """Run `args` and feed its stdout to `consume` until stop(), restarting
+        it with backoff: wl-paste exits when the compositor restarts."""
         delay = 1.0
         while not self._stop.is_set():
             try:
@@ -214,7 +189,7 @@ class WaylandSelectionWatcher:
     def _consume_clipboard(self, fd: int) -> None:
         first = True  # --watch pings once for what's already there
         while not self._stop.is_set():
-            got = self._ping(fd, 0.5)
+            got = self._ping(fd, self._WAKE_S)
             if got is None:
                 return
             if got and not first:
@@ -222,17 +197,9 @@ class WaylandSelectionWatcher:
             first = first and not got
 
     def _consume_primary(self, fd: int) -> None:
-        # `--watch echo` pings (a bare newline) on every primary-selection
-        # change. A single drag emits a BURST of these as the selection grows,
-        # so we treat the pipe as an event stream and DEBOUNCE: only after the
-        # pings go quiet for debounce_s do we read the selection + cursor and
-        # fire once. Without this the popup re-reads the (still moving) cursor
-        # on every ping and visibly chases the mouse for a second or two.
-        first = True
+        first = True  # --watch pings once for what's already selected
         while not self._stop.is_set():
-            # Block until at least one ping arrives (0.5 s wake-ups so stop()
-            # is honoured promptly).
-            got = self._ping(fd, 0.5)
+            got = self._ping(fd, self._WAKE_S)
             if got is None:
                 return
             if not got:
@@ -240,38 +207,9 @@ class WaylandSelectionWatcher:
             burst_t0 = time.monotonic()
             if not first:
                 self._backend.prefetch_active_window()
-            # Capture the cursor at the FIRST event of the burst, then re-
-            # capture on every subsequent selection change. The last capture
-            # therefore lands on the final change -- the drag release, right at
-            # the end of the selected text. We deliberately do NOT query the
-            # pointer again after the settle delay: by then the user has let go
-            # and started moving the mouse toward the popup, and that drift was
-            # exactly why the popup appeared away from the selection instead of
-            # anchored over it. (On KWin Wayland there is no API for the text
-            # selection's rectangle, so the release point is the best anchor we
-            # have.)
-            cap_x = cap_y = None
-            try:
-                cap_x, cap_y = self._backend.pointer_position()
-            except Exception:  # noqa: BLE001
-                pass
-            # Drain the rest of the burst: keep consuming until the stream is
-            # quiet for one debounce window.
-            settle = max(0.2, self._debounce_s)
-            ended = False
-            while True:
-                more = self._ping(fd, self._gestures.settle_s(burst_t0, settle))
-                if not more:
-                    ended = more is None
-                    break
-                try:
-                    cap_x, cap_y = self._backend.pointer_position()
-                except Exception:  # noqa: BLE001
-                    pass
+            anchor, ended = self._drain_burst(fd, burst_t0)
             if self._stop.is_set() or ended:
                 return
-            # The very first settled value is whatever was already selected
-            # when wl-paste started - don't pop up for it.
             if first:
                 first = False
                 continue
@@ -280,28 +218,43 @@ class WaylandSelectionWatcher:
                 continue
             if not self._should_show(text, burst_t0):
                 continue
-            if cap_x is None:
-                try:
-                    cap_x, cap_y = self._backend.pointer_position()
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[wayland] pointer query failed: {exc}")
-                    cap_x, cap_y = 0, 0
+            self._show(text, anchor)
+
+    def _pointer_or(self, fallback: tuple[int, int] | None) -> tuple[int, int] | None:
+        try:
+            return self._backend.pointer_position()
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    def _drain_burst(self, fd: int, burst_t0: float) -> tuple[tuple[int, int] | None, bool]:
+        """Read pings until they go quiet. Returns the pointer position at the
+        last one, and whether the stream ended."""
+        # Not asked again after the quiet: the mouse is on its way to the popup by then.
+        anchor = self._pointer_or(None)
+        settle = max(self._MIN_SETTLE_S, self._debounce_s)
+        while True:
+            more = self._ping(fd, self._gestures.settle_s(burst_t0, settle))
+            if not more:
+                return anchor, more is None
+            anchor = self._pointer_or(anchor)
+
+    def _show(self, text: str, anchor: tuple[int, int] | None) -> None:
+        if anchor is None:
             try:
-                self._on_selection(text, cap_x, cap_y)
+                anchor = self._backend.pointer_position()
             except Exception as exc:  # noqa: BLE001
-                print(f"[wayland] selection callback error: {exc}")
-
-
-# Global hotkey: KGlobalAccel, see kde_hotkey.py.
-# Keyboard layout detection: xkb.detect_kbd_rmlvo.
+                print(f"[wayland] pointer query failed: {exc}")
+                anchor = (0, 0)
+        try:
+            self._on_selection(text, anchor[0], anchor[1])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[wayland] selection callback error: {exc}")
 
 
 class _XkbModifierState:
-    """libxkbcommon ctypes wrapper that tracks LOGICAL modifier state from
-    raw evdev keycodes, honouring the user's layout + options. This is what
-    lets a Ctrl/Alt swap (kxkbrc Options=ctrl:swap_lalt_lctl) be respected:
-    we ask xkb 'is Control effectively active?' instead of hard-coding which
-    physical keycode is Ctrl."""
+    """Which modifiers are logically held, from raw evdev keycodes run through
+    libxkbcommon with the user's layout and options, so a Ctrl/Alt swap
+    (kxkbrc Options=ctrl:swap_lalt_lctl) is respected."""
 
     _MOD_NAME = {
         "ctrl": b"Control",
@@ -386,25 +339,10 @@ class _XkbModifierState:
 
 
 class WaylandDoubleClickWatcher:
-    """evdev-based modifier+double-click watcher for native Wayland.
-
-    The X11 path (XRecord) only sees XWayland windows on KWin, so the
-    double-click-modifier feature was dead for native Wayland apps. This
-    reads mouse buttons AND modifier keys straight from /dev/input - the
-    same mechanism the snippet-trigger and outside-click watchers already
-    use, so it works for every toolkit. Needs the user in the 'input'
-    group; silently inert otherwise.
-
-    Devices come from the shared evdev hub (evdev_input.py): every keyboard
-    and pointer by capability, keyd's virtual keyboard and hotplugged ones
-    included. Events arrive on the hub's thread.
-
-    Mirrors mouse_watcher.DoubleClickWatcher's semantics (300 ms window,
-    8 px tolerance, gated on the configured modifier). evdev button events
-    carry no coordinates, so the cursor position comes from the KWin
-    pointer query - fetched only while the gating modifier is held, so the
-    DBus round-trip happens for our gesture, not on every click.
-    """
+    """Modifier + double-click read from /dev/input through the shared evdev
+    hub, since XRecord only sees XWayland windows on KWin. Events arrive on
+    the hub's thread. Inert without the 'input' group.
+    docs/how-it-works.md, "The KDE Wayland backend"."""
 
     _MOD_CODES = {
         "ctrl": {29, 97},  # KEY_LEFTCTRL / KEY_RIGHTCTRL
@@ -416,6 +354,7 @@ class WaylandDoubleClickWatcher:
     _BTN_LEFT = 0x110
     _DOUBLE_CLICK_MS = 300
     _POSITION_TOLERANCE_PX = 8
+    _AFTER_CLICK_MS = 20  # the app under the pointer sees the click first
 
     def __init__(self, backend, on_double_click, hub=None) -> None:
         self._backend = backend
@@ -436,9 +375,6 @@ class WaylandDoubleClickWatcher:
         print("[dblclick] watching /dev/input (Wayland)")
 
     def stop(self) -> None:
-        # Unsubscribing the last consumer joins the hub's reader, so the
-        # /dev/input fds are closed before a fresh watcher is started on the
-        # next settings toggle.
         handle, self._handle = self._handle, None
         if handle is not None and self._hub is not None:
             self._hub.unsubscribe(handle)
@@ -460,16 +396,12 @@ class WaylandDoubleClickWatcher:
 
     def _on_event(self, ev: InputEvent) -> None:
         if self._xkb is None:
-            # Layout-aware modifier state so a Ctrl/Alt swap is respected. If
-            # libxkbcommon is missing we fall back to raw keycodes.
             self._xkb = _XkbModifierState()
         if ev.code == self._BTN_LEFT:
             if ev.value == 1:
                 self._on_left_press(ev.time)
             return
-        # Keyboard key: feed xkb (press=1/release=0; ignore autorepeat=2)
-        # and keep the raw-code fallback set.
-        if ev.value in (0, 1):
+        if ev.value in (0, 1):  # 2 is autorepeat
             self._xkb.update(ev.code, ev.value == 1)
         if ev.code in self._ALL_MODS:
             if ev.value == 1:
@@ -478,15 +410,10 @@ class WaylandDoubleClickWatcher:
                 self._held.discard(ev.code)
 
     def _on_left_press(self, t: float | None = None) -> None:
-        # Only act on our gesture: the configured modifier must be held.
-        # This also keeps the KWin pointer query off the plain-click path.
-        # `t` is the kernel timestamp, so the ~100 ms pointer query below
-        # doesn't eat into the double-click window.
+        """`t` is the event's kernel timestamp."""
         name = self._required_mod_name()
         active = self._xkb.is_active(name) if self._xkb else None
         if active is None:
-            # xkb unavailable - fall back to raw physical keycodes (ignores
-            # any Ctrl/Alt swap, but better than nothing).
             active = bool(self._held & self._required_codes())
         if not active:
             return
@@ -502,9 +429,7 @@ class WaylandDoubleClickWatcher:
         ):
             self._last_t = 0.0
             self._last_xy = (0, 0)
-            # Tiny settle so the app sees the click first, then we show
-            # the menu (same as the X11 watcher).
-            GLib.timeout_add(20, self._fire, x, y)
+            GLib.timeout_add(self._AFTER_CLICK_MS, self._fire, x, y)
             return
         self._last_t = now
         self._last_xy = (x, y)
@@ -518,9 +443,8 @@ class WaylandDoubleClickWatcher:
 
 
 class _KWinHelper:
-    """Client for the long-lived _kwin_query process. A one-shot helper per
-    query cost ~61 ms, ~55 of it Python startup. Respawned after a timeout
-    or crash."""
+    """Client for the long-lived _kwin_query process, respawned after a
+    timeout or crash."""
 
     _ARGV = [sys.executable, "-m", "platform_backend._kwin_query"]
 
@@ -538,8 +462,7 @@ class _KWinHelper:
         try:
             self._proc = subprocess.Popen(
                 self._ARGV,
-                # Binary: bytes readline() ends an answer only at "\n", never
-                # at a "\r" in a page title as text mode would.
+                # Binary pipes: test_kwin_answer_cannot_break_framing
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 env=_kwin_subprocess_env(),
@@ -566,8 +489,7 @@ class _KWinHelper:
             except (OSError, ValueError):
                 pass
             if not line.endswith("\n"):
-                # Timed out or died: a late answer would be read as the reply
-                # to the next query, so start over with a fresh process.
+                # A late answer would be read as the reply to the next query.
                 print(f"[wayland] KWin helper gave no answer to {kind!r}; restarting it")
                 self._proc = None
                 threading.Thread(target=_reap, args=(proc,), daemon=True).start()
@@ -578,8 +500,7 @@ class _KWinHelper:
 class WaylandKdeBackend(PlatformBackend):
     name = "wayland_kde"
     popup_uses_xlib = False
-    # KWin's workspace.cursorPos is in logical/compositor pixels, the same
-    # space as GTK's monitor geometry - so the popup must NOT divide by scale.
+    # KWin's cursorPos is in logical pixels, like GTK's monitor geometry
     pointer_is_logical = True
 
     def __init__(self) -> None:
@@ -589,9 +510,7 @@ class WaylandKdeBackend(PlatformBackend):
         self._kwin = _KWinHelper()
         self._active_lock = threading.Lock()
         self._active_pending: tuple[float, threading.Event, list[list[str]]] | None = None
-        # KGlobalAccel signal delivery needs dbus-python bound to the GLib
-        # main loop. Set it as the default before any SessionBus is created
-        # so the hotkey's add_signal_receiver works.
+        # Before any SessionBus exists, or KGlobalAccel's signals never arrive
         try:
             from dbus.mainloop.glib import DBusGMainLoop
 
@@ -638,10 +557,7 @@ class WaylandKdeBackend(PlatformBackend):
             print(f"[wayland] wl-copy failed: {exc}")
 
     # ---- pointer ---------------------------------------------------------
-    # Callers that arrive while a query is in flight share its result, and a
-    # successful result is reused for this long. The selection watcher, the
-    # double-click thread and the main thread (hotkey) often ask at the same
-    # moment; one KWin round-trip serves them all.
+    # test_concurrent_pointer_queries_share_one_result, test_pointer_cache_expires
     _POINTER_CACHE_S = 0.1
 
     def pointer_position(self) -> tuple[int, int]:
@@ -650,8 +566,7 @@ class WaylandKdeBackend(PlatformBackend):
             last = self._pointer_last
             if last is not None:
                 done_at, xy, ok = last
-                # done_at >= arrived: that query finished while we waited on
-                # the lock, so it's as fresh as one we'd start now.
+                # done_at >= arrived: it finished while we waited on the lock
                 if done_at >= arrived or (ok and arrived - done_at < self._POINTER_CACHE_S):
                     return xy
             xy, ok = self._query_pointer()
@@ -666,21 +581,13 @@ class WaylandKdeBackend(PlatformBackend):
                 return (int(parts[0]), int(parts[1])), True
         except ValueError:
             pass
-        # No coords: the KWin round-trip timed out or KWin was busy. This is
-        # the silent path that lands the popup at the top-left corner.
         print(f"[wayland] cursor query gave no coords ({out!r}) -> falling back to (0,0)")
         return (0, 0), False
 
     def can_paste(self) -> bool:
-        # Portal, ydotool or wtype, whichever is set up (keyinject.py).
         return self.injector().can_inject()
 
-    # ---- keystroke injection --------------------------------------------
-    #
-    # See keyinject.py: xdg-desktop-portal RemoteDesktop first (keysyms, so
-    # layout-correct, no daemon), then ydotool (keycodes mapped through the
-    # user's xkb layout), then wtype off KDE only (KWin has no
-    # zwp_virtual_keyboard_v1). Delivery is queued on the injector's thread.
+    # ---- keystroke injection (keyinject.py) -------------------------------
 
     def injector(self) -> KeyInjector:
         inj = getattr(self, "_injector", None)
@@ -709,9 +616,7 @@ class WaylandKdeBackend(PlatformBackend):
 
     def prefetch_active_window(self) -> None:
         """Start the active-window lookup now, for the next
-        active_window_haystacks() call to pick up. The selection watcher
-        calls this as a selection starts, so the lookup overlaps the settle
-        wait instead of following it."""
+        active_window_haystacks() call to pick up."""
         done = threading.Event()
         result: list[list[str]] = []
         with self._active_lock:
@@ -734,9 +639,7 @@ class WaylandKdeBackend(PlatformBackend):
         except FileNotFoundError:
             print("[wayland] xdg-open not available")
             return
-        # Wayland focus-stealing prevention leaves the browser in the
-        # background when launched from our (unfocused) popup. KWin scripts are
-        # privileged and can force-raise it - do that shortly after.
+        # Focus-stealing prevention leaves it in the background otherwise
         threading.Thread(target=self._raise_browser, daemon=True).start()
 
     def _browser_keyword(self) -> str:
@@ -816,20 +719,13 @@ class WaylandKdeBackend(PlatformBackend):
         return _qt_keycode(hotkey_str) is not None
 
     def make_double_click_watcher(self, on_double_click):
-        # XRecord (the old path) only sees XWayland windows on KWin, so the
-        # gesture was dead for native Wayland apps. Read mouse buttons +
-        # modifier keys from /dev/input instead - kernel-level, so it covers
-        # XWayland AND native Wayland windows. Needs the user in 'input';
-        # the watcher logs and stays inert otherwise.
         return WaylandDoubleClickWatcher(self, on_double_click)
 
     # ---- popup positioning ----------------------------------------------
     def prepare_popup_window(self, win) -> None:
-        # No gtk4-layer-shell (main.py then puts GDK on XWayland): place the
-        # popup the X11 way. Selection / pointer / hotkey stay on the native
-        # KWin paths either way.
         from .x11 import gdk_display_is_x11, x11_prepare_popup_window
 
+        # Without gtk4-layer-shell main.py puts GDK on XWayland
         if gdk_display_is_x11(win.get_display()):
             x11_prepare_popup_window(win)
             return
@@ -841,12 +737,7 @@ class WaylandKdeBackend(PlatformBackend):
             pass
         L.init_for_window(win)
         L.set_layer(win, L.Layer.OVERLAY)
-        # KeyboardMode.NONE: the popup must NOT take keyboard focus. With
-        # ON_DEMAND the layer surface grabs focus on map then immediately gets
-        # a focus-out, and PopupWindow's focus-loss handler hides it before it's
-        # even visible. NONE keeps it on-screen; dismissal is via the
-        # leave/initial grace timers (Esc-to-dismiss is a documented Wayland
-        # gap for now).
+        # NONE, not ON_DEMAND: a popup that takes focus loses it and hides at once
         try:
             L.set_keyboard_mode(win, L.KeyboardMode.NONE)
         except Exception:
@@ -863,11 +754,8 @@ class WaylandKdeBackend(PlatformBackend):
         L = _layer_shell()
         L.set_anchor(win, L.Edge.LEFT, True)
         L.set_anchor(win, L.Edge.TOP, True)
-        # (x, y) is global logical; layer-shell margins are relative to the
-        # surface's own output. Pin the surface to the output holding the
-        # point and subtract its origin, or a popup on a monitor at x=1920
-        # lands 1920 px too far right. A point on no output (the off-screen
-        # parking spot) leaves the output alone: it just needs to be hidden.
+        # Margins are relative to the surface's output:
+        # test_layer_popup_on_second_monitor, test_offscreen_parking_keeps_the_output
         try:
             mon = monitor_at(win.get_display().get_monitors(), x, y, fallback=False)
         except Exception:
