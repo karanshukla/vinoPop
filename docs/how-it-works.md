@@ -154,6 +154,7 @@ Only keys you set are written to the file, so a default changed in a later relea
 - **The popup** is a layer-shell surface on the overlay layer with keyboard mode `NONE`. With `ON_DEMAND` it takes focus when mapped, loses it straight away, and the popup's focus-loss handler hides it before it is seen. Esc therefore doesn't dismiss it on Wayland. Layer-shell margins are relative to the surface's own output, so the surface is pinned to the output under the point and that output's origin subtracted; otherwise a popup on a monitor at x=1920 lands 1920 px too far right.
 - **Opening a URL.** Focus-stealing prevention leaves the browser behind the current window when it is launched from an unfocused popup, so half a second later a KWin script raises the default browser's window.
 - **The hotkey** goes through KGlobalAccel (`kde_hotkey.py`). If registering fails the app runs on without it.
+- **The OCR hotkey** starts one capture at a time. KWin passes key autorepeat through to KGlobalAccel, and the first capture spends seconds importing the OCR stack, so a held chord used to stack three overlays. The capture runs on a worker thread so the main loop stays free while the region is dragged.
 
 `tests/test_wayland_watcher.py` and `tests/test_placement.py` pin the burst, the anchor, the pointer cache, the double-click window and the margins. None of it has a compositor under it in the tests.
 
