@@ -416,3 +416,15 @@ def test_other_global_shortcuts_are_ignored(capsys):
     hk = kde_hotkey.WaylandKdeHotkey("super+y", lambda: pytest.fail("not ours"), role="popup")
     hk._on_pressed("kwin", "Window Close", 12345)
     assert capsys.readouterr().out == ""
+
+
+def test_ydotool_env_names_the_socket_that_was_found(monkeypatch):
+    monkeypatch.delenv("YDOTOOL_SOCKET", raising=False)
+    monkeypatch.setattr(keyinject, "ydotool_socket", lambda: "/run/ydotool.sock")
+    assert keyinject._ydotool_env()["YDOTOOL_SOCKET"] == "/run/ydotool.sock"
+
+
+def test_ydotool_env_names_no_socket_when_none_exists(monkeypatch):
+    monkeypatch.delenv("YDOTOOL_SOCKET", raising=False)
+    monkeypatch.setattr(keyinject, "ydotool_socket", lambda: None)
+    assert "YDOTOOL_SOCKET" not in keyinject._ydotool_env()

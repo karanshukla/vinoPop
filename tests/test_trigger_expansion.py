@@ -270,3 +270,18 @@ def test_wayland_without_ydotool_deletes_nothing(ch, wayland, monkeypatch):
     monkeypatch.setattr(ch.shutil, "which", lambda tool: None)
     ch._fire_trigger_expansion("brb", "brb", " ", _snippet(ch, "be right back"))
     assert wayland.runs == [] and wayland.writes == []
+
+
+# ── ydotool's socket ─────────────────────────────────────────────────────────
+
+
+def test_the_plugin_points_ydotool_at_the_runtime_dir_socket_without_looking(ch, monkeypatch):
+    # Unlike keyinject._ydotool_env, which only names a socket that exists.
+    monkeypatch.delenv("YDOTOOL_SOCKET", raising=False)
+    monkeypatch.setattr(ch.os, "getuid", lambda: 4242)
+    assert ch._ydotool_env()["YDOTOOL_SOCKET"] == "/run/user/4242/.ydotool_socket"
+
+
+def test_the_plugin_keeps_a_socket_the_user_set(ch, monkeypatch):
+    monkeypatch.setenv("YDOTOOL_SOCKET", "/somewhere/else")
+    assert ch._ydotool_env()["YDOTOOL_SOCKET"] == "/somewhere/else"
