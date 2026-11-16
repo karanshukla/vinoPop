@@ -207,6 +207,18 @@ The picker takes focus, so pasting has to give it back to the window it was open
 - On X11 it has no decoration and opens at the pointer; the title row is the drag handle. On KDE Wayland a client can't place its own toplevel, so the picker keeps its decoration and the compositor places it.
 - It closes when it loses focus, but only if focus is still elsewhere 120 ms later: IBus and Cinnamon take focus for a frame and hand it back. A prompt or a drag in progress suspends this.
 
+## The Run in terminal dialog
+
+`core/actions.py` shows the command before it runs: Cancel, Edit and Run over a read-only preview. GTK 4 has no blocking `dialog.run()`, so it is an `Adw.Window` and the launch happens when it is answered. `Adw.Window` draws no title bar, so a header bar keeps it movable and closable.
+
+- The command sits in a monospace text view, not a label: a label reads `&`, `<` and `>` as Pango markup.
+- Read-only it has no frame and looks like a label (`.lp-cmd-preview`). Edit gives it the input-field look (`.lp-cmd-edit`), selects everything and disables the button.
+- A one-line command opens with Run focused, so Enter runs it as shown. More than one line opens with Cancel focused and plain Enter does nothing: the user has to read every line and click Run or press Ctrl+Enter. While editing, plain Enter is a newline.
+- Ctrl+Enter is caught on the text view in the capture phase. Keys go to the focused widget first, and the text view's own handler would take Enter as a newline before the window saw it.
+- Closing the window from the title bar is Cancel, and only the first answer counts.
+
+`tests/test_terminal_confirm_dialog.py` builds the dialog and pins each of these.
+
 ## Threads and X11
 
 Notes on two things the daemon deliberately does not do.
