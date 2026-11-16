@@ -7,6 +7,7 @@ thread (via GLib.idle_add). Threaded so the GTK main loop is untouched.
 
 from __future__ import annotations
 
+import select
 import threading
 from collections.abc import Callable, Iterable
 
@@ -53,6 +54,12 @@ _KEY_ALIASES = {
     "left": "Left",
     "right": "Right",
 }
+
+
+# Lock modifiers (Caps, Num) are left out: they must not stop a hotkey firing.
+_MODIFIER_MASK = X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
+
+_STOP_CHECK_S = 1.0
 
 
 def _parse(hotkey: str) -> tuple[int, str]:
@@ -143,12 +150,6 @@ class Hotkey:
     ) -> None:
         self._hotkey_str = hotkey_str
         self._on_trigger = on_trigger
-        # `use_polling` switches from XGrabKey (event-driven) to
-        # XQueryKeymap polling (~50 ms). Polling bypasses grab races -
-        # e.g. Cinnamon briefly grabbing the keyboard on Super-down for
-        # its overview gesture, which silently eats the first press of
-        # any Super-based hotkey. Costs ~3-5 % CPU per hotkey and
-        # ~25 ms median trigger latency. Off by default.
         self._use_polling = use_polling
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -202,30 +203,14 @@ class Hotkey:
             pass
 
     def _listen(self, dpy: display.Display) -> None:
-        try:
-            mods, keysym_name = _parse(self._hotkey_str)
-        except ValueError as exc:
-            print(f"[hotkey] {exc}")
+        binding = self._resolve_binding(dpy)
+        if binding is None:
             return
-
-        keysym = _resolve_keysym(keysym_name)
-        if keysym == 0:
-            print(f"[hotkey] unknown key name: {keysym_name!r}")
-            return
-
-        keycode = dpy.keysym_to_keycode(keysym)
-        if keycode == 0:
-            print(f"[hotkey] no keycode for {keysym_name!r}")
-            return
-
+        mods, keysym, keycode = binding
         self._mods = mods
         self._keycode = keycode
         self._root = dpy.screen().root
 
-        # Polling mode bypasses XGrabKey entirely - just samples the
-        # keymap every 50 ms and edge-detects 0→1 transitions. Used as
-        # the escape hatch for hotkeys that fight with WM-level grabs
-        # (Cinnamon Super-overview is the canonical example).
         if self._use_polling:
             print(
                 f"[hotkey] '{self._hotkey_str}' polling mode (keycode={keycode}, mods=0x{mods:x})"
@@ -233,137 +218,126 @@ class Hotkey:
             self._poll_loop()
             return
 
-        # Grab the key with every lock-modifier variant, checking each for
-        # an async BadAccess (= another client already owns this combo).
-        # CatchError is per-request: instantiate fresh each iteration.
-        grab_failed = 0
-        for extra in _lock_variants(dpy):
-            mask = mods | extra
-            catcher = error.CatchError(error.BadAccess)
-            try:
-                self._root.grab_key(
-                    keycode,
-                    mask,
-                    1,  # owner_events
-                    X.GrabModeAsync,
-                    X.GrabModeAsync,
-                    onerror=catcher,
-                )
-                dpy.sync()
-                if catcher.get_error():
-                    grab_failed += 1
-                else:
-                    self._grabbed_combos.append((keycode, mask))
-            except Exception as exc:  # noqa: BLE001
-                print(f"[hotkey] grab failed for mask 0x{mask:x}: {exc}")
-                grab_failed += 1
-
-        # If EVERY variant failed, the user's hotkey is unusable - notify them
-        # instead of silently doing nothing.
+        refused = self._grab_or_report(dpy, keycode)
         if not self._grabbed_combos:
-            print(f"[hotkey] '{self._hotkey_str}' could not be grabbed - already in use")
-            from core import actions
-
-            actions.notify(
-                "Hotkey conflict",
-                f"'{self._hotkey_str}' is already bound by another app. "
-                "Pick a different combination in Settings.",
-                "dialog-warning",
-                urgency="critical",
-            )
+            self._notify_conflict()
             return
-        if grab_failed:
-            print(f"[hotkey] {grab_failed} lock-variant grab(s) refused (non-fatal)")
+        if refused:
+            print(f"[hotkey] {refused} lock-variant grab(s) refused (non-fatal)")
 
         print(f"[hotkey] listening for {self._hotkey_str} (keycode={keycode}, mods=0x{mods:x})")
+        self._event_loop(dpy, keysym, keycode)
 
-        # Event loop. We poll select() with a 1 s timeout so the daemon
-        # can stop within 1 s of self._stop being set, while staying mostly
-        # asleep when no hotkey traffic arrives. (Previously: 0.2 s, which
-        # woke this thread 5 times/sec per registered hotkey - multiply by
-        # the popup + clipboard hotkeys and the daemon was getting 10
-        # context switches/sec for no reason.)
+    def _resolve_binding(self, dpy: display.Display) -> tuple[int, int, int] | None:
+        """(modifier mask, keysym, keycode), or None with the reason printed."""
+        try:
+            mods, keysym_name = _parse(self._hotkey_str)
+        except ValueError as exc:
+            print(f"[hotkey] {exc}")
+            return None
+        keysym = _resolve_keysym(keysym_name)
+        if keysym == 0:
+            print(f"[hotkey] unknown key name: {keysym_name!r}")
+            return None
+        keycode = dpy.keysym_to_keycode(keysym)
+        if keycode == 0:
+            print(f"[hotkey] no keycode for {keysym_name!r}")
+            return None
+        return mods, keysym, keycode
+
+    def _grab(self, dpy: display.Display, keycode: int, mask: int) -> bool:
+        """False when another client already owns the combination."""
+        # CatchError is per request, so a fresh one each time
+        catcher = error.CatchError(error.BadAccess)
+        self._root.grab_key(keycode, mask, 1, X.GrabModeAsync, X.GrabModeAsync, onerror=catcher)
+        dpy.sync()
+        if catcher.get_error():
+            return False
+        self._grabbed_combos.append((keycode, mask))
+        return True
+
+    def _grab_or_report(self, dpy: display.Display, keycode: int) -> int:
+        """Grab every lock-modifier variant; returns how many were refused."""
+        refused = 0
+        for extra in _lock_variants(dpy):
+            mask = self._mods | extra
+            try:
+                if not self._grab(dpy, keycode, mask):
+                    refused += 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"[hotkey] grab failed for mask 0x{mask:x}: {exc}")
+                refused += 1
+        return refused
+
+    def _notify_conflict(self) -> None:
+        print(f"[hotkey] '{self._hotkey_str}' could not be grabbed - already in use")
+        from core import actions
+
+        actions.notify(
+            "Hotkey conflict",
+            f"'{self._hotkey_str}' is already bound by another app. "
+            "Pick a different combination in Settings.",
+            "dialog-warning",
+            urgency="critical",
+        )
+
+    def _event_loop(self, dpy: display.Display, keysym: int, keycode: int) -> None:
         last_release: int | None = None
         while not self._stop.is_set():
             if dpy.pending_events() == 0:
-                import select
-
                 try:
-                    select.select([dpy.fileno()], [], [], 1.0)
+                    select.select([dpy.fileno()], [], [], _STOP_CHECK_S)
                 except OSError:
                     break
                 continue
             event = dpy.next_event()
-            # MappingNotify (type 34): the X server is telling us the
-            # keyboard mapping changed. Our grab is on a specific keycode,
-            # but the user's keysym (e.g. 'greater') may have moved to a
-            # different keycode - in which case our grab silently stops
-            # catching their presses until we re-grab on the new keycode.
-            # On Norwegian setups with IBus / kbdd that swap layouts per
-            # app, these arrive in floods and were the root cause of
-            # "first press of the hotkey is silently dropped".
             if event.type == X.MappingNotify:
-                try:
-                    event.refresh_keyboard_mapping()
-                except Exception:
-                    pass
-                new_keycode = dpy.keysym_to_keycode(keysym)
-                if new_keycode and new_keycode != keycode:
-                    print(
-                        f"[hotkey] '{self._hotkey_str}' keycode shifted "
-                        f"{keycode} -> {new_keycode} after MappingNotify; "
-                        f"re-grabbing"
-                    )
-                    # Ungrab the old combos, grab the new one
-                    for old_kc, old_mask in list(self._grabbed_combos):
-                        try:
-                            self._root.ungrab_key(old_kc, old_mask)
-                        except Exception:
-                            pass
-                    self._grabbed_combos.clear()
-                    for extra in _lock_variants(dpy):
-                        mask = mods | extra
-                        catcher = error.CatchError(error.BadAccess)
-                        try:
-                            self._root.grab_key(
-                                new_keycode,
-                                mask,
-                                1,
-                                X.GrabModeAsync,
-                                X.GrabModeAsync,
-                                onerror=catcher,
-                            )
-                            dpy.sync()
-                            if not catcher.get_error():
-                                self._grabbed_combos.append((new_keycode, mask))
-                        except Exception:
-                            pass
-                    keycode = new_keycode
-                continue
-            if event.type == X.KeyRelease and event.detail == keycode:
+                keycode = self._follow_remap(dpy, event, keysym, keycode)
+            elif event.type == X.KeyRelease and event.detail == keycode:
                 last_release = event.time
-                continue
-            if event.type == X.KeyPress and event.detail == keycode:
-                if _is_autorepeat(event.time, last_release):
-                    # Holding the hotkey must not fire again: with the
-                    # toggle (#44) the repeat would close the popup it opened.
-                    continue
-                # Filter out the lock-only variants by masking expected mods
-                effective = event.state & (
-                    X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
-                )
-                if effective == mods:
-                    print(
-                        f"[hotkey] '{self._hotkey_str}' fired -- "
-                        f"scheduling trigger on GTK main thread"
-                    )
-                    GLib.idle_add(self._safe_trigger)
-                else:
-                    print(
-                        f"[hotkey] '{self._hotkey_str}' press ignored: "
-                        f"expected mods=0x{mods:x} got effective=0x{effective:x} "
-                        f"(full state=0x{event.state:x})"
-                    )
+            elif event.type == X.KeyPress and event.detail == keycode:
+                # test_a_held_key_fires_once
+                if not _is_autorepeat(event.time, last_release):
+                    self._on_press(event.state)
+
+    def _follow_remap(self, dpy: display.Display, event, keysym: int, keycode: int) -> int:
+        """The keycode the hotkey's keysym is on now, re-grabbed if it moved."""
+        try:
+            event.refresh_keyboard_mapping()
+        except Exception:
+            pass
+        new_keycode = dpy.keysym_to_keycode(keysym)
+        if not new_keycode or new_keycode == keycode:
+            return keycode
+        print(
+            f"[hotkey] '{self._hotkey_str}' keycode shifted "
+            f"{keycode} -> {new_keycode} after MappingNotify; "
+            f"re-grabbing"
+        )
+        for old_keycode, old_mask in list(self._grabbed_combos):
+            try:
+                self._root.ungrab_key(old_keycode, old_mask)
+            except Exception:
+                pass
+        self._grabbed_combos.clear()
+        for extra in _lock_variants(dpy):
+            try:
+                self._grab(dpy, new_keycode, self._mods | extra)
+            except Exception:
+                pass
+        return new_keycode
+
+    def _on_press(self, state: int) -> None:
+        effective = state & _MODIFIER_MASK
+        if effective == self._mods:
+            print(f"[hotkey] '{self._hotkey_str}' fired -- scheduling trigger on GTK main thread")
+            GLib.idle_add(self._safe_trigger)
+        else:
+            print(
+                f"[hotkey] '{self._hotkey_str}' press ignored: "
+                f"expected mods=0x{self._mods:x} got effective=0x{effective:x} "
+                f"(full state=0x{state:x})"
+            )
 
     def _poll_loop(self) -> None:
         """Sample the keyboard 20×/sec and fire on rising-edge of the
@@ -379,7 +353,6 @@ class Hotkey:
 
         keycode = self._keycode
         mods = self._mods
-        mod_mask = X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
         byte_idx = keycode // 8
         bit_idx = keycode % 8
         bit_val = 1 << bit_idx
@@ -399,7 +372,7 @@ class Hotkey:
                 if pressed and not prev_pressed:
                     # Rising edge - verify modifier state right now.
                     data = self._root.query_pointer()
-                    effective = data.mask & mod_mask
+                    effective = data.mask & _MODIFIER_MASK
                     if effective == mods:
                         print(
                             f"[hotkey] '{self._hotkey_str}' fired (polling) -- scheduling trigger"

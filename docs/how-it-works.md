@@ -153,6 +153,18 @@ Paste, Cut, typing and window activation go through python-xlib and the X server
 
 `tests/test_x11_keys.py` pins all three.
 
+## Hotkeys on X11
+
+Each hotkey has its own thread and X connection (`triggers/hotkey.py`).
+
+- **The key is grabbed four times**, once per combination of Caps Lock and Num Lock, because X treats those as modifiers and a grab matches the modifier state exactly. A refused variant is logged; only when all four are refused is the user told the combination is taken.
+- **The thread sleeps in `select()` for up to a second**, which is how long stopping it can take. It was 0.2 s, which woke every hotkey thread five times a second for nothing.
+- **A `MappingNotify` re-resolves the key.** The grab is on a keycode, and the keysym can move to another one when the layout changes; the grab then silently stops matching until it is made again on the new keycode. IBus and kbdd, which swap layouts per application, send these in floods, and that was the cause of "the first press of the hotkey is dropped" on Norwegian setups.
+- **A held key fires once.** Autorepeat arrives as a release and a press with the same server time. With the toggle (#44) a repeat would close the popup the first press opened.
+- **`hotkey_use_polling`** skips the grab: the keymap is sampled every 50 ms and the hotkey fires on the key going down with exactly its modifiers held (`query_pointer().mask` is the only way X gives the current modifier state). Forty failed samples in a row, about 2 s, mean the connection is gone and the thread stops.
+
+`tests/test_hotkey_listen.py` runs the thread's loop against a fake display and pins the grab, the conflict notice, the remap and the repeat.
+
 ## Popup placement on X11
 
 GTK 4 has no `Gtk.Window.move()`, no POPUP window type and no type hints, so vinoPop does what GTK 3's POPUP windows did itself: it marks the X window override-redirect right after GTK creates it, before it is ever mapped, and moves it with `XMoveWindow`. The window manager then neither decorates, focuses, places nor lists it. An override-redirect window never gets focus from the window manager either, which is what GTK 3's `accept_focus=False` gave: paste keeps going to the app the text came from. The KDE Wayland backend uses the same code when the process runs on XWayland (no `gtk4-layer-shell`).
