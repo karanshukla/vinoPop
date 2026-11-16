@@ -170,6 +170,25 @@ Only keys you set are written to the file, so a default changed in a later relea
 
 `tests/test_classifier.py` holds the commands and the prose that must stay on their side, and the timing limits.
 
+## Recipe commands
+
+A recipe's `run_command` template is never rendered into shell source with the user's text in it (`plugin_system/recipe_loader.py`). The values go in as arguments, a prelude copies them into variables so a function or `set --` in the template can't shadow them, and each placeholder becomes a reference to one:
+
+```
+notify-send {text}  ->  bash -c 'vinopop_1=$1; notify-send "${vinopop_1}"' vinopop "<selection>"
+```
+
+bash expands the reference once and never parses the result as code, so no quoting in the template, missing or wrong, lets the selection, the clipboard or an `{ask:}` answer run as a command. `{text_shell}` maps to the same reference, for recipes written when quoting was the author's job; in a notification or on the clipboard it is still the `shlex`-quoted text.
+
+- **Where a reference is refused.** Bash evaluates arithmetic operands as expressions, and an expression like `a[$(cmd)]` runs `cmd`. That happens in `$(( ))`, `(( ))`, `[[ -eq ]]`, `let`, `declare -i` and array subscripts, quoted or not, so a placeholder there is an error and the button explains itself when clicked. A quoted heredoc expands nothing, so a placeholder there is refused too.
+- **Snippet placeholders** (`{date:+7d}`, `{clipboard}`, `{ask:Label}`) are expanded one token at a time. The selected text never goes through the snippet engine: a selection holding `{shell:...}` must not run, and one that merely contains `{date}` stays as it is.
+- **A chain** runs its steps in order. A transform renders its template against the current value and passes the result on as `{text}`. The first other step (copy, paste, notify, open_url, run_command) uses the value and ends the chain; a chain of only transforms copies its result.
+- **Copying** goes through the backend (`wl-copy` on KDE Wayland, `xclip` elsewhere). Plain `xclip` only reaches the X11 clipboard and misses native Wayland apps.
+- **A misspelt content type** is an error. It used to be dropped, and a list of only unrecognised names then meant "every content type".
+- **Default recipes** are copied into an empty recipes folder once. A marker file keeps a default the user deleted from coming back.
+
+`tests/test_recipes.py` runs the hostile templates and selections through a real bash; `tests/test_recipe_rules.py` pins the chain and the seeding.
+
 ## Keystrokes on X11
 
 Paste, Cut, typing and window activation go through python-xlib and the X server's XTEST extension, in place of the `xdotool` and `xprop` processes vinoPop used to spawn. Like `xdotool`, the events reach X11 clients only (XWayland ones on a Wayland desktop).
