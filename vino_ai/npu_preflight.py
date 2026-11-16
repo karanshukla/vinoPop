@@ -17,6 +17,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from core import distro
 from core.version_numbers import leading_numbers
@@ -32,11 +33,20 @@ COMPILER_LIB = "libopenvino_intel_npu_compiler.so"
 COMPILER_LOADER = "libopenvino_intel_npu_compiler_loader.so"
 LEGACY_COMPILER_LIB = "libnpu_driver_compiler.so"
 
-# (name the driver binary carries, libraries that route needs). 1.35.0 stores
-# the loader's name split, so only its prefix is searchable.
+
+class CompilerRoute(NamedTuple):
+    """A compiler the driver can load: the name its binary carries, and the
+    libraries that route needs."""
+
+    needle: bytes
+    libs: tuple[str, ...]
+
+
+# Driver 1.35.0 stores the loader's name split, so only this prefix is searchable.
+_LOADER_NAME_PREFIX = b"libopenvino_intel_npu_compiler_l"
 COMPILER_ROUTES = (
-    (b"libopenvino_intel_npu_compiler_l", (COMPILER_LOADER, COMPILER_LIB)),
-    (LEGACY_COMPILER_LIB.encode(), (LEGACY_COMPILER_LIB,)),
+    CompilerRoute(_LOADER_NAME_PREFIX, (COMPILER_LOADER, COMPILER_LIB)),
+    CompilerRoute(LEGACY_COMPILER_LIB.encode(), (LEGACY_COMPILER_LIB,)),
 )
 
 LIBRARY_DIRS = (
@@ -56,9 +66,8 @@ COMPILER_FIX = (
     "`dpkg-deb -x intel-driver-compiler-npu_*.deb x && sudo install -m 0755 "
     "$(find x -name '*compiler*.so') /usr/lib64/ && sudo ldconfig`"
 )
-# /usr/lib64 is read-only on Fedora Atomic (Silverblue, Kinoite, Bazzite), but
-# /usr/local is /var/usrlocal there and /etc is writable, so the compiler can
-# go in /usr/local/lib64 once ld.so is told to look there.
+# Fedora Atomic: /usr/lib64 is read-only, but /usr/local is /var/usrlocal and
+# /etc is writable, so the compiler goes in /usr/local/lib64 with an ld.so.conf.d entry.
 COMPILER_FIX_OSTREE = (
     "no distro packages the NPU compiler, and /usr/lib64 is read-only here: take "
     "intel-driver-compiler-npu from the linux-npu-driver release matching your driver "
@@ -70,7 +79,10 @@ COMPILER_FIX_OSTREE = (
 
 @dataclass(frozen=True)
 class Note:
-    ok: bool | None  # None: can't tell, or nothing to fix
+    """One preflight finding. `ok` is None when it can't tell, or there is
+    nothing to fix."""
+
+    ok: bool | None
     label: str
     detail: str
     fix: str = ""
@@ -85,9 +97,6 @@ def _read_attr(path: Path) -> str:
         return path.read_text(encoding="utf-8").strip().lower()
     except OSError:
         return ""
-
-
-# ---- distro ------------------------------------------------------------------
 
 
 def distro_family(root: Path = ROOT) -> str:
@@ -109,19 +118,14 @@ def driver_fix(family: str, root: Path = ROOT) -> str:
     if family == "arch":
         return "paru -S intel-npu-driver (AUR; needs level-zero-loader)"
     if family == "suse":
-        # Tumbleweed and Leap 16 package it (checked 2026-11-05). It's the
-        # user-mode driver only, built with ENABLE_NPU_COMPILER_BUILD=OFF, so
-        # the compiler note still applies; firmware is in kernel-firmware-intel.
-        # It doesn't require the Level Zero loader (level-zero), unlike
-        # Fedora's rpm and Intel's debs, so name it too.
+        # Tumbleweed and Leap 16 package the user-mode driver only, without the
+        # compiler, and unlike Fedora's rpm it doesn't pull in the Level Zero
+        # loader (checked 2026-11-05).
         return distro.install_command(["libze_intel_npu1", "level-zero"], root, fam=family)
     return (
         "install intel-level-zero-npu, intel-driver-compiler-npu and intel-fw-npu from "
         f"{NPU_RELEASES_URL} (`sudo dpkg -i ./*.deb` on Debian/Ubuntu)"
     )
-
-
-# ---- kernel side -------------------------------------------------------------
 
 
 def intel_npus(root: Path = ROOT) -> list[str]:
@@ -198,9 +202,6 @@ def npu_preflight(root: Path = ROOT, access: Callable[[Path, int], bool] = os.ac
             )
         )
     return notes
-
-
-# ---- userspace ---------------------------------------------------------------
 
 
 def library_dirs(root: Path = ROOT, env: Mapping[str, str] | None = None) -> list[Path]:

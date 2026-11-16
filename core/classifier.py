@@ -6,8 +6,14 @@ import re
 import unicodedata
 from enum import Enum
 
-# What a rich-text copy leaves behind: object replacement, zero-width spaces, BOM, soft hyphen
-_INVISIBLE_CHARS = "\ufffc\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e"
+_OBJECT_REPLACEMENT = "\ufffc"
+_ZERO_WIDTH = "\u200b\u200c\u200d\u2060\ufeff\u180e"
+_SOFT_HYPHEN = "\u00ad"
+_INVISIBLE_CHARS = _OBJECT_REPLACEMENT + _ZERO_WIDTH + _SOFT_HYPHEN
+
+
+def _words(text: str) -> frozenset[str]:
+    return frozenset(text.split())
 
 
 class ContentType(Enum):
@@ -23,559 +29,133 @@ _NAKED_URL_RE = re.compile(
     r"^(www\.)?[\w-]+(\.[\w-]+)+(/\S*)?$",
     re.IGNORECASE,
 )
-# A naked URL needs one of these, or "foo.bar" (code, as often) would be a link
-_LIKELY_TLDS = {
-    "com",
-    "no",
-    "org",
-    "net",
-    "io",
-    "dev",
-    "app",
-    "ai",
-    "co",
-    "edu",
-    "gov",
-    "uk",
-    "de",
-    "se",
-    "dk",
-    "fi",
-    "fr",
-    "it",
-    "es",
-    "nl",
-    "be",
-    "ch",
-    "at",
-    "pl",
-    "cz",
-    "ru",
-    "jp",
-    "cn",
-    "in",
-    "au",
-    "ca",
-    "br",
-    "mx",
-    "info",
-    "biz",
-    "me",
-    "tv",
-    "us",
-    "eu",
-    "xyz",
-    "site",
-    "online",
-    "store",
-    "shop",
-    "blog",
-}
-# No dots inside a domain label: test_email_regex_is_linear
+_LIKELY_TLDS = _words("""
+    com no org net io dev app ai co edu gov uk de se dk fi fr it es nl be ch at
+    pl cz ru jp cn in au ca br mx info biz me tv us eu xyz site online store shop blog
+""")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
-_EMAIL_MAX_LEN = 320  # RFC 3696 / 5321 upper bound for an address
+_RFC_5321_MAX_ADDRESS_LEN = 320
 _PATH_RE = re.compile(r"^(/|~/|\./)[^\s]*$")
 
-# First words that read as a shell command
-_COMMAND_TOKENS = {
-    # package managers
-    "sudo",
-    "doas",
-    "apt",
-    "apt-get",
-    "aptitude",
-    "pacman",
-    "paru",
-    "yay",
-    "dnf",
-    "yum",
-    "zypper",
-    "snap",
-    "flatpak",
-    "brew",
-    "nix",
-    "nix-env",
-    "nix-build",
-    "nix-shell",
-    "nix-store",
-    "apk",
-    "xbps-install",
-    "xbps-query",
-    "eopkg",
-    "emerge",
-    # version control + build
-    "git",
-    "svn",
-    "hg",
-    "lazygit",
-    "tig",
-    "gh",
-    "glab",
-    "docker",
-    "podman",
-    "nerdctl",
-    "lima",
-    "kubectl",
-    "helm",
-    "kustomize",
-    "terraform",
-    "ansible",
-    "ansible-playbook",
-    "vagrant",
-    "packer",
-    "make",
-    "cmake",
-    "ninja",
-    "meson",
-    "gradle",
-    "mvn",
-    "just",
-    "bazel",
-    # file management
-    "ls",
-    "ll",
-    "la",
-    "eza",
-    "exa",
-    "cd",
-    "pwd",
-    "cp",
-    "mv",
-    "rm",
-    "mkdir",
-    "rmdir",
-    "chmod",
-    "chown",
-    "chgrp",
-    "ln",
-    "touch",
-    "stat",
-    "file",
-    "tree",
-    "mc",
-    "ranger",
-    "lf",
-    "nnn",
-    "vifm",
-    # viewing / paging / text inspection
-    "cat",
-    "bat",
-    "tac",
-    "tail",
-    "head",
-    "less",
-    "more",
-    "view",
-    "grep",
-    "egrep",
-    "fgrep",
-    "rg",
-    "ag",
-    "ack",
-    "sed",
-    "awk",
-    "cut",
-    "paste",
-    "tr",
-    "sort",
-    "uniq",
-    "wc",
-    "tee",
-    "column",
-    "fold",
-    "fmt",
-    "nl",
-    "find",
-    "fd",
-    "locate",
-    "xargs",
-    "tar",
-    "gzip",
-    "gunzip",
-    "zip",
-    "unzip",
-    "7z",
-    "unrar",
-    "diff",
-    "patch",
-    "cmp",
-    "jq",
-    "yq",
-    # network
-    "ssh",
-    "mosh",
-    "scp",
-    "sftp",
-    "rsync",
-    "curl",
-    "wget",
-    "httpie",
-    "http",
-    "ping",
-    "traceroute",
-    "tracepath",
-    "mtr",
-    "dig",
-    "nslookup",
-    "host",
-    "whois",
-    "netstat",
-    "ss",
-    "ip",
-    "ifconfig",
-    "iwconfig",
-    "iwctl",
-    "nmap",
-    "ncat",
-    "nc",
-    "socat",
-    "nmcli",
-    "networkctl",
-    "wpa_cli",
-    "ufw",
-    "iptables",
-    "nftables",
-    "firewall-cmd",
-    # process / system
-    "ps",
-    "kill",
-    "killall",
-    "pkill",
-    "pgrep",
-    "top",
-    "htop",
-    "btop",
-    "atop",
-    "systemctl",
-    "journalctl",
-    "service",
-    "dmesg",
-    "uptime",
-    "df",
-    "du",
-    "duf",
-    "ncdu",
-    "free",
-    "lsof",
-    "fuser",
-    "mount",
-    "umount",
-    "uname",
-    "hostname",
-    "whoami",
-    "id",
-    "who",
-    "w",
-    "groups",
-    "crontab",
-    "at",
-    "lsblk",
-    "blkid",
-    "fdisk",
-    "parted",
-    "dd",
-    "mkfs",
-    "swapon",
-    "swapoff",
-    # editors
-    "vim",
-    "vi",
-    "nano",
-    "emacs",
-    "code",
-    "codium",
-    "gedit",
-    "kate",
-    "nvim",
-    "helix",
-    "hx",
-    "micro",
-    "subl",
-    # languages / runtimes
-    "python",
-    "python3",
-    "pip",
-    "pip3",
-    "pipx",
-    "uv",
-    "poetry",
-    "pdm",
-    "rye",
-    "pytest",
-    "black",
-    "ruff",
-    "mypy",
-    "flake8",
-    "isort",
-    "tox",
-    "twine",
-    "node",
-    "nodejs",
-    "npm",
-    "yarn",
-    "pnpm",
-    "npx",
-    "deno",
-    "bun",
-    "tsx",
-    "tsc",
-    "eslint",
-    "prettier",
-    "jest",
-    "vitest",
-    "mocha",
-    "vite",
-    "webpack",
-    "cargo",
-    "rustc",
-    "rustup",
-    "rustfmt",
-    "clippy",
-    "go",
-    "java",
-    "javac",
-    "kotlin",
-    "scala",
-    "sbt",
-    "ruby",
-    "gem",
-    "bundle",
-    "rake",
-    "rails",
-    "irb",
-    "perl",
-    "cpan",
-    "php",
-    "composer",
-    "dotnet",
-    "mono",
-    "swift",
-    "lua",
-    "luarocks",
-    "julia",
-    "crystal",
-    "shards",
-    "mix",
-    "iex",
-    # databases
-    "psql",
-    "mysql",
-    "sqlite3",
-    "redis-cli",
-    "mongo",
-    "mongosh",
-    "duckdb",
-    # cloud / devops CLIs
-    "aws",
-    "gcloud",
-    "az",
-    "doctl",
-    "linode-cli",
-    "fly",
-    "flyctl",
-    "k9s",
-    "stern",  # kubectl deliberately duplicated
-    # shell builtins / general
-    "echo",
-    "printf",
-    "export",
-    "source",
-    "alias",
-    "unalias",
-    "bash",
-    "sh",
-    "zsh",
-    "fish",
-    "dash",
-    "nu",
-    "elvish",
-    "env",
-    "which",
-    "type",
-    "whereis",
-    "command",
-    "date",
-    "cal",
-    "sleep",
-    "watch",
-    "time",
-    "timeout",
-    "man",
-    "info",
-    "help",
-    "tldr",
-    "history",
-    "exit",
-    "logout",
-    "clear",
-    "reset",
-    "nohup",
-    "screen",
-    "tmux",
-    "tmate",
-    # media / conversion
-    "ffmpeg",
-    "ffprobe",
-    "magick",
-    "convert",
-    "sox",
-    "pandoc",
-    "yt-dlp",
-    "youtube-dl",
-    # backup / sync
-    "restic",
-    "borg",
-    "rclone",
-    "rsnapshot",
-    "duplicity",
-    # X11 / desktop helpers commonly used in tutorials
-    "xdotool",
-    "xclip",
-    "xsel",
-    "wmctrl",
-    "xrandr",
-    "xprop",
-    "xev",
-    "notify-send",
-    "xdg-open",
-    # env tools
-    "direnv",
-    "asdf",
-    "mise",
-    "nvm",
-    "pyenv",
-    "rbenv",
-    "fnm",
-    "volta",
-    # KDE / Plasma / Qt desktop tools
-    "kquitapp6",
-    "kquitapp5",
-    "kquitapp",
-    "kstart6",
-    "kstart5",
-    "kstart",
-    "kwriteconfig6",
-    "kwriteconfig5",
-    "kreadconfig6",
-    "kreadconfig5",
-    "qdbus",
-    "qdbus6",
-    "qdbus-qt6",
-    "kcmshell6",
-    "kcmshell5",
-    "systemsettings",
-    "kded6",
-    "kbuildsycoca6",
-    "kioclient6",
-    "kscreen-doctor",
-    "krunner",
-    "plasmashell",
-    "kwin_wayland",
-    "kwin_x11",
-    "kwin",
-    "kactivities-cli",
-    "balooctl6",
-    "balooctl",
-    "kdialog",
-    "kdeconnect-cli",
-    "kompare",
-    "loginctl",
-    "busctl",
-    "gdbus",
-    "gtk-launch",
-    # audio (PipeWire / PulseAudio / ALSA)
-    "wpctl",
-    "pactl",
-    "pacmd",
-    "pw-cli",
-    "pw-play",
-    "pw-record",
-    "pw-dump",
-    "pw-metadata",
-    "amixer",
-    "alsamixer",
-    "speaker-test",
-    "aplay",
-    "arecord",
-    # desktop / wayland helpers
-    "gsettings",
-    "dconf",
-    "xdg-settings",
-    "xdg-mime",
-    "wl-copy",
-    "wl-paste",
-    "ydotool",
-    "wtype",
-    "grim",
-    "slurp",
-    "spectacle",
-    "okular",
-    "dolphin",
-    # hyphenated tools usually run with a bare argument, which _HYPHEN_NAME_RE alone won't accept
-    "gnome-terminal",
-    "gnome-extensions",
-    "gtk-update-icon-cache",
-    "systemd-run",
-    "systemd-analyze",
-    "dpkg-reconfigure",
-    "dpkg-query",
-    "update-alternatives",
-    "update-initramfs",
-    "update-grub",
-    "grub2-mkconfig",
-    "flatpak-spawn",
-    "docker-compose",
-    "ssh-keygen",
-    "ssh-copy-id",
-    "ssh-add",
-    "rpm-ostree",
-}
+_PACKAGE_MANAGERS = _words("""
+    sudo doas apt apt-get aptitude pacman paru yay dnf yum zypper snap flatpak brew nix
+    nix-env nix-build nix-shell nix-store apk xbps-install xbps-query eopkg emerge
+""")
+_VCS_AND_BUILD_TOOLS = _words("""
+    git svn hg lazygit tig gh glab docker podman nerdctl lima kubectl helm kustomize
+    terraform ansible ansible-playbook vagrant packer make cmake ninja meson gradle mvn
+    just bazel
+""")
+_FILE_TOOLS = _words("""
+    ls ll la eza exa cd pwd cp mv rm mkdir rmdir chmod chown chgrp ln touch stat file
+    tree mc ranger lf nnn vifm
+""")
+_TEXT_TOOLS = _words("""
+    cat bat tac tail head less more view grep egrep fgrep rg ag ack sed awk cut paste tr
+    sort uniq wc tee column fold fmt nl find fd locate xargs tar gzip gunzip zip unzip
+    7z unrar diff patch cmp jq yq
+""")
+_NETWORK_TOOLS = _words("""
+    ssh mosh scp sftp rsync curl wget httpie http ping traceroute tracepath mtr dig
+    nslookup host whois netstat ss ip ifconfig iwconfig iwctl nmap ncat nc socat nmcli
+    networkctl wpa_cli ufw iptables nftables firewall-cmd
+""")
+_SYSTEM_TOOLS = _words("""
+    ps kill killall pkill pgrep top htop btop atop systemctl journalctl service dmesg
+    uptime df du duf ncdu free lsof fuser mount umount uname hostname whoami id who w
+    groups crontab at lsblk blkid fdisk parted dd mkfs swapon swapoff
+""")
+_EDITORS = _words("""
+    vim vi nano emacs code codium gedit kate nvim helix hx micro subl
+""")
+_LANGUAGE_TOOLS = _words("""
+    python python3 pip pip3 pipx uv poetry pdm rye pytest black ruff mypy flake8 isort
+    tox twine node nodejs npm yarn pnpm npx deno bun tsx tsc eslint prettier jest vitest
+    mocha vite webpack cargo rustc rustup rustfmt clippy go java javac kotlin scala sbt
+    ruby gem bundle rake rails irb perl cpan php composer dotnet mono swift lua luarocks
+    julia crystal shards mix iex
+""")
+_DATABASE_CLIENTS = _words("""
+    psql mysql sqlite3 redis-cli mongo mongosh duckdb
+""")
+_CLOUD_CLIS = _words("""
+    aws gcloud az doctl linode-cli fly flyctl k9s stern
+""")
+_SHELL_BUILTINS = _words("""
+    echo printf export source alias unalias bash sh zsh fish dash nu elvish env which
+    type whereis command date cal sleep watch time timeout man info help tldr history
+    exit logout clear reset nohup screen tmux tmate
+""")
+_MEDIA_TOOLS = _words("""
+    ffmpeg ffprobe magick convert sox pandoc yt-dlp youtube-dl
+""")
+_BACKUP_TOOLS = _words("""
+    restic borg rclone rsnapshot duplicity
+""")
+_X11_TOOLS = _words("""
+    xdotool xclip xsel wmctrl xrandr xprop xev notify-send xdg-open
+""")
+_VERSION_MANAGERS = _words("""
+    direnv asdf mise nvm pyenv rbenv fnm volta
+""")
+_KDE_TOOLS = _words("""
+    kquitapp6 kquitapp5 kquitapp kstart6 kstart5 kstart kwriteconfig6 kwriteconfig5
+    kreadconfig6 kreadconfig5 qdbus qdbus6 qdbus-qt6 kcmshell6 kcmshell5 systemsettings
+    kded6 kbuildsycoca6 kioclient6 kscreen-doctor krunner plasmashell kwin_wayland
+    kwin_x11 kwin kactivities-cli balooctl6 balooctl kdialog kdeconnect-cli kompare
+    loginctl busctl gdbus gtk-launch
+""")
+_AUDIO_TOOLS = _words("""
+    wpctl pactl pacmd pw-cli pw-play pw-record pw-dump pw-metadata amixer alsamixer
+    speaker-test aplay arecord
+""")
+_DESKTOP_TOOLS = _words("""
+    gsettings dconf xdg-settings xdg-mime wl-copy wl-paste ydotool wtype grim slurp
+    spectacle okular dolphin
+""")
+_HYPHENATED_TOOLS = _words("""
+    gnome-terminal gnome-extensions gtk-update-icon-cache systemd-run systemd-analyze
+    dpkg-reconfigure dpkg-query update-alternatives update-initramfs update-grub
+    grub2-mkconfig flatpak-spawn docker-compose ssh-keygen ssh-copy-id ssh-add
+    rpm-ostree
+""")
+_COMMAND_TOKENS = (
+    _PACKAGE_MANAGERS
+    | _VCS_AND_BUILD_TOOLS
+    | _FILE_TOOLS
+    | _TEXT_TOOLS
+    | _NETWORK_TOOLS
+    | _SYSTEM_TOOLS
+    | _EDITORS
+    | _LANGUAGE_TOOLS
+    | _DATABASE_CLIENTS
+    | _CLOUD_CLIS
+    | _SHELL_BUILTINS
+    | _MEDIA_TOOLS
+    | _BACKUP_TOOLS
+    | _X11_TOOLS
+    | _VERSION_MANAGERS
+    | _KDE_TOOLS
+    | _AUDIO_TOOLS
+    | _DESKTOP_TOOLS
+    | _HYPHENATED_TOOLS
+)
 
-# Command names that are also everyday words ("make sure", "file a bug").
-# They count only with evidence in the same segment: _has_evidence.
-_AMBIGUOUS_COMMANDS = frozenset(
-    {
-        # package managers / build
-        "apt", "apk", "snap", "brew", "nix", "yay", "emerge",
-        "make", "just", "ninja", "meson", "packer", "vagrant", "helm", "lima",
-        # files / text
-        "la", "file", "tree", "touch", "stat", "ranger",
-        "cat", "bat", "less", "more", "view", "head", "tail", "cut", "paste",
-        "sort", "column", "fold", "tee", "find", "locate", "tar", "zip",
-        "patch", "diff", "ack",
-        # network
-        "mosh", "curl", "http", "ping", "dig", "host", "ip",
-        # system
-        "ps", "kill", "top", "atop", "service", "uptime", "du", "free",
-        "mount", "hostname", "who", "w", "groups", "at", "id", "parted",
-        # editors
-        "vim", "code", "kate", "micro", "nano", "helix",
-        # languages / runtimes
-        "python", "black", "poetry", "rye", "twine", "node", "prettier",
-        "jest", "mocha", "cargo", "go", "java", "swift", "ruby", "gem",
-        "bundle", "rake", "rails", "perl", "php", "composer", "mono",
-        "lua", "julia", "crystal", "shards", "mix", "yarn", "bun", "uv",
-        # cloud
-        "az", "fly", "stern",
-        # shell builtins / general
-        "echo", "export", "source", "alias", "bash", "sh", "fish", "dash",
-        "nu", "elvish", "env", "which", "type", "command", "date", "cal",
-        "sleep", "watch", "time", "timeout", "man", "info", "help", "tldr",
-        "history", "exit", "logout", "clear", "reset", "screen",
-        # media / backup / desktop
-        "convert", "sox", "borg", "duplicity", "mise", "volta",
-        "grim", "slurp", "spectacle", "dolphin",
-    }
-)  # fmt: skip
+_AMBIGUOUS_COMMANDS = _words("""
+    apt apk snap brew nix yay emerge make just ninja meson packer vagrant helm lima la
+    file tree touch stat ranger cat bat less more view head tail cut paste sort column
+    fold tee find locate tar zip patch diff ack mosh curl http ping dig host ip ps kill
+    top atop service uptime du free mount hostname who w groups at id parted vim code
+    kate micro nano helix python black poetry rye twine node prettier jest mocha cargo
+    go java swift ruby gem bundle rake rails perl php composer mono lua julia crystal
+    shards mix yarn bun uv az fly stern echo export source alias bash sh fish dash nu
+    elvish env which type command date cal sleep watch time timeout man info help tldr
+    history exit logout clear reset screen convert sox borg duplicity mise volta grim
+    slurp spectacle dolphin
+""")
 _UNAMBIGUOUS_COMMANDS = frozenset(_COMMAND_TOKENS - _AMBIGUOUS_COMMANDS)
 
 
-def _words(text: str) -> frozenset[str]:
-    return frozenset(text.split())
-
-
-# Second words that settle an ambiguous command ("make install"), kept to
-# verbs prose rarely puts there: test_go_run_and_go_get_are_not_subcommands
 _SUBCOMMANDS: dict[str, frozenset[str]] = {
     "apt": _words(
         "install update upgrade remove purge autoremove search show list full-upgrade policy"
@@ -599,34 +179,37 @@ _SUBCOMMANDS: dict[str, frozenset[str]] = {
     "helm": _words("install upgrade repo list uninstall template"),
     "vagrant": _words("up ssh halt destroy provision reload status"),
 }
-# Ambiguous commands whose usual argument is a host or URL ("ping 1.1.1.1")
 _HOST_ARG_COMMANDS = frozenset({"curl", "http", "ping", "dig", "host", "mosh"})
-# ... or a number ("kill 1234", "sleep 5")
 _COUNT_ARG_COMMANDS = frozenset({"kill", "sleep"})
 
-# Shell-only syntax: any one of these, anywhere, makes the selection a command.
-# Flags, paths, redirects and single pipes are judged per segment instead.
-_COMMAND_HINTS = re.compile(
-    r"&&|\|\||"  # logical and/or - shell-only operators
-    r"\$\(|\$\{|"  # command substitution / parameter expansion
-    r"<<-?\s*['\"]?[A-Za-z_]\w*"  # heredoc
-)
-_COMMAND_HINTS_MAX_LEN = 4000  # no regex over a longer selection
+_LOGICAL_OPERATOR = r"&&|\|\|"
+_SUBSTITUTION = r"\$\(|\$\{"
+_HEREDOC_START = r"<<-?\s*['\"]?[A-Za-z_]\w*"
+_COMMAND_HINTS = re.compile("|".join((_LOGICAL_OPERATOR, _SUBSTITUTION, _HEREDOC_START)))
+_COMMAND_HINTS_MAX_LEN = 4000
 
-# Captured, so _line_is_command knows which separator came before each segment
 _SHELL_SEP_RE = re.compile(r"(&&|\|\||;|\|)")
 
-# Evidence, each matched against one whitespace-split word
 _FLAG_RE = re.compile(r"^--?[A-Za-z0-9][\w-]*(?:=\S*)?$")
+_ABSOLUTE_PATH_ARG = r"/[\w.@+-]{2,}|/[\w.@+-]+/"
+_HOME_PATH_ARG = r"~(?:/|$)|~\w"
+_DOT_PATH_ARG = r"\.{1,2}(?:/|$)"
+_DOTFILE_ARG = r"\.[a-z_][\w.-]*"
+_VARIABLE_ARG = r"\$[A-Za-z_{(]"
+_RELATIVE_DIR_ARG = r"[\w.@+-]+/(?:[\w.@+/-]*)?$"
 _PATH_ARG_RE = re.compile(
     r"^(?:"
-    r"/[\w.@+-]{2,}|/[\w.@+-]+/|"  # /etc, /usr/bin/ (not a bare '/s')
-    r"~(?:/|$)|~\w|"  # ~/x, ~, ~user
-    r"\.{1,2}(?:/|$)|"  # ., .., ./x, ../x
-    r"\.[a-z_][\w.-]*|"  # dotfiles: .bashrc, .venv
-    r"\$[A-Za-z_{(]|"  # $HOME, ${x}, $(...)
-    r"[\w.@+-]+/(?:[\w.@+/-]*)?$"  # relative dir: src/, src/foo
-    r")"
+    + "|".join(
+        (
+            _ABSOLUTE_PATH_ARG,
+            _HOME_PATH_ARG,
+            _DOT_PATH_ARG,
+            _DOTFILE_ARG,
+            _VARIABLE_ARG,
+            _RELATIVE_DIR_ARG,
+        )
+    )
+    + r")"
 )
 _FILE_EXT_RE = re.compile(
     r"\w\.(?:sh|bash|zsh|fish|py|pl|rb|js|mjs|ts|go|rs|c|h|cpp|hpp|java|jar|lua|php"
@@ -639,12 +222,10 @@ _ASSIGN_RE = re.compile(r"^[A-Za-z_][\w-]*=")
 _REDIRECT_RE = re.compile(r"^(?:\d?>>?|&>|<)(.*)$")
 _HOST_RE = re.compile(r"^(?:\w+://\S+|[\w-]+(?:\.[\w-]+)+(?::\d+)?)$")
 _COUNT_RE = re.compile(r"^(?:%?\d+[smhd]?)$")
-# An unknown tool's name. No nested quantifiers: test_classify_is_fast_on_adversarial_input
-_BARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_.+]*$")
+_UNKNOWN_TOOL_RE = re.compile(r"^[a-z][a-z0-9_.+]*$")
 _HYPHEN_NAME_RE = re.compile(r"^[a-z][a-z0-9]*-[a-z][\w-]*$")
 _EXEC_PATH_RE = re.compile(r"^(?:\.{1,2}/|~/)\S|^/\S*/s?bin/\S")
 
-# Shell structure: lines that belong to a script but say nothing alone
 _SHELL_NEUTRAL_HEADS = frozenset({"fi", "done", "esac", "then", "else", "do", "}", "{", ")", ";;"})
 _SHELL_OPENERS = frozenset({"if", "elif", "for", "while", "until", "case", "select"})
 _OPENER_TAIL_RE = re.compile(r";\s*(?:then|do)\s*$|\[\[?\s")
@@ -664,17 +245,29 @@ def _is_redirect(tok: str, nxt: str | None) -> bool:
     return bool(_PATH_ARG_RE.match(target) or _FILE_EXT_RE.search(target))
 
 
+def _is_glob(tok: str) -> bool:
+    """'*.txt', 'src/*' or '*', but not markdown's '*emphasis*' (pinned by
+    `tests/test_classifier.py::test_markdown_emphasis_is_not_a_glob`)."""
+    return "*" in tok and (tok == "*" or "." in tok or "/" in tok)
+
+
 def _token_is_evidence(tok: str, nxt: str | None) -> bool:
     if _FLAG_RE.match(tok) or _PATH_ARG_RE.match(tok) or _FILE_EXT_RE.search(tok):
         return True
     if _ASSIGN_RE.match(tok) or _is_redirect(tok, nxt):
         return True
-    # glob: '*.txt', 'src/*', '*' - not markdown '*emphasis*'
-    return "*" in tok and (tok == "*" or "." in tok or "/" in tok)
+    return _is_glob(tok)
 
 
 def _has_evidence(head: str, args: list[str]) -> bool:
-    """Does the rest of a segment back up an ambiguous command word?"""
+    """Does the rest of a segment back up an ambiguous command word? A known
+    subcommand, a host for ping-like commands, a number for kill and sleep,
+    or a flag, path, file, assignment, redirect or glob anywhere (pinned by
+    `tests/test_classifier.py::test_go_run_and_go_get_are_not_subcommands`,
+    `tests/test_classifier.py::test_ping_counts_with_a_host`,
+    `tests/test_classifier.py::test_ping_without_a_host_is_prose`,
+    `tests/test_classifier.py::test_kill_counts_with_a_pid`,
+    `tests/test_classifier.py::test_kill_without_a_number_is_prose`)."""
     if args:
         first = args[0]
         if first in _SUBCOMMANDS.get(head, ()) or first in _UNAMBIGUOUS_COMMANDS:
@@ -689,13 +282,24 @@ def _has_evidence(head: str, args: list[str]) -> bool:
     )
 
 
-def _segment_is_command(segment: str, *, prompted: bool, piped_into_command: bool) -> bool:
-    """One ;/&&/||/| separated piece of a line. 'prompted' means the line
-    had a '$ ' or root '# ' prompt, which is evidence on its own."""
-    tokens = segment.split()
-    # leading env assignments: 'FOO=1 make', 'LANG=C sort'
+def _without_env_assignments(tokens: list[str]) -> list[str]:
+    """'FOO=1 make' -> ['make']."""
     while tokens and _ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
+    return tokens
+
+
+def _segment_is_command(segment: str, *, prompted: bool, piped_into_command: bool) -> bool:
+    """One ;/&&/||/| separated piece of a line. 'prompted' means the line
+    had a '$ ' or root '# ' prompt, which is evidence on its own. A word that
+    is everyday English needs evidence (pinned by
+    `tests/test_classifier.py::test_prose_is_not_a_command`); an unknown
+    tool needs a flag, as a path after a word is as often prose (pinned by
+    `tests/test_classifier.py::test_an_unknown_tool_counts_with_a_flag_but_not_with_a_path`);
+    a listed hyphenated tool needs nothing (pinned by
+    `tests/test_classifier.py::test_a_listed_hyphenated_tool_counts_with_a_bare_argument`,
+    `tests/test_classifier.py::test_an_unlisted_hyphenated_word_needs_evidence`)."""
+    tokens = _without_env_assignments(segment.split())
     if not tokens:
         return False
     head = tokens[0].lstrip("({!")
@@ -704,8 +308,7 @@ def _segment_is_command(segment: str, *, prompted: bool, piped_into_command: boo
         return True
     if head in _AMBIGUOUS_COMMANDS or _HYPHEN_NAME_RE.match(head):
         return prompted or piped_into_command or _has_evidence(head, args)
-    if _BARE_NAME_RE.match(head):
-        # An unknown word before a path is as often prose ("in /etc you'll find")
+    if _UNKNOWN_TOOL_RE.match(head):
         return bool(args) and bool(_FLAG_RE.match(args[0]))
     return False
 
@@ -767,7 +370,9 @@ def _looks_like_command(stripped: str) -> bool:
 
     still classifies, while a hard-wrapped paragraph with one line that
     starts "at the end..." doesn't. A shebang, or any '$ cmd' prompt line
-    (a copied terminal session, output lines and all), settles it.
+    (a copied terminal session, output lines and all), settles it (pinned by
+    `tests/test_classifier.py::test_real_commands_stay_commands`,
+    `tests/test_classifier.py::test_prose_is_not_a_command`).
     """
     commands = prose = 0
     continued = False
@@ -791,7 +396,7 @@ def _looks_like_command(stripped: str) -> bool:
             if body and _line_is_command(body, prompted=True):
                 return True
         elif body.startswith("#"):
-            continue  # comment / markdown heading
+            continue
         heredoc = _HEREDOC_RE.search(body)
         if heredoc:
             heredoc_end = heredoc.group(1)
@@ -851,6 +456,30 @@ def _normalize(text: str) -> str:
     return cleaned.strip()
 
 
+def _is_naked_url(s: str) -> bool:
+    """A scheme-less URL, which needs a likely TLD so code like "foo.bar"
+    stays text (pinned by `tests/test_classifier.py::test_a_naked_url_needs_a_likely_tld`)."""
+    if not _NAKED_URL_RE.match(s) or "@" in s:
+        return False
+    host = s.split("/", 1)[0]
+    return host.rsplit(".", 1)[-1].lower() in _LIKELY_TLDS
+
+
+def _is_email(s: str) -> bool:
+    """No dots inside a domain label, so the regex stays linear (pinned by
+    `tests/test_classifier.py::test_email_regex_is_linear`,
+    `tests/test_classifier.py::test_email_still_matches_real_addresses`)."""
+    return len(s) <= _RFC_5321_MAX_ADDRESS_LEN and bool(_EMAIL_RE.match(s))
+
+
+def _has_shell_only_syntax(s: str) -> bool:
+    """&&, ||, $( ), ${ } or a heredoc anywhere is a command, in a selection
+    short enough to search (pinned by
+    `tests/test_classifier.py::test_a_shell_operator_in_prose_is_enough_up_to_the_length_cap`).
+    Flags, paths, redirects and single pipes are judged per segment instead."""
+    return len(s) < _COMMAND_HINTS_MAX_LEN and bool(_COMMAND_HINTS.search(s))
+
+
 def classify(text: str) -> ContentType:
     """Best-effort classification of a single selection."""
     if not text:
@@ -860,23 +489,14 @@ def classify(text: str) -> ContentType:
     if not stripped:
         return ContentType.PLAIN_TEXT
 
-    if _URL_RE.match(stripped):
+    if _URL_RE.match(stripped) or _is_naked_url(stripped):
         return ContentType.URL
-    if _NAKED_URL_RE.match(stripped) and "@" not in stripped:
-        host = stripped.split("/", 1)[0]
-        tld = host.rsplit(".", 1)[-1].lower()
-        if tld in _LIKELY_TLDS:
-            return ContentType.URL
-    if len(stripped) <= _EMAIL_MAX_LEN and _EMAIL_RE.match(stripped):
+    if _is_email(stripped):
         return ContentType.EMAIL
     if "\n" not in stripped and _PATH_RE.match(stripped):
         return ContentType.PATH
-
-    if _looks_like_command(stripped):
+    if _looks_like_command(stripped) or _has_shell_only_syntax(stripped):
         return ContentType.COMMAND
-    if len(stripped) < _COMMAND_HINTS_MAX_LEN and _COMMAND_HINTS.search(stripped):
-        return ContentType.COMMAND
-
     return ContentType.PLAIN_TEXT
 
 

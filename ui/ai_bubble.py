@@ -1,16 +1,11 @@
 """The floating result bubble the AI actions share.
 
-Summarize, rewrite, explain and translate all show their answer the same
-way: a small bubble just below the selection that streams the model's
-text in as it is generated, with Copy (and, for rewrite, Replace) chips.
-The bubble never takes keyboard focus, so the source app keeps its
-selection and Replace can paste straight over it. When the action was run
-from the keyboard (the hotkey popup), the chips are driven through X11 key
-grabs instead, the way the popup is: Left/Right/Tab pick a chip, Enter runs
-it, Esc closes. Wayland has no such grab, so there it stays pointer-only.
-
-Placement goes through the platform backend: gtk4-layer-shell where the
-compositor has it (KDE, wlroots) and X11 window moves under X11/XWayland.
+A small bubble just below the pointer streams the model's text in, with
+Copy (and, for rewrite, Replace) chips. It never takes keyboard focus, so
+the source app keeps its selection and Replace pastes straight over it.
+When the action was run from the keyboard, the chips are driven through X11
+key grabs as the popup's are; Wayland has no such grab, so there it is
+pointer-only. Placement goes through the platform backend.
 """
 
 from __future__ import annotations
@@ -67,14 +62,12 @@ button.vinopop-ai-chip.vinopop-selected {
 
 _css_installed = False
 
-# A slow first load (download + compile) can take a while; only an idle
-# bubble times out, never one that is still streaming.
 _IDLE_TIMEOUT_S = 45
-# ...but a run that goes quiet this long while busy is hung: give up on it,
-# so the bubble can't stay up forever if it never reports done.
 _STALL_TIMEOUT_S = 300
-# Share of the monitor height the answer may take before it scrolls.
-_MAX_HEIGHT_FRACTION = 0.6
+_STALL_CHECK_S = 30
+_MAX_HEIGHT_FRACTION_OF_MONITOR = 0.6
+_POINTER_GAP = 24
+_EDGE_PAD = 4
 # Keys grabbed while a keyboard-opened bubble is up: keysym name -> also
 # grab with Shift. No Space or arrows up/down: the grab holds them from the
 # source app for as long as the bubble is up, and someone may type on.
@@ -140,12 +133,14 @@ def _logical_anchor(x: int, y: int, is_logical: bool) -> tuple[float, float, Gdk
 def _bubble_target(lx: float, ly: float, w: int, h: int, geom) -> tuple[int, int]:
     """Top-left for a w x h bubble just below logical (lx, ly), centred on
     it, flipped above when there's no room and kept inside `geom` (the
-    monitor's usable area)."""
+    monitor's usable area) (pinned by
+    `tests/test_placement.py::test_ai_bubble_flips_above_near_the_bottom`,
+    `tests/test_placement.py::test_ai_bubble_stays_on_its_monitor`)."""
     tx = int(lx - w / 2)
-    ty = int(ly + 24)
+    ty = int(ly + _POINTER_GAP)
     if geom is not None:
-        if ty + h > geom.y + geom.height - 4:
-            ty = int(ly - h - 24)
+        if ty + h > geom.y + geom.height - _EDGE_PAD:
+            ty = int(ly - h - _POINTER_GAP)
         tx, ty = clamp_to_area(tx, ty, w, h, geom)
     return tx, ty
 
@@ -165,15 +160,12 @@ class ResultBubble:
         keyboard: bool = False,
     ) -> None:
         self._x, self._y = x, y
-        # Opened from the keyboard: grab the chip keys once it's up
         self._keyboard = keyboard
         self._kbd_xdpy = None
         self._kbd_grab = None
         self._kbd_index = 0
         self._text = ""
         self._busy = True
-        # Set when the answer is incomplete (input cut or output capped):
-        # Replace would paste a partial text over the whole selection.
         self._incomplete = False
         self._dismiss_id: int | None = None
         self._pointer_in_bubble = False
@@ -184,10 +176,8 @@ class ResultBubble:
         self._last_activity = time.monotonic()
         self._replace_id: int | None = None
         self._placed_size = (0, 0)
-        # Set once destroyed, so late idle callbacks from a worker don't
-        # touch dead widgets and a timeout + outside click can't race.
+        # Late idle callbacks from a worker must not touch dead widgets
         self._dead = False
-        # Bumped by restart(); a run's sink (for_run) is ignored once stale.
         self._gen = 0
 
         _install_css()
@@ -197,16 +187,13 @@ class ResultBubble:
         self.win.set_resizable(False)
         self.win.add_css_class("vinopop-ai")
 
-        # "leave" only fires when the pointer leaves the whole window, so
-        # crossings between child widgets need no filtering.
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         motion.connect("leave", self._on_leave)
-        # Same stale-crossing problem as the popup: motion still fires.
+        # Same stale crossing as the popup's: motion still fires
         motion.connect("motion", lambda _c, x, y: self._on_enter(_c, x, y))
         self.win.add_controller(motion)
-        # Only reaches us if the compositor focused the bubble anyway; the
-        # usual unfocused case is covered by the X11 poll (_start_watchers).
+        # Only reaches us if the compositor focused the bubble anyway
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
         self.win.add_controller(keys)
@@ -220,8 +207,6 @@ class ResultBubble:
         self._title_lbl = Gtk.Label(label=title, xalign=0)
         self._title_lbl.add_css_class("vinopop-ai-title")
         header.append(self._title_lbl)
-        # Spins until the first word arrives: a model can take seconds
-        # before it says anything (~5 s for an image on the NPU).
         self._spinner = Gtk.Spinner()
         header.append(self._spinner)
         if header_widget is not None:
@@ -254,8 +239,7 @@ class ResultBubble:
         self._text_lbl.set_focusable(False)
         self._text_lbl.add_css_class("vinopop-ai-text")
         self._text_lbl.set_vexpand(True)
-        # A long answer (an 800-token translation is ~60 lines) scrolls
-        # instead of running off the screen; _place caps the height.
+        # _place caps the height to the monitor
         self._scroll = Gtk.ScrolledWindow()
         self._scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._scroll.set_propagate_natural_width(True)
@@ -280,7 +264,6 @@ class ResultBubble:
         btn.connect("clicked", cb)
         return btn
 
-    # ---- placement (via platform_backend) --------------------------------
     def present(self) -> None:
         backend = _backend()
         if backend is not None:
@@ -292,13 +275,13 @@ class ResultBubble:
         self._start_watchers()
         if self._keyboard:
             self._kbd_start()
-        self._stall_id = GLib.timeout_add_seconds(30, self._check_stall)
+        self._stall_id = GLib.timeout_add_seconds(_STALL_CHECK_S, self._check_stall)
 
     def _place(self, backend) -> None:
         is_logical = bool(getattr(backend, "pointer_is_logical", True))
         lx, ly, geom = _logical_anchor(self._x, self._y, is_logical)
         if geom is not None:
-            self._scroll.set_max_content_height(int(geom.height * _MAX_HEIGHT_FRACTION))
+            self._scroll.set_max_content_height(int(geom.height * _MAX_HEIGHT_FRACTION_OF_MONITOR))
         _, nat = self.win.get_preferred_size()
         w, h = max(nat.width, 1), max(nat.height, 1)
         self._placed_size = (w, h)
@@ -308,11 +291,11 @@ class ResultBubble:
 
     def _queue_replace(self) -> None:
         """Re-place once the streamed text has grown the bubble, so it stays
-        on screen and, when it sits above the pointer, grows up rather than
-        down over the selection. Width counts too: the window grows right
-        from its left edge, so a one-line answer that widens the bubble near
-        the right edge ran off screen (#97). Coalesced: tokens arrive many
-        per frame."""
+        on screen and, above the pointer, grows up rather than over the
+        selection. Width counts too: the window grows right from its left
+        edge (pinned by
+        `tests/test_placement.py::test_ai_bubble_re_places_when_only_the_width_grows`).
+        Coalesced: tokens arrive many per frame."""
         if self._replace_id is None and not self._dead:
             self._replace_id = GLib.idle_add(self._replace_now)
 
@@ -348,7 +331,6 @@ class ResultBubble:
             return self._kbd_key(*keyboard_nav.key_from_event(keyval, state))
         return False
 
-    # ---- keyboard (#124) -------------------------------------------------
     def _kbd_start(self) -> None:
         """Grab the chip keys on X11 (see the module docstring). A no-op
         anywhere else."""
@@ -394,7 +376,14 @@ class ResultBubble:
         self._say(name if chip.get_sensitive() else f"{name}, not available yet")
 
     def _kbd_key(self, name: str, shift: bool = False) -> bool:
-        """Handle one grabbed key; returns whether it was one."""
+        """Handle one grabbed key; returns whether it was one. Enter on a
+        chip that's off says why; on Copy or Replace it hands the keys back
+        to the app first, so a paste lands there and typing carries on (Esc
+        still closes, through _start_watchers) (pinned by
+        `tests/test_ai_bubble.py::test_enter_waits_for_the_answer`,
+        `tests/test_ai_bubble.py::test_replace_says_why_when_the_answer_is_incomplete`,
+        `tests/test_ai_bubble.py::test_enter_copies_then_hands_the_keys_back`,
+        `tests/test_ai_bubble.py::test_enter_on_replace_ungrabs_before_pasting`)."""
         if self._dead or self._kbd_grab is None:
             return False
         if name == "Escape":
@@ -408,14 +397,10 @@ class ResultBubble:
             return False
         chip = self._chips[self._kbd_index]
         if not chip.get_sensitive():
-            # Replace says why it's off; Copy is only waiting for the answer
             self._say(chip.get_tooltip_text() or "The answer isn't ready yet")
             return True
         label = self._chip_name(chip)
         if label != "Close":
-            # Done with the bubble's keys: give them back to the app before
-            # Replace pastes into it, and so typing carries on as normal.
-            # Esc still closes (the keymap poll in _start_watchers).
             self._kbd_stop()
         chip.emit("clicked")
         if label == "Copy":
@@ -442,7 +427,6 @@ class ResultBubble:
             self.dismiss()
         return False
 
-    # ---- content (main thread) ------------------------------------------
     def _set_status(self, msg: str) -> bool:
         if not self._dead:
             self._last_activity = time.monotonic()
@@ -476,7 +460,14 @@ class ResultBubble:
         self._sync_buttons()
         self._queue_replace()
         self._arm_timeout()
-        # The bubble never takes focus, so tell a screen reader the answer is in
+        self._announce(self._spoken_answer(warning))
+        return False
+
+    def _spoken_answer(self, warning: str | None) -> str:
+        """What a screen reader hears when the answer is in (the bubble has no
+        focus): the answer, why it's incomplete, and the selected chip (pinned
+        by `tests/test_ai_bubble.py::test_finished_answer_is_announced`,
+        `tests/test_ai_bubble.py::test_enter_copies_then_hands_the_keys_back`)."""
         spoken = self._text_lbl.get_text()
         if self._incomplete and warning:
             spoken = f"{spoken} {warning}"
@@ -484,8 +475,7 @@ class ResultBubble:
             chip = self._chips[self._kbd_index]
             if chip.get_sensitive():
                 spoken = f"{spoken} {self._chip_name(chip)} is selected; press Enter."
-        self._announce(spoken)
-        return False
+        return spoken
 
     def _announce(self, message: str) -> None:
         """Have screen readers speak `message` (GTK 4.14+; a no-op before)."""
@@ -500,9 +490,11 @@ class ResultBubble:
             pass
 
     def _check_stall(self) -> bool:
-        """Give up on a run that has said nothing for _STALL_TIMEOUT_S: drop
-        whatever it sends later (as restart() does) and show why, which arms
-        the normal idle timeout."""
+        """Give up on a run that has said nothing for _STALL_TIMEOUT_S, so a
+        hung run can't keep the bubble up: drop whatever it sends later (as
+        restart() does) and show why, which arms the idle timeout (pinned by
+        `tests/test_ai_bubble.py::test_a_silent_run_is_given_up`,
+        `tests/test_ai_bubble.py::test_a_streaming_run_is_not_given_up`)."""
         if self._dead:
             self._stall_id = None
             return False
@@ -512,11 +504,18 @@ class ResultBubble:
         return True
 
     def _sync_spinner(self) -> None:
+        """Spin until the first word arrives (pinned by
+        `tests/test_ai_bubble.py::test_spinner_runs_until_the_first_word`,
+        `tests/test_ai_bubble.py::test_spinner_stops_on_an_error`)."""
         waiting = self._busy and not self._text
         self._spinner.set_spinning(waiting)
         self._spinner.set_visible(waiting)
 
     def _sync_buttons(self) -> None:
+        """Copy once there's an answer; Replace only if it's complete, since
+        it would paste a partial text over the whole selection (pinned by
+        `tests/test_ai_bubble.py::test_incomplete_answer_disables_replace_but_not_copy`,
+        `tests/test_ai_bubble.py::test_complete_answer_keeps_replace`)."""
         self._sync_spinner()
         ready = not self._busy and bool(self._text)
         self._copy_btn.set_sensitive(ready)
@@ -530,9 +529,10 @@ class ResultBubble:
 
     def restart(self) -> None:
         """Clear for a new run (e.g. the translate target changed). Feed the
-        new run through `for_run()`: the previous run stops at its next token
-        (see _RunSink.cancelled), and output already queued must not land in
-        this one."""
+        new run through `for_run()`: the previous run stops at its next token,
+        and output it already queued is dropped (pinned by
+        `tests/test_ai_bubble.py::test_stale_run_is_ignored_after_restart`,
+        `tests/test_ai_bubble.py::test_sink_reports_cancelled_once_superseded_or_closed`)."""
         self._gen += 1
         self._text = ""
         self._busy = True
@@ -543,7 +543,6 @@ class ResultBubble:
             self._dismiss_id = None
         self._set_status("…")
 
-    # ---- thread-safe feeders --------------------------------------------
     def push_status(self, msg: str) -> None:
         GLib.idle_add(self._set_status, msg)
 
@@ -565,7 +564,6 @@ class ResultBubble:
         quiet, so a superseded run can't write into the next one."""
         return _RunSink(self, self._gen)
 
-    # ---- actions ---------------------------------------------------------
     def _on_copy(self, *_):
         try:
             from platform_backend import get_backend
@@ -575,6 +573,7 @@ class ResultBubble:
             log.exception("[ai_bubble] copy to clipboard failed")
 
     def _arm_timeout(self) -> None:
+        """Only a finished bubble times out: a slow first load can take a while."""
         if self._dismiss_id is None:
             self._dismiss_id = GLib.timeout_add_seconds(_IDLE_TIMEOUT_S, self._on_timeout)
 

@@ -11,18 +11,13 @@ import urllib.parse
 
 from core.classifier import _normalize as _strip_invisible
 from core.classifier import strip_shell_prompts
-
-# Re-exported: plugins and the rest of the app notify through actions.notify.
-from core.notify import notify
+from core.notify import notify as notify
 from core.notify import notify_argv as notify_argv
 
-# Thread-local 'force copy only' flag. When set, replace_selection
-# writes to the clipboard but skips the Ctrl+V step - the popup uses
-# this to honour Shift-click on a transform action: result lands on the
-# clipboard for manual paste elsewhere, never overwrites the original
-# selection. Mirrors PopClip's Shift-modifier behaviour where Shift
-# forces a copy instead of a paste.
 _local = threading.local()
+SELECTION_OWNER_SETTLE_S = 0.05
+SNIPPET_PREVIEW_CHARS = 160
+DEFAULT_SEARCH_ENGINE = "google"
 
 
 def force_copy_active() -> bool:
@@ -30,9 +25,11 @@ def force_copy_active() -> bool:
 
 
 class force_copy_mode:
-    """Context manager: while active, replace_selection skips the paste
-    step and leaves the result on the clipboard only. Thread-local so
-    concurrent plugin executions don't interfere."""
+    """Context manager for a Shift-click on a transform action: while
+    active, on this thread only, replace_selection leaves the result on
+    the clipboard and doesn't paste it (pinned by
+    `tests/test_core_actions.py::test_replace_selection_pastes_over_the_selection`,
+    `tests/test_core_actions.py::test_force_copy_mode_leaves_the_result_on_the_clipboard_only`)."""
 
     def __enter__(self) -> None:
         _local.force_copy = True
@@ -41,13 +38,14 @@ class force_copy_mode:
         _local.force_copy = False
 
 
+def _snippet_preview(text: str) -> str:
+    preview = text[:SNIPPET_PREVIEW_CHARS].replace("\n", "  ")
+    return preview + "..." if len(text) > SNIPPET_PREVIEW_CHARS else preview
+
+
 def pin_as_snippet(text: str) -> None:
-    """One-click "save this selection as a snippet" - opens a small
-    create-snippet dialog with the highlighted text pre-filled as the
-    body. Delegates the actual save to the clipboard_history plugin
-    (looked up via sys.modules so we don't import a user-plugin
-    directly). Falls back to a notification if the plugin isn't
-    loaded."""
+    """Open a dialog that saves the selection as a snippet through the
+    Clipboard history plugin, or say the plugin is needed."""
     import sys
 
     import gi
@@ -66,24 +64,17 @@ def pin_as_snippet(text: str) -> None:
         return
 
     def _open():
-        # Adw.AlertDialog (libadwaita 1.5) with the form as its extra child;
-        # no parent window, so it opens as its own window. GTK 4 has no
-        # blocking dialog.run(): the save happens in the "response" handler.
         dlg = Adw.AlertDialog(heading="Pin as snippet")
         dlg.add_response("cancel", "Cancel")
         dlg.add_response("save", "Save")
         dlg.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
         dlg.set_default_response("save")
         dlg.set_close_response("cancel")
-        # (No set_content_width(): it segfaults on AlertDialog in libadwaita 1.5;
-        # the dialog sizes itself to the form.)
+        # No set_content_width(): it segfaults on AlertDialog in libadwaita 1.5.
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
-        # Preview of the selection so the user knows what they're saving.
-        preview = text[:160].replace("\n", "  ")
-        if len(text) > 160:
-            preview += "..."
+        preview = _snippet_preview(text)
         prev_lbl = Gtk.Label(xalign=0)
         prev_lbl.set_markup(f"<small>Saving: <i>{GLib.markup_escape_text(preview)}</i></small>")
         prev_lbl.set_wrap(True)
@@ -94,7 +85,7 @@ def pin_as_snippet(text: str) -> None:
         name_lbl.set_markup("<b>Name</b>")
         content.append(name_lbl)
         name_entry = Gtk.Entry()
-        name_lbl.set_mnemonic_widget(name_entry)  # the field's accessible name
+        name_lbl.set_mnemonic_widget(name_entry)
         name_entry.set_placeholder_text("Short label so you'll recognise it")
         name_entry.set_activates_default(True)
         content.append(name_entry)
@@ -129,14 +120,15 @@ def pin_as_snippet(text: str) -> None:
         )
         dlg.present(None)
         name_entry.grab_focus()
-        return False
+        return GLib.SOURCE_REMOVE
 
     def _on_response(response: str, name: str, trig: str, category: str) -> None:
+        """Saved literal: a {shell:...} in someone else's text is never
+        expanded (pinned by
+        `tests/test_clipboard_store.py::test_pin_as_snippet_saves_the_selection_as_literal`)."""
         if response != "save":
             return
         try:
-            # literal: the selection is someone else's text, so a {shell:...}
-            # or {clipboard} in it is pasted as written, never expanded (#86).
             ch._create_snippet(name=name, text=text, trigger=trig, category=category, literal=True)
             notify("Snippet saved", name or text[:40], timeout_ms=2000)
         except Exception as exc:
@@ -155,36 +147,22 @@ def copy_to_clipboard(text: str) -> None:
 
 
 def replace_selection(new_text: str) -> None:
-    """Put new_text on the clipboard AND paste it over the current
-    selection - the in-place transform behaviour PopClip has on macOS.
-
-    Sequence:
-      1. write the new text to the clipboard
-      2. ~50 ms settle so the selection-owner change propagates
-      3. send Ctrl+V (backend), which the focused app interprets as
-         'paste over the current selection'
-
-    If the focused widget is read-only the paste is silently discarded,
-    but the result is still on the clipboard so the user can paste it
-    elsewhere - same fallback as a manual Copy.
-    """
+    """Put new_text on the clipboard and paste it over the selection. A
+    read-only widget drops the paste, leaving the result on the clipboard;
+    a backend that can't paste says so (pinned by
+    `tests/test_core_actions.py::test_without_auto_paste_the_user_is_told_to_paste`)."""
     from platform_backend import get_backend
 
     backend = get_backend()
     backend.set_clipboard(new_text)
     if force_copy_active():
-        # Shift-modifier on the popup button: result goes to the
-        # clipboard, but we deliberately skip the paste so the original
-        # selection stays put.
         print("[actions] force-copy mode - clipboard only, no paste")
         return
     import time as _t
 
-    _t.sleep(0.05)
+    _t.sleep(SELECTION_OWNER_SETTLE_S)
     backend.paste()
     if not backend.can_paste():
-        # The result is on the clipboard but wasn't pasted in place. Tell the
-        # user so they aren't left wondering why nothing changed.
         notify(
             "Copied to clipboard",
             "Auto-paste isn't available here - press Ctrl+V to paste.",
@@ -193,15 +171,11 @@ def replace_selection(new_text: str) -> None:
 
 
 def _desktop_env() -> dict:
-    """Env that lets xdg-open talk to the running desktop session.
-
-    If vinoPop was launched without inheriting DBUS_SESSION_BUS_ADDRESS
-    (some systemd-user / detached-shell scenarios), Firefox's
-    "is there an instance running?" probe fails - it can't find the
-    real process via DBus, sees the profile lockfile, and pops
-    "already running but not responding" every time. Filling in the
-    canonical /run/user/$UID values is a cheap safety net.
-    """
+    """os.environ with the session's runtime dir, bus and display filled in
+    where missing. Without the bus, Firefox can't find its running instance
+    and says it is "already running but not responding" (pinned by
+    `tests/test_core_actions.py::test_desktop_env_fills_in_the_session_bus`,
+    `tests/test_core_actions.py::test_desktop_env_keeps_a_bus_already_set`)."""
     env = dict(os.environ)
     uid = os.getuid()
     runtime_dir = f"/run/user/{uid}"
@@ -214,15 +188,15 @@ def _desktop_env() -> dict:
     return env
 
 
-# The only schemes handed to xdg-open as links. Anything else (file:, a
-# custom handler like steam: or vscode:) would go to whatever app claims it,
-# and selected text is whatever a web page put there.
 _WEB_SCHEMES = ("http", "https", "ftp", "mailto")
 
 
 def open_web_url(url: str) -> bool:
     """xdg-open `url` if its scheme is a web one; otherwise refuse, with a
-    notification saying why. True if it was opened."""
+    notification saying why. True if it was opened. Selected text is
+    whatever a page put there, and another scheme goes to whatever app
+    claims it (pinned by `tests/test_url_schemes.py::test_web_links_open`,
+    `tests/test_url_schemes.py::test_other_schemes_are_refused`)."""
     scheme = urllib.parse.urlsplit(url).scheme.lower()
     if scheme not in _WEB_SCHEMES:
         shown = f"{scheme}:" if scheme else "a link without a scheme"
@@ -238,7 +212,9 @@ def open_web_url(url: str) -> bool:
 def _open_file_url(url: str) -> None:
     """A file:// URL: open the folder, never the file. xdg-open on the file
     runs its MIME handler, which for an .exe or .desktop file a page got into
-    ~/Downloads means running it."""
+    ~/Downloads means running it (pinned by
+    `tests/test_url_schemes.py::test_open_in_browser_on_a_file_url_opens_its_folder`,
+    `tests/test_url_schemes.py::test_a_file_url_to_a_folder_opens_that_folder`)."""
     path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
     folder = path if os.path.isdir(path) else os.path.dirname(path)
     if not folder or not os.path.isdir(folder):
@@ -252,25 +228,21 @@ def _open_file_url(url: str) -> None:
 
 
 def open_url(text: str) -> None:
+    """Open a URL selection; one without a scheme gets https:// (pinned by
+    `tests/test_url_schemes.py::test_naked_urls_still_get_https`)."""
     url = _strip_invisible(text)
     if url.lower().startswith("file://"):
         _open_file_url(url)
         return
-    # Naked URLs (no scheme) get https:// so the browser routes them correctly
     if not url.lower().startswith(("http://", "https://", "ftp://", "mailto:")):
         url = "https://" + url
     if open_web_url(url):
         print(f"[actions] opened URL: {url}")
 
 
-# General-purpose web search engines. The value is a URL template - '{q}'
-# gets replaced with the URL-encoded selection. Add to the dict to extend.
-#
-# Site-specific destinations (Wikipedia, YouTube, MDN, Stack Overflow, etc.)
-# live as their own popup buttons via the recipe system - see
-# plugins_repo/recipes/. Keep this dict scoped to "general search".
+SEARCH_QUERY = "{q}"
+# General web search only: site-specific searches are recipes (plugins_repo/recipes/).
 SEARCH_ENGINES: dict[str, tuple[str, str]] = {
-    # key:            (display name,     URL template)
     "google": ("Google", "https://www.google.com/search?q={q}"),
     "duckduckgo": ("DuckDuckGo", "https://duckduckgo.com/?q={q}"),
     "bing": ("Bing", "https://www.bing.com/search?q={q}"),
@@ -284,28 +256,30 @@ SEARCH_ENGINES: dict[str, tuple[str, str]] = {
 
 
 def _search_template() -> str:
-    """Return the URL template for the user's chosen search engine.
-    Falls back to Google if the configured engine is unknown."""
+    """The URL template of the chosen search engine; Google for an unknown
+    engine or a custom URL without {q} (pinned by
+    `tests/test_core_actions.py::test_a_custom_search_url_with_the_query_is_used`,
+    `tests/test_core_actions.py::test_a_custom_search_url_without_the_query_falls_back_to_google`,
+    `tests/test_core_actions.py::test_an_unknown_search_engine_falls_back_to_google`)."""
     try:
         from core.settings import get_settings
 
         s = get_settings()
-        engine = (s.get("search_engine") or "google").strip().lower()
+        engine = (s.get("search_engine") or DEFAULT_SEARCH_ENGINE).strip().lower()
         if engine == "custom":
             tmpl = (s.get("search_engine_custom_url") or "").strip()
-            if "{q}" in tmpl:
+            if SEARCH_QUERY in tmpl:
                 return tmpl
-            # Empty/invalid custom URL - fall through to default.
         if engine in SEARCH_ENGINES:
             return SEARCH_ENGINES[engine][1]
     except Exception:
         pass
-    return SEARCH_ENGINES["google"][1]
+    return SEARCH_ENGINES[DEFAULT_SEARCH_ENGINE][1]
 
 
 def search_web(text: str) -> None:
     query = urllib.parse.quote_plus(_strip_invisible(text))
-    url = _search_template().replace("{q}", query)
+    url = _search_template().replace(SEARCH_QUERY, query)
     from platform_backend import get_backend
 
     get_backend().open_url(url)
@@ -314,12 +288,12 @@ def search_web(text: str) -> None:
 _TERMINALS = [
     ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c"]),
     ("konsole", ["konsole", "-e", "bash", "-c"]),
-    # -e takes ONE command string; -x takes the rest of argv, as the others do
+    # Its -e takes one command string; -x takes the rest of argv.
     ("xfce4-terminal", ["xfce4-terminal", "-x", "bash", "-c"]),
     ("alacritty", ["alacritty", "-e", "bash", "-c"]),
     ("kitty", ["kitty", "bash", "-c"]),
     ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-c"]),
-    ("xterm", ["xterm", "-hold", "-e", "bash", "-c"]),  # xterm has -hold
+    ("xterm", ["xterm", "-hold", "-e", "bash", "-c"]),
 ]
 
 
@@ -350,17 +324,11 @@ def _should_confirm_terminal() -> bool:
 
 
 def _spawn_terminal(argv: list[str], log) -> None:
-    """Launch a terminal emulator with hardening that makes the D-Bus
-    flavours (gnome-terminal, konsole) actually open a window:
-
-      * stdin=/dev/null -- the daemon's stdin is a socket, and inheriting
-        that into the gnome-terminal CLI confuses its D-Bus handshake.
-      * env=os.environ.copy() -- the posix_spawn fast path in Python 3.12
-        with env=None has been observed to drop some env vars that the
-        terminal's D-Bus client needs (DBUS_SESSION_BUS_ADDRESS, GIO*).
-        Explicit copy forces the fork+exec path.
-      * start_new_session=True -- terminal outlives vinoPop if we exit.
-    """
+    """Launch a terminal that outlives vinoPop. gnome-terminal and konsole
+    open no window unless stdin is /dev/null (the daemon's is a socket,
+    which breaks their D-Bus handshake) and env is an explicit copy
+    (Python 3.12's posix_spawn path with env=None dropped
+    DBUS_SESSION_BUS_ADDRESS and GIO* for them)."""
     try:
         subprocess.Popen(
             argv,
@@ -374,14 +342,12 @@ def _spawn_terminal(argv: list[str], log) -> None:
 
 
 def _wrap_for_terminal(cmd: str, keep_open: bool | None = None) -> str:
-    """Wrap a user command so the terminal echoes it first (looks like the
-    user pasted it), then runs it, and optionally drops into an interactive
-    shell so output stays visible.
-
-    The pieces are joined with newlines, not ';': a command ending in
-    '# comment' would otherwise comment out '; exec bash' and the
-    terminal closed straight away. A trailing backslash is dropped so it
-    can't continue the command onto the 'exec bash' line."""
+    """Echo the command as if pasted, run it, then optionally keep a shell
+    open. Newlines, not ';', so a trailing '# comment' can't swallow
+    'exec bash'; a trailing backslash is dropped so it can't either (pinned by
+    `tests/test_terminal_wrap.py::test_keep_open_survives_a_trailing_comment`,
+    `tests/test_terminal_wrap.py::test_trailing_backslash_does_not_swallow_exec_bash`,
+    `tests/test_terminal_wrap.py::test_command_is_echoed_first`)."""
     if keep_open is None:
         keep_open = _terminal_keep_open()
     cmd = cmd.rstrip()
@@ -395,11 +361,12 @@ def _wrap_for_terminal(cmd: str, keep_open: bool | None = None) -> str:
 
 
 def _collapse_blank_lines(cmd: str) -> str:
-    """Squeeze each run of blank (or whitespace-only) lines down to one
-    empty line and drop them at the ends. A selection can carry a hidden
-    span of newlines that pushes a second command below the dialog's
-    small preview; this keeps every line in view. The result is both
-    shown and run, so what the user sees is what bash gets."""
+    """Squeeze each run of blank lines to one and drop them at the ends, so
+    hidden newlines can't push a command below the confirm dialog's preview.
+    The result is both shown and run (pinned by
+    `tests/test_terminal_confirm.py::test_hidden_newlines_cannot_push_a_command_below_the_fold`,
+    `tests/test_terminal_confirm.py::test_run_in_terminal_shows_the_collapsed_command`,
+    `tests/test_terminal_confirm.py::test_run_in_terminal_without_confirm_runs_the_collapsed_command`)."""
     out: list[str] = []
     for line in cmd.splitlines():
         if line.strip():
@@ -428,6 +395,8 @@ _EXPLAIN_EDITING = "<b>Editing</b> -- Ctrl+Enter to run, Esc to cancel."
 
 
 def _enter_confirms(ctrl: bool, editing: bool, multiline: bool) -> bool:
+    """(pinned by `tests/test_terminal_confirm.py::test_plain_enter_confirms_only_a_read_only_single_line`,
+    `tests/test_terminal_confirm.py::test_ctrl_enter_always_confirms`)"""
     return ctrl or not (editing or multiline)
 
 
@@ -440,7 +409,7 @@ def _launch_in_terminal(cmd: str, binary: str, prefix: list[str]) -> None:
         log.info("[terminal] launched (%s), %d chars", binary, len(cmd))
         log.debug("[terminal] command: %s", cmd[:120])
     except OSError:
-        pass  # already logged inside _spawn_terminal
+        pass
 
 
 class _ConfirmRunDialog:
@@ -546,7 +515,8 @@ class _ConfirmRunDialog:
 
     def _connect_keys(self) -> None:
         Gtk = self._Gtk
-        # Capture phase: the text view's own handler would take Ctrl+Enter as a newline.
+        # Capture phase, or the text view takes Ctrl+Enter as a newline (pinned by
+        # `tests/test_terminal_confirm_dialog.py::test_ctrl_enter_in_the_command_field_runs_before_it_becomes_a_newline`).
         text_keys = Gtk.EventControllerKey()
         text_keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         text_keys.connect("key-pressed", self._on_text_view_key)
@@ -619,15 +589,16 @@ class _ConfirmRunDialog:
 
 
 def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
+    from gi.repository import GLib
+
     _ConfirmRunDialog(cmd, binary, prefix).present()
-    return False  # GLib.idle_add must not call it again
+    return GLib.SOURCE_REMOVE
 
 
 def run_in_terminal(text: str) -> None:
-    # The classifier counts '$ cmd' / root '# cmd' lines as commands, so
-    # strip those prompts (and, in a copied session, the output lines)
-    # before bash sees them. Blank-line runs are squeezed so nothing hides
-    # below the fold. The confirm dialog shows the cleaned text.
+    """Run a command selection in a terminal, without its prompts and output
+    lines (pinned by `tests/test_terminal_wrap.py::test_prompted_selection_runs_without_the_prompt`),
+    after the confirm dialog on the GTK thread unless terminal_confirm_run is off."""
     cmd = _collapse_blank_lines(strip_shell_prompts(_strip_invisible(text)))
     found = _find_terminal()
     if not found:
@@ -636,9 +607,6 @@ def run_in_terminal(text: str) -> None:
     binary, prefix = found
 
     if _should_confirm_terminal():
-        # Marshal to the GTK main thread for the modal dialog. Setting
-        # terminal_confirm_run=false in settings.json skips this prompt.
-        # The dialog rebuilds the wrapped command after the user edits.
         from gi.repository import GLib
 
         GLib.idle_add(_confirm_run_then_launch, cmd, binary, prefix)
@@ -647,8 +615,6 @@ def run_in_terminal(text: str) -> None:
     _launch_in_terminal(cmd, binary, prefix)
 
 
-# A file with one of these extensions is a program or launcher to whatever
-# claims its MIME type, so "Open path" shows it in its folder instead.
 _LAUNCHER_EXTENSIONS = frozenset(
     {".desktop", ".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".appimage", ".jar", ".run"}
 )
@@ -666,9 +632,12 @@ def _is_launcher(path: str) -> bool:
 
 def open_path(text: str) -> None:
     """Open a selected path with xdg-open. A program or launcher opens its
-    folder instead, as a file:// link does (_open_file_url): the selection
-    is whatever a page or chat put there, and xdg-open on ~/Downloads/x.desktop
-    or an executable script means running it."""
+    folder instead, as a file:// link does: the selection is whatever a page
+    put there, and xdg-open on a .desktop file or executable runs it (pinned by
+    `tests/test_open_path.py::test_a_launcher_opens_its_folder`,
+    `tests/test_open_path.py::test_an_executable_file_opens_its_folder`,
+    `tests/test_open_path.py::test_a_plain_file_opens_itself`)."""
+
     raw = _strip_invisible(text)
     path = os.path.expanduser(raw)
     if _is_launcher(path):

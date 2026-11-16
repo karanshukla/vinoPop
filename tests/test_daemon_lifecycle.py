@@ -15,8 +15,7 @@ pytest.importorskip("Xlib")
 
 @pytest.fixture(scope="module")
 def main_mod():
-    # main picks a GDK backend at import and may set GDK_BACKEND; a preset
-    # value is left alone, so pin one for the import and put it back.
+    """main, imported with GDK_BACKEND preset so the import doesn't set it."""
     mp = pytest.MonkeyPatch()
     mp.setenv("GDK_BACKEND", "x11")
     try:
@@ -31,10 +30,15 @@ def _bind(app, main_mod, *names):
         setattr(app, name, types.MethodType(getattr(main_mod.App, name), app))
 
 
-# ---- 1. OCR hotkey: one capture at a time ------------------------------------
+def _join_ocr_captures():
+    for t in threading.enumerate():
+        if t.name == "ocr-capture":
+            t.join(5)
 
 
-def test_ocr_hotkey_drops_triggers_while_a_capture_runs(main_mod, monkeypatch):
+def _press_ocr_during_a_capture(main_mod, monkeypatch, presses):
+    """Press the OCR hotkey `presses` times while the first capture blocks;
+    returns (captures started, the app, a release for the capture)."""
     release = threading.Event()
     started = []
 
@@ -46,21 +50,26 @@ def test_ocr_hotkey_drops_triggers_while_a_capture_runs(main_mod, monkeypatch):
         sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=fake_capture)
     )
     app = types.SimpleNamespace(_note_use=lambda: None)
-    for _ in range(3):  # autorepeat on a held chord
+    for _ in range(presses):
         main_mod.App._on_ocr_hotkey(app)
+    return started, app, release
+
+
+def test_ocr_hotkey_drops_triggers_while_a_capture_runs(main_mod, monkeypatch):
+    started, _app, release = _press_ocr_during_a_capture(main_mod, monkeypatch, presses=3)
     assert main_mod._ocr_busy.locked()
     release.set()
-    for t in threading.enumerate():
-        if t.name == "ocr-capture":
-            t.join(5)
+    _join_ocr_captures()
     assert started == [1]
     assert not main_mod._ocr_busy.locked()
 
-    # Once the capture is done the next press works again.
+
+def test_the_next_ocr_press_works_once_the_capture_is_done(main_mod, monkeypatch):
+    started, app, release = _press_ocr_during_a_capture(main_mod, monkeypatch, presses=1)
+    release.set()
+    _join_ocr_captures()
     main_mod.App._on_ocr_hotkey(app)
-    for t in threading.enumerate():
-        if t.name == "ocr-capture":
-            t.join(5)
+    _join_ocr_captures()
     assert started == [1, 1]
 
 
@@ -72,13 +81,8 @@ def test_ocr_lock_released_when_the_capture_raises(main_mod, monkeypatch):
         sys.modules, "capture.screen_ocr", types.SimpleNamespace(run_ocr_to_clipboard=boom)
     )
     main_mod.App._on_ocr_hotkey(types.SimpleNamespace(_note_use=lambda: None))
-    for t in threading.enumerate():
-        if t.name == "ocr-capture":
-            t.join(5)
+    _join_ocr_captures()
     assert not main_mod._ocr_busy.locked()
-
-
-# ---- 8. hotkey path: worker thread, presses dropped while busy ---------------
 
 
 def test_popup_hotkey_runs_off_main_and_drops_presses_while_busy(main_mod):
@@ -126,44 +130,55 @@ def test_prepare_popup_shows_on_the_gtk_thread_with_one_window_lookup(main_mod, 
         _note_use=lambda: None,
     )
     main_mod.App._prepare_popup(app, "hello", 1, 2)
-    assert shown == []  # nothing GTK until the idle callback runs
+    assert shown == [], "nothing GTK until the idle callback runs"
     assert len(idle) == 1
     idle[0][0](*idle[0][1])
-    assert shown[0]["editable"] is False  # okular is read-only
-    assert lookups == [1]  # blocklist + read-only check shared one KWin lookup
+    assert shown[0]["editable"] is False, "okular is read-only"
+    assert lookups == [1], "blocklist and read-only check share one KWin lookup"
 
 
-def test_popup_hotkey_closes_a_showing_popup_and_opens_a_hidden_one(main_mod):
-    from triggers.toggle import HotkeyToggle
+class HotkeyApp:
+    """An app whose popup is up (for a selection when hotkey_shown_at is None)."""
 
-    now = [100.0]
-    hidden, opened = [], []
-    visible = [True]
-    popup = types.SimpleNamespace(
-        win=types.SimpleNamespace(get_visible=lambda: visible[0]),
-        hotkey_shown_at=None,  # up for a selection
-        hide=lambda: hidden.append(1),
-    )
-    app = types.SimpleNamespace(
-        popup=popup,
-        _popup_toggle=HotkeyToggle(lambda: now[0]),
-        show_popup_now=lambda **kw: opened.append(kw),
-    )
-    main_mod.App._on_popup_hotkey(app)
-    assert hidden == [1] and opened == []
-    visible[0] = False
-    now[0] += 1.0
-    main_mod.App._on_popup_hotkey(app)
-    assert opened == [{"via_hotkey": True}]
-    # the popup the hotkey just opened survives the key still being held
-    visible[0] = True
-    popup.hotkey_shown_at = now[0] + 0.1
-    now[0] += 0.66
-    main_mod.App._on_popup_hotkey(app)
-    assert hidden == [1]
+    def __init__(self, main_mod, *, visible, hotkey_shown_at=None):
+        from triggers.toggle import HotkeyToggle
+
+        self.now = 100.0
+        self.visible = visible
+        self.hidden, self.opened = [], []
+        self.popup = types.SimpleNamespace(
+            win=types.SimpleNamespace(get_visible=lambda: self.visible),
+            hotkey_shown_at=hotkey_shown_at,
+            hide=lambda: self.hidden.append(1),
+        )
+        self.app = types.SimpleNamespace(
+            popup=self.popup,
+            _popup_toggle=HotkeyToggle(lambda: self.now),
+            show_popup_now=lambda **kw: self.opened.append(kw),
+        )
+        self.press = lambda: main_mod.App._on_popup_hotkey(self.app)
 
 
-# ---- 3. no rebind churn ------------------------------------------------------
+def test_popup_hotkey_closes_a_showing_popup(main_mod):
+    h = HotkeyApp(main_mod, visible=True)
+    h.press()
+    assert (h.hidden, h.opened) == ([1], [])
+
+
+def test_popup_hotkey_opens_a_hidden_popup(main_mod):
+    h = HotkeyApp(main_mod, visible=False)
+    h.press()
+    assert (h.hidden, h.opened) == ([], [{"via_hotkey": True}])
+
+
+def test_a_held_popup_hotkey_keeps_the_popup_it_opened(main_mod):
+    h = HotkeyApp(main_mod, visible=False)
+    h.press()
+    h.visible = True
+    h.popup.hotkey_shown_at = h.now + 0.1
+    h.now += 0.66
+    h.press()
+    assert h.hidden == []
 
 
 class FakeHotkey:
@@ -201,21 +216,27 @@ SETTINGS = {
 }
 
 
-def test_saves_dont_rebind_when_main_hotkey_is_cleared(main_mod, monkeypatch):
+def test_the_first_save_after_turning_polling_on_rebinds_once(main_mod, monkeypatch):
     app = _hotkey_app(main_mod, monkeypatch, "x11", dict(SETTINGS), bound_polling=False)
-    # First save after turning polling on: one rebuild of what's bound...
     main_mod.App._apply_hotkey_settings(app)
     assert app.started == ["clip", "ocr"]
     assert app._bound_use_polling is True
-    # ...and none on the saves after it, although the main hotkey is empty.
-    app.started.clear()
-    app.clipboard_hotkey, app.ocr_hotkey = FakeHotkey(), FakeHotkey()
-    app._bound_clipboard_hotkey, app._bound_ocr_hotkey = "super+v", "super+shift+t"
+
+
+def test_saves_dont_rebind_when_main_hotkey_is_cleared(main_mod, monkeypatch):
+    app = _hotkey_app(main_mod, monkeypatch, "x11", dict(SETTINGS), bound_polling=True)
     for _ in range(3):
         main_mod.App._apply_hotkey_settings(app)
     assert app.started == []
     assert app.clipboard_hotkey.stops == 0
     assert app.ocr_hotkey.stops == 0
+
+
+def test_an_unchanged_ocr_hotkey_binds_once_ocr_becomes_usable(main_mod, monkeypatch):
+    app = _hotkey_app(main_mod, monkeypatch, "x11", dict(SETTINGS), bound_polling=True)
+    app.ocr_hotkey = None
+    main_mod.App._apply_hotkey_settings(app)
+    assert app.started == ["ocr"]
 
 
 def test_polling_flip_is_ignored_on_wayland(main_mod, monkeypatch):
@@ -247,9 +268,6 @@ def test_bound_polling_initialised_from_settings(main_mod, monkeypatch, tmp_path
     assert app._bound_use_polling is True
 
 
-# ---- 4. SIGTERM / SIGHUP -----------------------------------------------------
-
-
 def test_sigint_sigterm_sighup_quit_the_app(main_mod, monkeypatch):
     handlers = {}
     monkeypatch.setattr(
@@ -258,11 +276,8 @@ def test_sigint_sigterm_sighup_quit_the_app(main_mod, monkeypatch):
     quits = []
     main_mod._install_signal_handlers(types.SimpleNamespace(quit=lambda: quits.append(1)))
     assert set(handlers) == {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
-    assert handlers[signal.SIGTERM]() is True  # keep the source
+    assert handlers[signal.SIGTERM]() is True, "a second signal still quits"
     assert quits == [1]
-
-
-# ---- 5. "Paste from history" hops back to the GTK thread ---------------------
 
 
 def test_paste_from_history_goes_through_idle_add(main_mod, monkeypatch):
@@ -289,9 +304,6 @@ def test_clipboard_fallback_notifies_through_helper(main_mod, monkeypatch):
     assert notes and "Clipboard plugin" in notes[0]
 
 
-# ---- 6. read-only detection uses the backend ---------------------------------
-
-
 @pytest.fixture
 def editable(monkeypatch):
     from triggers import editable_detect
@@ -311,16 +323,14 @@ def editable(monkeypatch):
 @pytest.mark.parametrize(
     ("name", "haystacks", "extra", "expected"),
     [
-        # KDE Wayland: [resourceClass, caption] from KWin
-        ("wayland_kde", ["org.kde.okular", "manual.pdf — okular"], (), False),
-        ("wayland_kde", ["org.kde.dolphin", "home — dolphin"], (), False),
-        ("wayland_kde", ["org.kde.kate", "notes.txt — kate"], (), True),
-        ("wayland_kde", ["org.kde.kate", "notes.txt — kate"], ("Kate",), False),
-        # X11: [title, xprop WM_CLASS line]; the title alone never matches
-        ("x11", ["geography notes", 'wm_class(string) = "kate", "kate"'], (), True),
-        ("x11", ["manual.pdf", 'wm_class(string) = "evince", "evince"'], (), False),
-        ("x11", ["eog"], (), True),  # no WM_CLASS line: title only, ignored
-        ("wayland_kde", [], (), True),  # lookup failed: permissive default
+        pytest.param("wayland_kde", ["org.kde.okular", "manual.pdf — okular"], (), False),
+        pytest.param("wayland_kde", ["org.kde.dolphin", "home — dolphin"], (), False),
+        pytest.param("wayland_kde", ["org.kde.kate", "notes.txt — kate"], (), True),
+        pytest.param("wayland_kde", ["org.kde.kate", "notes.txt — kate"], ("Kate",), False),
+        pytest.param("x11", ["geography notes", 'wm_class(string) = "kate", "kate"'], (), True),
+        pytest.param("x11", ["manual.pdf", 'wm_class(string) = "evince", "evince"'], (), False),
+        pytest.param("x11", ["eog"], (), True, id="x11-title-alone-never-matches"),
+        pytest.param("wayland_kde", [], (), True, id="failed-lookup-is-editable"),
     ],
 )
 def test_readonly_detection_through_backend(editable, name, haystacks, extra, expected):
@@ -335,9 +345,6 @@ def test_readonly_detection_survives_a_failing_lookup(editable, monkeypatch):
         raise RuntimeError("dbus gone")
 
     assert mod.is_focus_editable(haystacks=boom) is True
-
-
-# ---- 7. hotkey._run closes its X connection on every exit --------------------
 
 
 class FakeRoot:
@@ -378,10 +385,10 @@ class FakeDisplay:
 @pytest.mark.parametrize(
     ("combo", "display_kwargs"),
     [
-        ("hyperdrive+x", {}),  # parse error
-        ("ctrl+notakey", {}),  # unknown keysym
-        ("ctrl+a", {"keycode": 0}),  # no keycode
-        ("ctrl+a", {"refuse": True}),  # every grab refused
+        pytest.param("hyperdrive+x", {}, id="parse-error"),
+        pytest.param("ctrl+notakey", {}, id="unknown-keysym"),
+        pytest.param("ctrl+a", {"keycode": 0}, id="no-keycode"),
+        pytest.param("ctrl+a", {"refuse": True}, id="every-grab-refused"),
     ],
 )
 def test_hotkey_run_closes_display_on_early_return(monkeypatch, combo, display_kwargs):
@@ -389,15 +396,12 @@ def test_hotkey_run_closes_display_on_early_return(monkeypatch, combo, display_k
 
     FakeDisplay.instances.clear()
     monkeypatch.setattr(hotkey.display, "Display", lambda: FakeDisplay(**display_kwargs))
-    monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)  # conflict notify-send
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: None)
     hk = hotkey.Hotkey(combo, lambda: None)
     hk._run()
     (dpy,) = FakeDisplay.instances
     assert dpy.closed
     assert hk._dpy is None
-
-
-# ---- 2. X11 double-click watcher stops -------------------------------------
 
 
 def test_dblclick_watcher_enables_on_record_display_and_stops(monkeypatch):
@@ -425,9 +429,8 @@ def test_dblclick_watcher_enables_on_record_display_and_stops(monkeypatch):
             calls.append(("sync", self.role))
 
         def record_enable_context(self, ctx, handler):
+            """Blocks, as RECORD's reply loop does, until the other connection disables it."""
             calls.append(("enable", self.role))
-            # Blocks like the real RECORD reply loop, until disabled from
-            # the other connection.
             disabled.wait(5)
 
         def record_disable_context(self, ctx):

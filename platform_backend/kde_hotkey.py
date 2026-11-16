@@ -11,53 +11,87 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-_QT_MODS = {
-    "shift": 0x02000000,
-    "ctrl": 0x04000000,
-    "control": 0x04000000,
-    "alt": 0x08000000,
-    "super": 0x10000000,
-    "win": 0x10000000,
-    "meta": 0x10000000,
-}
+# Qt::KeyboardModifier values
 _QT_SHIFT = 0x02000000
-_QT_KEYPAD = 0x20000000  # Qt::KeypadModifier; KWin adds it for every KP_* keysym
+_QT_CTRL = 0x04000000
+_QT_ALT = 0x08000000
+_QT_META = 0x10000000
+_QT_KEYPAD = 0x20000000  # KWin adds it for every KP_* keysym
+_QT_MODS = {
+    "shift": _QT_SHIFT,
+    "ctrl": _QT_CTRL,
+    "control": _QT_CTRL,
+    "alt": _QT_ALT,
+    "super": _QT_META,
+    "win": _QT_META,
+    "meta": _QT_META,
+}
+
+# Qt::Key values
+_KEY_ESCAPE = 0x01000000
+_KEY_TAB = 0x01000001
+_KEY_BACKSPACE = 0x01000003
+_KEY_RETURN = 0x01000004
+_KEY_ENTER = 0x01000005
+_KEY_INSERT = 0x01000006
+_KEY_DELETE = 0x01000007
+_KEY_PAUSE = 0x01000008
+_KEY_PRINT = 0x01000009
+_KEY_CLEAR = 0x0100000B
+_KEY_HOME = 0x01000010
+_KEY_END = 0x01000011
+_KEY_LEFT = 0x01000012
+_KEY_UP = 0x01000013
+_KEY_RIGHT = 0x01000014
+_KEY_DOWN = 0x01000015
+_KEY_PAGEUP = 0x01000016
+_KEY_PAGEDOWN = 0x01000017
+_KEY_SCROLLLOCK = 0x01000026
+_KEY_F1 = 0x01000030
+_KEY_MENU = 0x01000055
+_KEY_VOLUMEDOWN = 0x01000070
+_KEY_VOLUMEMUTE = 0x01000071
+_KEY_VOLUMEUP = 0x01000072
+_KEY_MEDIAPLAY = 0x01000080
+_KEY_MEDIASTOP = 0x01000081
+_KEY_MEDIAPREVIOUS = 0x01000082
+_KEY_MEDIANEXT = 0x01000083
+_KEY_SPACE = 0x20
+
+# Our names and the GDK names the Settings recorder stores
 _QT_NAMED_KEYS = {
-    "escape": 0x01000000,
-    "tab": 0x01000001,
-    "return": 0x01000004,
-    "enter": 0x01000005,
-    "space": 0x20,
-    "backspace": 0x01000003,
-    "delete": 0x01000007,
-    "home": 0x01000010,
-    "end": 0x01000011,
-    "left": 0x01000012,
-    "up": 0x01000013,
-    "right": 0x01000014,
-    "down": 0x01000015,
-    "pageup": 0x01000016,
-    "pagedown": 0x01000017,
-    "insert": 0x01000006,
-    # The Settings recorder stores GDK key names ("page_up", "print", ...)
-    "page_up": 0x01000016,
-    "page_down": 0x01000017,
-    "prior": 0x01000016,
-    "next": 0x01000017,
-    "pause": 0x01000008,
-    "print": 0x01000009,
-    "scroll_lock": 0x01000026,
-    "menu": 0x01000055,
-    # Shift+Tab is reported as ISO_Left_Tab; shift is already a modifier
-    "iso_left_tab": 0x01000001,
-    # media keys (GDK: XF86AudioPlay, ...)
-    "xf86audioplay": 0x01000080,
-    "xf86audiostop": 0x01000081,
-    "xf86audioprev": 0x01000082,
-    "xf86audionext": 0x01000083,
-    "xf86audiolowervolume": 0x01000070,
-    "xf86audiomute": 0x01000071,
-    "xf86audioraisevolume": 0x01000072,
+    "escape": _KEY_ESCAPE,
+    "tab": _KEY_TAB,
+    "return": _KEY_RETURN,
+    "enter": _KEY_ENTER,
+    "space": _KEY_SPACE,
+    "backspace": _KEY_BACKSPACE,
+    "delete": _KEY_DELETE,
+    "home": _KEY_HOME,
+    "end": _KEY_END,
+    "left": _KEY_LEFT,
+    "up": _KEY_UP,
+    "right": _KEY_RIGHT,
+    "down": _KEY_DOWN,
+    "pageup": _KEY_PAGEUP,
+    "pagedown": _KEY_PAGEDOWN,
+    "insert": _KEY_INSERT,
+    "page_up": _KEY_PAGEUP,
+    "page_down": _KEY_PAGEDOWN,
+    "prior": _KEY_PAGEUP,
+    "next": _KEY_PAGEDOWN,
+    "pause": _KEY_PAUSE,
+    "print": _KEY_PRINT,
+    "scroll_lock": _KEY_SCROLLLOCK,
+    "menu": _KEY_MENU,
+    "iso_left_tab": _KEY_TAB,  # GDK's Shift+Tab; the Shift is already a modifier
+    "xf86audioplay": _KEY_MEDIAPLAY,
+    "xf86audiostop": _KEY_MEDIASTOP,
+    "xf86audioprev": _KEY_MEDIAPREVIOUS,
+    "xf86audionext": _KEY_MEDIANEXT,
+    "xf86audiolowervolume": _KEY_VOLUMEDOWN,
+    "xf86audiomute": _KEY_VOLUMEMUTE,
+    "xf86audioraisevolume": _KEY_VOLUMEUP,
 }
 # GDK names of printable punctuation -> the character, which is also the
 # Qt::Key value (Qt::Key_Comma == 0x2c == ord(",")).
@@ -75,7 +109,6 @@ _QT_PUNCTUATION = {
     "bracketleft": "[",
     "bracketright": "]",
     "asterisk": "*",
-    # symbols that need Shift on US QWERTY
     "exclam": "!",
     "at": "@",
     "numbersign": "#",
@@ -106,27 +139,29 @@ _QT_KEYPAD_KEYS = {
     "kp_decimal": ord("."),
     "kp_separator": ord(","),
     "kp_equal": ord("="),
-    "kp_enter": 0x01000005,
-    # NumLock off
-    "kp_home": 0x01000010,
-    "kp_end": 0x01000011,
-    "kp_left": 0x01000012,
-    "kp_up": 0x01000013,
-    "kp_right": 0x01000014,
-    "kp_down": 0x01000015,
-    "kp_prior": 0x01000016,
-    "kp_page_up": 0x01000016,
-    "kp_next": 0x01000017,
-    "kp_page_down": 0x01000017,
-    "kp_insert": 0x01000006,
-    "kp_delete": 0x01000007,
-    "kp_begin": 0x0100000B,  # Qt::Key_Clear
+    "kp_enter": _KEY_ENTER,
+    "kp_home": _KEY_HOME,
+    "kp_end": _KEY_END,
+    "kp_left": _KEY_LEFT,
+    "kp_up": _KEY_UP,
+    "kp_right": _KEY_RIGHT,
+    "kp_down": _KEY_DOWN,
+    "kp_prior": _KEY_PAGEUP,
+    "kp_page_up": _KEY_PAGEUP,
+    "kp_next": _KEY_PAGEDOWN,
+    "kp_page_down": _KEY_PAGEDOWN,
+    "kp_insert": _KEY_INSERT,
+    "kp_delete": _KEY_DELETE,
+    "kp_begin": _KEY_CLEAR,
 }
 
 
 def _qt_keycode(hotkey_str: str) -> int | None:
-    """Encode 'super+shift+y' as a Qt QKeySequence int (modifiers OR'd with
-    the Qt::Key value), which is what KGlobalAccel.setShortcut expects."""
+    """Encode 'super+shift+y' as the QKeySequence int (modifiers | Qt::Key)
+    KGlobalAccel.setShortcut takes. KWin reports Ctrl+Shift+1 as Ctrl+!, so
+    Shift is dropped for a non-letter (pinned by
+    `tests/test_wayland_input.py::test_qt_keycode_drops_the_shift_that_made_a_symbol`,
+    `tests/test_wayland_input.py::test_qt_keycode_keeps_shift_on_a_letter`)."""
     parts = [p.strip().lower() for p in hotkey_str.split("+") if p.strip()]
     if not parts:
         return None
@@ -141,7 +176,7 @@ def _qt_keycode(hotkey_str: str) -> int | None:
     if key in _QT_KEYPAD_KEYS:
         return mods | _QT_KEYPAD | _QT_KEYPAD_KEYS[key]
     if key.startswith("f") and key[1:].isdigit():
-        return mods | (0x01000030 + (int(key[1:]) - 1))  # Qt::Key_F1 = 0x01000030
+        return mods | (_KEY_F1 + int(key[1:]) - 1)
     if key in _QT_PUNCTUATION:
         char = _QT_PUNCTUATION[key]
     elif len(key) == 1:
@@ -149,23 +184,19 @@ def _qt_keycode(hotkey_str: str) -> int | None:
     else:
         return None
     if not char.isalpha():
-        # GDK recorded the shifted symbol ("exclam", not "1"), so Shift was
-        # what produced it. KWin counts Shift as consumed for non-letters and
-        # reports Ctrl+Shift+1 as Ctrl+!, so the shortcut must not include it.
         mods &= ~_QT_SHIFT
     return mods | ord(char.upper())
 
 
 COMPONENT = "vinopop"
 COMPONENT_NAME = "vinoPop"
-# Stable per-role action ids, so a crash or a rebind can't leave numbered
-# leftovers in kglobalshortcutsrc or collide with them.
+# One fixed action id per role (pinned by
+# `tests/test_wayland_input.py::test_action_ids_are_stable_per_role`).
 ROLES = {
     "popup": ("vinopop-popup", "Show the popup"),
     "clipboard": ("vinopop-clipboard", "Clipboard history"),
     "ocr": ("vinopop-ocr", "Screen OCR"),
 }
-# Fallback by callback name, for callers that don't pass role=
 _ROLE_BY_CALLBACK = {
     "show_popup_now": "popup",
     "_on_popup_hotkey": "popup",
@@ -173,9 +204,12 @@ _ROLE_BY_CALLBACK = {
     "_on_ocr_hotkey": "ocr",
 }
 _LEGACY_ACTION = re.compile(r"^vinopop-action-\d+$")
+_KGA_SET_PRESENT = 2
+_KGA_NO_AUTOLOADING = 4
 
 
 def role_for(on_trigger: Callable[[], None], role: str | None = None) -> str:
+    """`role`, else guessed from the callback's name."""
     if role:
         return role
     return _ROLE_BY_CALLBACK.get(getattr(on_trigger, "__name__", ""), "popup")
@@ -193,8 +227,9 @@ _legacy_cleaned = False
 
 
 def cleanup_legacy_actions(kga) -> list[str]:
-    """Unregister the old creation-order ids (vinopop-action-N) once per run.
-    Returns the names removed."""
+    """Unregister the numbered ids (vinopop-action-N) once per run; returns
+    the names removed (pinned by
+    `tests/test_wayland_input.py::test_legacy_numbered_actions_are_cleaned_up_once`)."""
     global _legacy_cleaned
     if _legacy_cleaned:
         return []
@@ -218,10 +253,8 @@ def cleanup_legacy_actions(kga) -> list[str]:
 
 
 class WaylandKdeHotkey:
-    """Registers a global shortcut with KGlobalAccel over DBus.
-
-    All failures are swallowed and logged; the app keeps running either way.
-    """
+    """A global shortcut registered with KGlobalAccel over D-Bus. Failures
+    are logged, never raised."""
 
     def __init__(
         self, hotkey_str: str, on_trigger: Callable[[], None], role: str | None = None
@@ -232,7 +265,7 @@ class WaylandKdeHotkey:
         self._action, self._friendly = action_id_for_role(self.role)
         self._component = COMPONENT
         self._registered = False
-        self._match = None  # dbus SignalMatch, removed in stop()
+        self._match = None  # dbus SignalMatch
 
     def _action_id(self, dbus):
         return dbus.Array(
@@ -264,27 +297,12 @@ class WaylandKdeHotkey:
         cleanup_legacy_actions(kga)
         action_id = self._action_id(dbus)
         kga.doRegister(action_id)
-        # Register with setShortcut(actionId: as, keys: ai, flags: u). The keys
-        # argument is a PLAIN array of Qt key ints (each modifiers|key); the
-        # call returns the keycodes actually assigned. Verified against the live
-        # KF6 interface: it returns the requested keycode, i.e. the grab IS
-        # activated - so this single call is sufficient on Plasma 6.
-        #
-        # Do NOT use setShortcutKeys here. Its keys argument is QList<QKeySequence>
-        # (wire type `a(ai)`), which KGlobalAccel/KWin demarshals with a custom
-        # QKeySequence operator that ABORTS the whole process on the slightest
-        # framing mismatch. Hand-marshalling that nested type from dbus-python
-        # made kwin_wayland SIGABRT inside libdbus ("type invalid 0 not a basic
-        # type") on every vinoPop startup, taking the entire Plasma session down
-        # with it. Plain `ai` is type-trivial and cannot trigger that abort.
-        # flags = SetPresent(2) | NoAutoloading(4) = 6. SetPresent is ESSENTIAL
-        # on Plasma 6 Wayland: without it the key is recorded but the component
-        # stays INACTIVE (isActive()==False), so KWin never installs the physical
-        # key grab and presses do nothing (only DBus invokeShortcut fires). With
-        # SetPresent the component goes active and KWin grabs the key. Verified
-        # live: flag 4 -> isActive False, key not grabbed; flag 6 -> isActive
-        # True, key grabbed. NoAutoloading keeps the keys we pass (not stored config).
-        flags = dbus.UInt32(6)
+        # setShortcut (keys `ai`), never setShortcutKeys: KWin demarshals its
+        # `a(ai)` QKeySequence list with an operator that aborts kwin_wayland,
+        # and the whole session, on any framing mismatch from dbus-python.
+        # Without SetPresent the component stays inactive on Plasma 6 and KWin
+        # never grabs the key; NoAutoloading keeps our keys over stored config.
+        flags = dbus.UInt32(_KGA_SET_PRESENT | _KGA_NO_AUTOLOADING)
         assigned = kga.setShortcut(
             action_id, dbus.Array([dbus.Int32(keycode)], signature="i"), flags
         )
@@ -295,10 +313,8 @@ class WaylandKdeHotkey:
                 f"system shortcut); the hotkey will be inactive"
             )
         kga.getComponent(self._component)
-        # Subscribe broadly (interface + signal only). Pinning bus_name/path
-        # can silently miss the signal if KWin emits it from a different sender
-        # name or object path than getComponent reports; the handler filters by
-        # our action id anyway.
+        # No bus_name/path: KWin may emit from another sender or path than
+        # getComponent reports. _on_pressed filters by action id.
         self._match = bus.add_signal_receiver(
             self._on_pressed,
             signal_name="globalShortcutPressed",
@@ -311,10 +327,9 @@ class WaylandKdeHotkey:
         )
 
     def _on_pressed(self, *args) -> None:
-        # globalShortcutPressed(componentUnique, shortcutUnique, timestamp).
-        # This fires for EVERY global shortcut on the desktop, so stay quiet
-        # unless it's ours. Matched anywhere in the args, as before, in case
-        # KWin's argument order differs.
+        """globalShortcutPressed for every shortcut on the desktop; acts only
+        on ours, found anywhere in the args (pinned by
+        `tests/test_wayland_input.py::test_other_global_shortcuts_are_ignored`)."""
         if self._action not in {str(a) for a in args}:
             return
         from gi.repository import GLib

@@ -168,9 +168,8 @@ def _text_values(text: str) -> dict[str, str]:
 
 _FORMATTER = string.Formatter()
 
-# Fields the snippet engine expands ({date:+7d}, {clipboard}, {ask:Label},
-# {shell:CMD}, ...). Formatter.parse() reads {date:+7d} as the field "date"
-# with the format spec "+7d", so the field name alone identifies them.
+# Fields the snippet engine expands. Formatter.parse() reads {date:+7d} as
+# the field "date" with the spec "+7d", so the name alone identifies them.
 _SNIPPET_FIELDS = frozenset(
     {
         "date",
@@ -190,7 +189,9 @@ _FIELD_BASE_RE = re.compile(r"[^.\[]*")
 
 
 class _Field:
-    """One {placeholder} in a template, as string.Formatter parses it."""
+    """One {placeholder} in a template, as string.Formatter parses it.
+    `token` is the field as written; `base` is "text" for {text_upper} or
+    {text[0]}, else the name; `kind` is "text", "snippet" or "unknown"."""
 
     __slots__ = ("base", "conv", "kind", "name", "spec", "token")
 
@@ -198,16 +199,14 @@ class _Field:
         self.name = name
         self.spec = spec
         self.conv = conv
-        # As written in the template, e.g. {date:+7d}
         self.token = "{" + name + (f"!{conv}" if conv else "") + (f":{spec}" if spec else "") + "}"
-        # "text" for {text_upper} or {text[0]}, the bare name otherwise
         self.base = _FIELD_BASE_RE.match(name).group(0)  # type: ignore[union-attr]
         if self.base in _text_variables():
             self.kind = "text"
         elif name in _SNIPPET_FIELDS:
             self.kind = "snippet"
         else:
-            self.kind = "unknown"  # left in the output as written
+            self.kind = "unknown"
 
 
 def _template_parts(template: str) -> list[tuple[str, _Field | None]]:
@@ -221,7 +220,11 @@ def _template_parts(template: str) -> list[tuple[str, _Field | None]]:
 
 
 def _render(template: str, text: str) -> str:
-    """Substitute template variables. Unknown placeholders are left as-is.
+    """Substitute template variables, leaving unknown placeholders as written.
+    Snippet fields are expanded from the template only, never from the
+    selection (pinned by
+    `tests/test_recipes.py::test_selection_is_never_run_through_the_snippet_engine`,
+    `tests/test_recipes.py::test_selection_that_looks_like_a_marker_is_not_expanded_twice`).
 
     For URLs, notifications and the clipboard. A shell command goes through
     _command_parts instead, which keeps the values out of the command line."""
@@ -238,7 +241,6 @@ def _render(template: str, text: str) -> str:
                 value = _FORMATTER.convert_field(value, field.conv)
                 out.append(_FORMATTER.format_field(value, field.spec))
             elif field.kind == "snippet":
-                # test_selection_is_never_run_through_the_snippet_engine
                 if field.token not in expanded:
                     expanded[field.token] = _apply_snippet_placeholders(field.token)
                 out.append(expanded[field.token])
@@ -267,10 +269,10 @@ def _text_variables() -> list[str]:
     ]
 
 
-# ---- commands ----------------------------------------------------------------
-#
-# The user's text is never rendered into shell source: it goes in as an
-# argument and each placeholder becomes a reference to it.
+# Commands: the user's text is never rendered into shell source. It goes in
+# as an argument and each placeholder becomes a reference to it (pinned by
+# `tests/test_recipes.py::test_quoting_in_the_template_never_lets_the_selection_run`,
+# `tests/test_recipes.py::test_command_argv_keeps_the_values_out_of_the_script`).
 # docs/how-it-works.md, "Recipe commands".
 
 # Where a value reference can't go: bash runs code found in an arithmetic operand
@@ -321,7 +323,7 @@ def _shell_contexts(skeleton: str) -> list[str]:
             if c == "'":
                 stack.pop()
         elif c == "\\":
-            i += 1  # skip the escaped character
+            i += 1
         elif skeleton.startswith("$((", i):
             stack += ["arith", "arith"]  # one per paren, so each ")" pops one
             i += 2
@@ -423,7 +425,6 @@ def _command_fields(template: str) -> tuple[list[str], list[tuple[_Field, str]]]
 
 def _field_problem(field: _Field, context: str) -> str | None:
     if field.kind == "text" and (field.conv or field.spec or field.name != field.base):
-        # {text!r}, {text_shell:.3}, {text[0]}: a command gets the value as is
         return (
             f"{field.token} can't take a conversion or format spec in a command; "
             f"use {{{field.base}}}"
@@ -497,7 +498,9 @@ def _command_argv(template: str, text: str) -> list[str]:
 def safety_errors(recipe: dict) -> list[str]:
     """Reasons a recipe must not be allowed to run shell commands. Kept apart
     from validate(): an unsafe recipe still loads, as a button that explains
-    why it was disabled, rather than silently vanishing."""
+    why it was disabled, rather than silently vanishing (pinned by
+    `tests/test_recipes.py::test_an_unsafe_recipe_builds_a_handler_that_never_runs_the_command`,
+    `tests/test_recipes.py::test_a_chain_command_step_without_a_template_is_refused`)."""
     action = recipe.get("action") if isinstance(recipe, dict) else None
     if not isinstance(action, dict):
         return []
@@ -510,7 +513,6 @@ def safety_errors(recipe: dict) -> list[str]:
             if not isinstance(step, dict) or step.get("type") != "run_command":
                 continue
             if not step.get("template"):
-                # An empty template would run the (transformed) selection itself
                 errors.append(f"chain.steps[{i}] (run_command) needs a command template")
                 continue
             for problem in command_template_problems(step["template"]):
@@ -537,8 +539,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
     title = action.get("title") or recipe.get("tooltip") or recipe.get("name", "vinoPop")
     icon = recipe.get("icon") or "emblem-system-symbolic"
 
-    # Refuse to build a shell-running button that would feed the selection to
-    # the shell unquoted: the click then explains itself instead of running it.
     problems = safety_errors(recipe)
     if problems:
         name = recipe.get("name") or recipe.get("tooltip") or "unnamed"
@@ -551,7 +551,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
             url = _render(template, text).strip()
             from core import actions
 
-            # A template starting with {text} could produce any scheme.
+            # Not open_url: a template starting with {text} could make any scheme
             actions.open_web_url(url)
 
         return handler
@@ -559,9 +559,10 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
     if atype == "run_command":
 
         def handler(text: str) -> None:
+            """A NUL in the selection is reported, not raised (pinned by
+            `tests/test_recipes.py::test_a_nul_in_the_selection_reports_an_error_instead_of_raising`)."""
             try:
                 subprocess.Popen(_command_argv(template, text), start_new_session=True)
-            # ValueError: a NUL in the selection (Popen refuses it as an argument)
             except (OSError, ValueError) as exc:
                 notify("Recipe error", f"Could not run: {exc}", "dialog-error")
 
@@ -587,8 +588,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
         return handler
 
     if atype == "chain":
-        # Transforms pass their output on as {text}; the first other step ends
-        # the chain (tests/test_recipe_rules.py)
         steps = action.get("steps") or []
         if not steps:
 
@@ -600,70 +599,75 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                 )
 
             return handler
+        return lambda text: _run_chain(recipe, steps, title, icon, text)
 
-        def handler(text: str) -> None:
-            current = text
-            import logging as _logging
-
-            log = _logging.getLogger("vinopop")
-            for i, step in enumerate(steps):
-                stype = (step.get("type") or "transform").strip()
-                stemplate = step.get("template", "{text}")
-                if stype == "transform":
-                    current = _render(stemplate, current)
-                    log.info(
-                        "[chain] %s step %d transform -> %d chars",
-                        recipe.get("name"),
-                        i,
-                        len(current),
-                    )
-                    continue
-                if stype == "run_command":
-                    # safety_errors() already refused a step without a template
-                    try:
-                        argv = _command_argv(stemplate, current)
-                        subprocess.Popen(argv, start_new_session=True)
-                    except (OSError, ValueError) as exc:
-                        log.warning("[chain] run_command failed: %s", exc)
-                    return
-                rendered = _render(stemplate, current) if stemplate else current
-                if stype == "copy":
-                    from platform_backend import get_backend
-
-                    get_backend().set_clipboard(current)
-                    notify(title or "Copied", current[:200], icon, 2500)
-                elif stype == "paste":
-                    from core import actions
-
-                    actions.replace_selection(current)
-                elif stype == "notify":
-                    notify(title or "Chain", (rendered or current)[:600], icon, 4000)
-                elif stype == "open_url":
-                    url = (rendered or current).strip()
-                    from core import actions
-
-                    actions.open_web_url(url)
-                else:
-                    log.warning("[chain] unknown step type %r in %s", stype, recipe.get("name"))
-                return
-            from platform_backend import get_backend
-
-            get_backend().set_clipboard(current)
-            notify(title or "Chain", current[:200], icon, 2500)
-
-        return handler
-
-    # Unknown type: the button still appears and logs when clicked
     def handler(text: str) -> None:
         print(f"[recipe] unknown action type for {recipe.get('name')!r}: {atype!r}")
 
     return handler
 
 
+def _run_chain(recipe: dict, steps: list, title: str, icon: str, text: str) -> None:
+    """Transforms pass their output on as {text}; the first other step ends
+    the chain, and a chain of transforms only copies its result (pinned by
+    `tests/test_recipe_rules.py::test_each_transform_gets_the_one_befores_output_as_text`,
+    `tests/test_recipe_rules.py::test_the_first_terminal_step_ends_the_chain`,
+    `tests/test_recipe_rules.py::test_a_chain_of_only_transforms_copies_its_result`,
+    `tests/test_recipe_rules.py::test_an_unknown_step_type_ends_the_chain_without_doing_anything`)."""
+    import logging as _logging
+
+    log = _logging.getLogger("vinopop")
+    current = text
+    for i, step in enumerate(steps):
+        stype = (step.get("type") or "transform").strip()
+        stemplate = step.get("template", "{text}")
+        if stype == "transform":
+            current = _render(stemplate, current)
+            log.info(
+                "[chain] %s step %d transform -> %d chars",
+                recipe.get("name"),
+                i,
+                len(current),
+            )
+            continue
+        if stype == "run_command":
+            # safety_errors() already refused a step without a template
+            try:
+                argv = _command_argv(stemplate, current)
+                subprocess.Popen(argv, start_new_session=True)
+            except (OSError, ValueError) as exc:
+                log.warning("[chain] run_command failed: %s", exc)
+            return
+        rendered = _render(stemplate, current) if stemplate else current
+        if stype == "copy":
+            from platform_backend import get_backend
+
+            get_backend().set_clipboard(current)
+            notify(title or "Copied", current[:200], icon, 2500)
+        elif stype == "paste":
+            from core import actions
+
+            actions.replace_selection(current)
+        elif stype == "notify":
+            notify(title or "Chain", (rendered or current)[:600], icon, 4000)
+        elif stype == "open_url":
+            url = (rendered or current).strip()
+            from core import actions
+
+            actions.open_web_url(url)
+        else:
+            log.warning("[chain] unknown step type %r in %s", stype, recipe.get("name"))
+        return
+    from platform_backend import get_backend
+
+    get_backend().set_clipboard(current)
+    notify(title or "Chain", current[:200], icon, 2500)
+
+
 def _content_types(recipe: dict) -> tuple:
     names = recipe.get("content_types") or []
     if not names:
-        return ()  # empty = universal
+        return ()
     return tuple(_CTYPE_BY_NAME[n] for n in names if n in _CTYPE_BY_NAME)
 
 
@@ -671,6 +675,7 @@ def _template_problem(template: str) -> str | None:
     """Why `template` can't be rendered (an unbalanced brace), or None."""
     if "\x00" in template:
         # Invisible in an editor, so a shared recipe could hide text in it
+        # (pinned by `tests/test_recipes.py::test_a_nul_in_a_template_is_refused`)
         return "contains a NUL character"
     try:
         list(string.Formatter().parse(template))
@@ -680,12 +685,13 @@ def _template_problem(template: str) -> str | None:
 
 
 def validate(recipe: dict) -> list[str]:
-    """Return a list of human-readable validation errors (empty = OK)."""
+    """Human-readable validation errors, [] for a valid recipe. Every value
+    comes from a hand-editable file, so types are checked before use (pinned
+    by `tests/test_recipes.py::test_a_malformed_recipe_is_an_error_not_an_exception`,
+    `tests/test_recipe_rules.py::test_a_misspelt_content_type_is_an_error_not_every_content_type`)."""
     if not isinstance(recipe, dict):
         return ["recipe must be a JSON object"]
     errors = []
-    # Every value comes from a hand-editable file: check types before using
-    # them, so a bad field is an error message rather than a TypeError
     name = recipe.get("name") or ""
     if not isinstance(name, str):
         errors.append("'name' must be a string")
@@ -704,7 +710,6 @@ def validate(recipe: dict) -> list[str]:
     atype = action.get("type")
     if not isinstance(atype, str) or atype not in VALID_ACTION_TYPES:
         errors.append(f"action.type must be one of {VALID_ACTION_TYPES}")
-    # A chain has `steps` in place of a top-level template
     if atype == "chain":
         steps = action.get("steps")
         if not isinstance(steps, list) or not steps:
@@ -745,7 +750,6 @@ def validate(recipe: dict) -> list[str]:
             problem = _template_problem(action["template"])
             if problem:
                 errors.append(f"action.template: {problem}")
-    # test_a_misspelt_content_type_is_an_error_not_every_content_type
     names = recipe.get("content_types") or []
     if not isinstance(names, list):
         errors.append("'content_types' must be a list")
@@ -766,7 +770,9 @@ _SEED_MARKER = RECIPES_DIR.parent / ".default-recipes-seeded"
 
 def _seed_default_recipes() -> None:
     """Copy the default recipes into an empty recipes folder, once: a
-    default the user deletes later stays deleted."""
+    default the user deletes later stays deleted (pinned by
+    `tests/test_recipe_rules.py::test_a_fresh_install_is_seeded_with_the_default_recipes_once`,
+    `tests/test_recipe_rules.py::test_a_folder_that_already_has_recipes_is_not_seeded`)."""
     if _SEED_MARKER.is_file():
         return
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
@@ -795,7 +801,10 @@ def _seed_default_recipes() -> None:
 
 
 def load_recipes(register) -> int:
-    """Walk RECIPES_DIR; register each valid recipe as a Plugin. Returns count."""
+    """Register each valid, enabled recipe in RECIPES_DIR; returns how many.
+    One bad recipe never stops the rest (pinned by
+    `tests/test_recipes.py::test_a_malformed_recipe_does_not_stop_the_ones_after_it`,
+    `tests/test_recipe_rules.py::test_a_recipe_is_on_unless_it_says_enabled_false`)."""
     _seed_default_recipes()
     count = 0
     if not RECIPES_DIR.is_dir():
@@ -810,8 +819,6 @@ def load_recipes(register) -> int:
         try:
             errors = validate(recipe)
         except Exception as exc:  # noqa: BLE001
-            # validate() type-checks what it reads, but one recipe must never
-            # stop the ones after it from loading
             errors = [f"could not validate: {exc!r}"]
         if errors:
             print(f"[recipe] {path.name} has errors: {', '.join(errors)}")
@@ -855,14 +862,16 @@ def list_recipes() -> list[tuple[Path, dict]]:
 
 
 def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
-    """Persist a recipe as <name>.json (or to the supplied path)."""
+    """Save a recipe to `target_path`, or as a new <name>.json. A new recipe
+    whose name is taken gets a numbered one, since the name is also its
+    plugin identity (pinned by
+    `tests/test_recipes.py::test_new_recipes_get_a_unique_name_instead_of_overwriting`,
+    `tests/test_recipes.py::test_editing_a_recipe_still_overwrites_its_own_file`)."""
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
     if target_path is None:
         name = str(recipe.get("name") or "")
         if not name or not all(c.isalnum() or c in "-_" for c in name):
             raise ValueError(f"invalid recipe name {name!r}")
-        # Two buttons labelled "Search" must not overwrite each other. The name
-        # is also the plugin's identity (order, disable list), so it changes too.
         unique, n = name, 2
         while (RECIPES_DIR / f"{unique}.json").exists():
             unique, n = f"{name}-{n}", n + 1
@@ -880,8 +889,7 @@ def delete_recipe(path: Path) -> None:
 
 
 def set_recipe_enabled(path: Path, enabled: bool) -> bool:
-    """Flip the 'enabled' field on the recipe at `path` and save atomically.
-    Returns True on success."""
+    """Set the 'enabled' field of the recipe at `path`; False if it failed."""
     try:
         with path.open("r", encoding="utf-8") as f:
             recipe = json.load(f)

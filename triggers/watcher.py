@@ -1,8 +1,5 @@
-"""Watches the X11 PRIMARY selection and notifies a callback when it changes.
-
-Uses XFixes selection-owner-notify events (event-driven, ~zero CPU when
-idle) with a short xclip read after each event to fetch the actual text.
-"""
+"""Watches the X11 PRIMARY selection (XFixes owner-change events, then an
+xclip read) and calls back when it changes."""
 
 from __future__ import annotations
 
@@ -17,6 +14,13 @@ from Xlib.ext import xfixes
 
 from platform_backend.base import is_copy_button, take_expected
 from platform_backend.gestures import GESTURE_LEAD_S, SelectionGestures
+from platform_backend.x11 import XCLIP_TIMEOUT_S
+
+# A new owner often writes the selection lazily, after the owner-change event:
+# read again after each of these delays until there is text.
+READ_RETRY_DELAYS_S = (0.04, 0.08, 0.15)
+IDLE_WAKEUP_S = 5.0
+POLL_INTERVAL_S = 0.25
 
 
 class SelectionWatcher:
@@ -31,9 +35,7 @@ class SelectionWatcher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_text: str = ""
-        # Wait this long after the last selection-change event before firing.
-        # Avoids popup churn while the user is still dragging the selection -
-        # X PRIMARY updates on every character as the drag extends.
+        # PRIMARY changes on every character of a drag: fire once it's quiet.
         self._debounce_s: float = max(0.0, debounce_ms / 1000.0)
         self._clipboard_atom: int | None = None
         self._clip_changed_at: float | None = None
@@ -53,8 +55,7 @@ class SelectionWatcher:
             self._gestures.stop()
 
     def set_debounce_ms(self, ms: int) -> None:
-        """Update the debounce window live. Read by the event loop on its
-        next iteration - no restart needed."""
+        """Takes effect on the event loop's next iteration."""
         self._debounce_s = max(0.0, ms / 1000.0)
 
     def _read_primary(self) -> str:
@@ -65,14 +66,10 @@ class SelectionWatcher:
 
     def _read(self, sel: str) -> str:
         try:
-            # 2 s timeout - xclip can take noticeable time to pull a
-            # large selection (several MB of pasted text, a Firefox
-            # readability-mode paragraph, etc.). 0.5 s was timing out
-            # on long selections and we'd silently skip the popup.
             output = subprocess.run(
                 ["xclip", "-selection", sel, "-o"],
                 capture_output=True,
-                timeout=2.0,
+                timeout=XCLIP_TIMEOUT_S,
             )
             return output.stdout.decode("utf-8", errors="replace")
         except (OSError, subprocess.SubprocessError):
@@ -111,31 +108,25 @@ class SelectionWatcher:
             return self._debounce_s
         return self._gestures.settle_s(burst_t0, self._debounce_s)
 
-    def _handle_selection_change(self, dpy: display.Display, burst_t0: float) -> None:
-        # Try a few times to read the new content. The xfixes event fires
-        # on owner change, but the new owner often hasn't actually written
-        # the data yet (esp. apps that build their selection lazily on
-        # CONVERT_SELECTION). 270 ms total budget: fast apps break on
-        # the very first read (40 ms), only lazy converters spend the
-        # whole window. _read_primary's own xclip timeout (2 s) still
-        # protects huge selections that take time to transfer.
+    def _read_new_primary(self) -> str:
         text = ""
-        for delay in (0.04, 0.08, 0.15):
+        for delay in READ_RETRY_DELAYS_S:
             time.sleep(delay)
             text = self._read_primary()
             if text and text.strip():
                 break
+        return text
+
+    def _handle_selection_change(self, dpy: display.Display, burst_t0: float) -> None:
+        """Show the popup for the new selection, even when it's the same text
+        as last time (pinned by
+        `tests/test_x11_watcher.py::test_reselecting_the_same_text_shows_it_again`,
+        `tests/test_x11_watcher.py::test_a_blank_selection_is_not_shown`)."""
+        text = self._read_new_primary()
         if not text or not text.strip():
             return
         if not self._should_show(text, burst_t0):
             return
-        # Note: we used to also bail when text == self._last_text, to
-        # squash spurious owner-change events that didn't carry new
-        # content. Removed because it ate the legitimate "user selected
-        # the same word again" case - re-highlighting a phrase to bring
-        # the popup back must work. XFixes events without a real
-        # selection change are rare in practice, and even if one slips
-        # through it's cheaper to redraw than to miss a re-select.
         self._last_text = text
         try:
             x, y = self._pointer_position(dpy)
@@ -154,7 +145,6 @@ class SelectionWatcher:
             print(f"[watcher] cannot open display: {exc}")
             return
 
-        # Try to set up XFixes selection-change notifications
         use_xfixes = False
         try:
             dpy.xfixes_query_version()
@@ -192,20 +182,15 @@ class SelectionWatcher:
 
     def _event_loop(self, dpy: display.Display) -> None:
         fd = dpy.fileno()
-        # Idle wakeup cadence - keep at 5 s so a quiet daemon barely costs
-        # anything. While a selection change is pending, we override the
-        # timeout with the remaining debounce window so we fire promptly.
-        IDLE_TIMEOUT = 5.0
         pending = False
         last_event_at = 0.0
         burst_t0 = 0.0
         while not self._stop.is_set():
             now = time.monotonic()
             if pending:
-                # Wait at most until the debounce window expires
                 timeout = max(0.0, self._settle_s(burst_t0) - (now - last_event_at))
             else:
-                timeout = IDLE_TIMEOUT
+                timeout = IDLE_WAKEUP_S
             try:
                 readable, _, _ = _select.select([fd], [], [], timeout)
             except (OSError, ValueError):
@@ -219,10 +204,7 @@ class SelectionWatcher:
                         burst_t0 = time.monotonic()
                     pending = True
                     last_event_at = time.monotonic()
-                    # Loop back to start a new debounce wait
                     continue
-            # No fd activity in the timeout window. If we were debouncing,
-            # the user has stopped extending the selection - fire now.
             if (
                 pending
                 and not self._stop.is_set()
@@ -232,7 +214,7 @@ class SelectionWatcher:
                 self._handle_selection_change(dpy, burst_t0)
 
     def _poll_loop(self, dpy: display.Display) -> None:
-        # Fallback: 250 ms polling. Less responsive but XFixes-free.
+        """Fallback without XFixes."""
         while not self._stop.is_set():
             text = self._read_primary()
             if text and text != self._last_text and text.strip():
@@ -245,4 +227,4 @@ class SelectionWatcher:
                     self._on_selection(text, x, y)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[watcher] callback error: {exc}")
-            time.sleep(0.25)
+            time.sleep(POLL_INTERVAL_S)

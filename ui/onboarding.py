@@ -1,12 +1,7 @@
-"""Animated onboarding for vinoPop.
-
-A multi-page first-run walkthrough with hand-drawn, choreographed Cairo
-animations. A friendly little guide ("Pip", the vinoPop blob) walks new users
-through: select text -> actions popup, how to summon it, how to add ready-made
-plugins, how to build their own with the recipe builder, and (when OpenVINO is
-installed) whether to download the offline AI model now. Fully skippable,
-with a "don't show this again" checkbox that flips the `show_welcome_dialog`
-setting.
+"""Animated first-run tour for vinoPop: Cairo scenes with a guide character
+("Pip") over pages on selecting text, summoning the popup, plugins, the
+recipe builder and, when OpenVINO is installed, the offline AI model.
+"Don't show this again" turns off the `show_welcome_dialog` setting.
 
 Entry point: ``show_onboarding(settings, on_open_plugins=None, parent=None)``.
 """
@@ -23,48 +18,55 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-# ── brand palette (the vino family's, as in theme.py / the app icon) ─────────
-GREEN = (0.157, 0.588, 0.314)  # #289650
-OCHRE = (0.722, 0.451, 0.0)  # #b87300
-MINT = (0.337, 0.800, 0.471)  # #56cc78
-FOREST = (0.102, 0.439, 0.251)  # #1a7040 - reads as text on the light stage
+
+def _rgb(hex_colour: str) -> tuple[float, float, float]:
+    h = hex_colour.lstrip("#")
+    return (int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255)
+
+
+GREEN = _rgb("#289650")
+OCHRE = _rgb("#b87300")
+MINT = _rgb("#56cc78")
+FOREST = _rgb("#1a7040")
 AMBER = (0.97, 0.70, 0.30)
-INK = (0.110, 0.114, 0.125)  # #1c1d20 - dark text on the light stage
-MUTE = (0.627, 0.643, 0.675)  # #a0a4ac
-STAGE = (0.980, 0.980, 0.980)  # #fafafa - card the scenes sit on
-STAGE_BORDER = (0.886, 0.890, 0.902)  # #e2e3e6
-PANEL = (0.949, 0.953, 0.961)  # #f2f3f5
+INK = _rgb("#1c1d20")
+MUTE = _rgb("#a0a4ac")
+STAGE = _rgb("#fafafa")
+STAGE_BORDER = _rgb("#e2e3e6")
+PANEL = _rgb("#f2f3f5")
+TEXT_BAR = (0.84, 0.86, 0.92)
 
 _ACCENTS = [GREEN, OCHRE, MINT, FOREST]
 
 
-# ── easing / drawing helpers ─────────────────────────────────────────────────
 def _clamp(x, lo=0.0, hi=1.0):
     return lo if x < lo else hi if x > hi else x
 
 
 def _seg(t, a, b):
-    """Map t in [a,b] -> [0,1], clamped (a phase within a timeline)."""
+    """Progress 0..1 of `t` through the phase [a, b] of a timeline."""
     return _clamp((t - a) / (b - a)) if b > a else 0.0
 
 
-def _eo(x):  # ease-out cubic
+def _ease_out(x):
     x = _clamp(x)
     return 1.0 - (1.0 - x) ** 3
 
 
-def _eio(x):  # ease-in-out cubic
+def _ease_in_out(x):
     x = _clamp(x)
     return 4 * x * x * x if x < 0.5 else 1.0 - (-2 * x + 2) ** 3 / 2.0
 
 
-def _eob(x):  # ease-out-back (overshoot, for springy pops)
+def _ease_out_back(x):
+    """Overshoots 1 before settling, for springy pops."""
     x = _clamp(x) - 1.0
     c1 = 1.70158
     return 1.0 + (c1 + 1) * x**3 + c1 * x**2
 
 
-def _bump(x):  # 0->1->0 hump
+def _bump(x):
+    """0 -> 1 -> 0 over x in [0, 1]."""
     return math.sin(_clamp(x) * math.pi)
 
 
@@ -117,20 +119,47 @@ def _shadow(cr, x, y, w, h, r, blur=0.10):
     cr.fill()
 
 
-# ── the guide character: "Pip" ───────────────────────────────────────────────
+def _card(cr, x, y, w, h, r):
+    """A white rounded card with a shadow and the stage's border."""
+    _shadow(cr, x, y, w, h, r)
+    _rrect(cr, x, y, w, h, r)
+    cr.set_source_rgb(1, 1, 1)
+    cr.fill_preserve()
+    cr.set_source_rgba(*STAGE_BORDER, 1)
+    cr.set_line_width(1)
+    cr.stroke()
+
+
 def _blink_at(t, period=3.4):
     p = t % period
     return _clamp(_bump(_seg(p, 0.0, 0.16))) if p < 0.16 else 0.0
 
 
 def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0.0, bob=0.0):
-    if s <= 0.0:  # fully faded out; a zero scale would make cairo raise
+    """Pip, the guide: a brand-gradient blob with a popup's pointer tail."""
+    if s <= 0.0:  # cairo raises on a zero scale
         return
     cr.save()
     cr.translate(cx, cy + bob)
     cr.rotate(tilt)
     cr.scale(s, s)
-    # soft drop shadow
+    _mascot_shadow(cr)
+    _mascot_body(cr)
+    _mascot_gloss(cr)
+    for side in (-1, 1):
+        cr.save()
+        cr.translate(side * 12, -3)
+        if mouth == "happy":
+            _mascot_happy_eye(cr)
+        else:
+            _mascot_open_eye(cr, look, blink)
+        cr.restore()
+    _mascot_cheeks(cr)
+    _mascot_mouth(cr, mouth)
+    cr.restore()
+
+
+def _mascot_shadow(cr):
     cr.save()
     cr.translate(0, 30)
     cr.scale(1, 0.32)
@@ -138,9 +167,11 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
     cr.set_source_rgba(0, 0, 0, 0.10)
     cr.fill()
     cr.restore()
-    # body - a rounded blob with the brand gradient + a little popup-tail
+
+
+def _mascot_body(cr):
     bw, bh = 31, 28
-    cr.move_to(0, bh + 9)  # tail tip (popup pointer)
+    cr.move_to(0, bh + 9)
     cr.line_to(-8, bh - 3)
     cr.line_to(8, bh - 3)
     cr.close_path()
@@ -150,7 +181,9 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
     g.add_color_stop_rgb(1, *OCHRE)
     cr.set_source(g)
     cr.fill()
-    # glossy highlight
+
+
+def _mascot_gloss(cr):
     cr.save()
     cr.translate(-9, -13)
     cr.scale(1.0, 0.62)
@@ -158,36 +191,38 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
     cr.set_source_rgba(1, 1, 1, 0.16)
     cr.fill()
     cr.restore()
-    # eyes
+
+
+def _mascot_happy_eye(cr):
+    cr.set_source_rgb(1, 1, 1)
+    cr.set_line_width(2.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.arc(0, 2, 5, math.pi * 1.15, math.pi * 1.85)
+    cr.stroke()
+
+
+def _mascot_open_eye(cr, look, blink):
     lx, ly = look[0] * 3.0, look[1] * 3.0
-    happy = mouth == "happy"
-    for sgn in (-1, 1):
-        cr.save()
-        cr.translate(sgn * 12, -3)
-        if happy:  # ^_^ curved-happy eyes
-            cr.set_source_rgb(1, 1, 1)
-            cr.set_line_width(2.6)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.arc(0, 2, 5, math.pi * 1.15, math.pi * 1.85)
-            cr.stroke()
-        else:
-            cr.scale(1.0, 1.0 - 0.92 * blink)
-            cr.arc(0, 0, 7, 0, 2 * math.pi)
-            cr.set_source_rgb(1, 1, 1)
-            cr.fill()
-            cr.arc(lx, ly + 0.5, 3.4, 0, 2 * math.pi)
-            cr.set_source_rgb(*INK)
-            cr.fill()
-            cr.arc(lx - 1.1, ly - 1.1, 1.1, 0, 2 * math.pi)
-            cr.set_source_rgba(1, 1, 1, 0.9)
-            cr.fill()
-        cr.restore()
-    # cheeks
-    for sgn in (-1, 1):
-        cr.arc(sgn * 19, 6, 3.4, 0, 2 * math.pi)
+    cr.scale(1.0, 1.0 - 0.92 * blink)
+    cr.arc(0, 0, 7, 0, 2 * math.pi)
+    cr.set_source_rgb(1, 1, 1)
+    cr.fill()
+    cr.arc(lx, ly + 0.5, 3.4, 0, 2 * math.pi)
+    cr.set_source_rgb(*INK)
+    cr.fill()
+    cr.arc(lx - 1.1, ly - 1.1, 1.1, 0, 2 * math.pi)
+    cr.set_source_rgba(1, 1, 1, 0.9)
+    cr.fill()
+
+
+def _mascot_cheeks(cr):
+    for side in (-1, 1):
+        cr.arc(side * 19, 6, 3.4, 0, 2 * math.pi)
         cr.set_source_rgba(*MINT, 0.35)
         cr.fill()
-    # mouth
+
+
+def _mascot_mouth(cr, mouth):
     cr.set_source_rgb(1, 1, 1)
     if mouth == "open" or mouth == "happy":
         cr.arc(0, 9, 5.2, 0, math.pi)
@@ -197,7 +232,6 @@ def _mascot(cr, cx, cy, s=1.0, look=(0.0, 0.0), blink=0.0, mouth="smile", tilt=0
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.arc(0, 6, 6, 0.16 * math.pi, 0.84 * math.pi)
         cr.stroke()
-    cr.restore()
 
 
 def _speech(cr, x, y, text, a=1.0, tail_x=18):
@@ -210,7 +244,7 @@ def _speech(cr, x, y, text, a=1.0, tail_x=18):
     pad = 12
     w = ext.width + 2 * pad
     h = 30
-    cr.translate(0, (1 - _eob(a)) * 6)
+    cr.translate(0, (1 - _ease_out_back(a)) * 6)
     _shadow(cr, x, y, w, h, 12)
     _rrect(cr, x, y, w, h, 12)
     cr.set_source_rgba(1, 1, 1, a)
@@ -218,7 +252,6 @@ def _speech(cr, x, y, text, a=1.0, tail_x=18):
     cr.set_source_rgba(*GREEN, 0.30 * a)
     cr.set_line_width(1.0)
     cr.stroke()
-    # tail
     cr.move_to(x + tail_x, y + h - 1)
     cr.line_to(x + tail_x + 9, y + h - 1)
     cr.line_to(x + tail_x + 2, y + h + 9)
@@ -287,7 +320,7 @@ def _popupbar(cr, x, y, n, a, icons=None):
     cr.stroke()
     for i in range(n):
         cxx = x + 24 + i * 40
-        appear = _eob(_clamp((a - 0.2) * 1.2)) if a < 1 else 1.0
+        appear = _ease_out_back(_clamp((a - 0.2) * 1.2)) if a < 1 else 1.0
         cr.arc(cxx, y + h / 2, 12 * appear, 0, 2 * math.pi)
         cr.set_source_rgba(*_ACCENTS[i % 4], a)
         cr.fill()
@@ -298,8 +331,12 @@ def _popupbar(cr, x, y, n, a, icons=None):
     return w
 
 
+def _keycap_width(label):
+    return 26 + 15 * len(label)
+
+
 def _keycap(cr, x, y, label, press, accent=GREEN):
-    kw = 26 + 15 * len(label)
+    kw = _keycap_width(label)
     dy = 4 * press
     _rrect(cr, x, y + dy, kw, 40, 9)
     g = cairo.LinearGradient(x, y, x, y + 40)
@@ -340,20 +377,24 @@ def _plugcard(cr, x, y, w, h, accent, name, a=1.0, lift=0.0, check=0.0):
     cr.set_source_rgba(*accent, a)
     cr.fill()
     _text(cr, x + 42, y + h / 2 - 4, name, 12.5, INK, a, bold=True)
-    _bar(cr, x + 42, y + h / 2 + 6, w - 64, 5, (0.84, 0.86, 0.92), a)
+    _bar(cr, x + 42, y + h / 2 + 6, w - 64, 5, TEXT_BAR, a)
     if check > 0:
-        cr.arc(x + w - 15, y + 14, 8 * _eob(check), 0, 2 * math.pi)
-        cr.set_source_rgba(*FOREST, a)
-        cr.fill()
-        if check > 0.55:
-            cr.set_source_rgb(1, 1, 1)
-            cr.set_line_width(1.8)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.move_to(x + w - 18.5, y + 14)
-            cr.line_to(x + w - 16, y + 17)
-            cr.line_to(x + w - 11.5, y + 11)
-            cr.stroke()
+        _check_badge(cr, x + w - 15, y + 14, check, a)
     cr.restore()
+
+
+def _check_badge(cr, cx, cy, check, a):
+    cr.arc(cx, cy, 8 * _ease_out_back(check), 0, 2 * math.pi)
+    cr.set_source_rgba(*FOREST, a)
+    cr.fill()
+    if check > 0.55:
+        cr.set_source_rgb(1, 1, 1)
+        cr.set_line_width(1.8)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.move_to(cx - 3.5, cy)
+        cr.line_to(cx - 1, cy + 3)
+        cr.line_to(cx + 3.5, cy - 3)
+        cr.stroke()
 
 
 def _gear(cr, cx, cy, R, ang, rgb):
@@ -396,13 +437,12 @@ def _confetti(cr, cx, cy, t, n=16):
         cr.restore()
 
 
-# ── scene 1: select text -> actions popup ────────────────────────────────────
 def _draw_how(cr, w, h, t):
+    """Scene: select text in an app, the popup springs up, click an action."""
     sx, sy, sw, sh = _stage(cr, w, h)
     T = 6.8
     lt = t % T
-    fade = _eo(_seg(lt, 0, 0.3)) * (1 - _seg(lt, T - 0.4, T))
-    # mock app window on the left
+    fade = _ease_out(_seg(lt, 0, 0.3)) * (1 - _seg(lt, T - 0.4, T))
     ax, ay, aw, ah = sx + 26, sy + 30, sw * 0.60, sh - 60
     _appwin(cr, ax, ay, aw, ah)
     lx = ax + 18
@@ -410,57 +450,17 @@ def _draw_how(cr, w, h, t):
     wid = [aw - 56, aw - 38, aw - 74, aw - 30]
     for yy, ww in zip(ys, wid, strict=True):
         _bar(cr, lx, yy, ww, 9, (0.81, 0.84, 0.90), fade)
-    # cursor glides in and drags a selection across line 2 (index 1)
-    sel = _eio(_seg(lt, 0.9, 1.9))
-    selw = wid[1] * sel
-    if sel > 0:
-        _rrect(cr, lx - 4, ys[1] - 5, selw + 8, 19, 4)
-        cr.set_source_rgba(*GREEN, 0.28 * fade)
-        cr.fill()
-        _bar(cr, lx, ys[1], selw, 9, GREEN, fade)
-    # popup springs up under the selection
-    pa = _seg(lt, 2.0, 2.5)
-    if pa > 0:
-        spr = _eob(pa)
-        px = lx - 6
-        py = ys[1] + 22 + (1 - spr) * 10
-        cr.save()
-        cr.translate(px + 70, py + 20)
-        cr.scale(0.6 + 0.4 * spr, 0.6 + 0.4 * spr)
-        cr.translate(-(px + 70), -(py + 20))
-        _popupbar(cr, px, py, 4, fade)
-        cr.restore()
-        # cursor moves onto first action and clicks
-        click = _bump(_seg(lt, 3.6, 4.3))
-        cxp = px + 24 + 18 * (1 - _eo(_seg(lt, 2.9, 3.7)))
-        cyp = py + 20 + 30 * (1 - _eo(_seg(lt, 2.9, 3.7)))
-        if lt > 2.7:
-            _pointer(cr, cxp, cyp, 1.05, click)
-        # a little result chip flies out after the click
-        rr = _seg(lt, 4.2, 5.0)
-        if rr > 0:
-            ry = py - 8 - 16 * _eo(rr)
-            _rrect(cr, px + 6, ry, 78, 22, 8)
-            cr.set_source_rgba(*FOREST, 0.16 * fade * (1 - _seg(lt, T - 1.0, T)))
-            cr.fill()
-            cr.set_source_rgba(*FOREST, fade)
-            cr.set_line_width(2)
-            cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.move_to(px + 16, ry + 11)
-            cr.line_to(px + 21, ry + 16)
-            cr.line_to(px + 30, ry + 6)
-            cr.stroke()
-            _text(cr, px + 38, ry + 15, "done", 11, FOREST, fade, bold=True)
-    # the guide enters from the right and points at the popup
+    _how_selection(cr, lx, ys[1], wid[1], lt, fade)
+    if _seg(lt, 2.0, 2.5) > 0:
+        _how_popup_and_click(cr, lx - 6, ys[1], lt, T, fade)
     mx = sx + sw - 70
     my = sy + sh / 2 - 6
-    look = (-0.8, 0.2)
     _mascot(
         cr,
         mx,
         my,
         1.0 * fade if fade > 0 else 0.0,
-        look=look,
+        look=(-0.8, 0.2),
         blink=_blink_at(t),
         mouth="open" if 3.0 < lt < 4.6 else "smile",
         bob=2 * math.sin(t * 2.2),
@@ -470,106 +470,82 @@ def _draw_how(cr, w, h, t):
         mx - 150,
         my - 56,
         "Pick anything!" if lt < 4.0 else "Nice!",
-        a=fade * _eo(_seg(lt, 3.0, 3.5)) * (1 - _seg(lt, T - 0.8, T)),
+        a=fade * _ease_out(_seg(lt, 3.0, 3.5)) * (1 - _seg(lt, T - 0.8, T)),
     )
 
 
-# ── scene 2: summon it your way (hotkey + clipboard) ─────────────────────────
+def _how_selection(cr, lx, line_y, line_w, lt, fade):
+    sel = _ease_in_out(_seg(lt, 0.9, 1.9))
+    if sel <= 0:
+        return
+    selw = line_w * sel
+    _rrect(cr, lx - 4, line_y - 5, selw + 8, 19, 4)
+    cr.set_source_rgba(*GREEN, 0.28 * fade)
+    cr.fill()
+    _bar(cr, lx, line_y, selw, 9, GREEN, fade)
+
+
+def _how_popup_and_click(cr, px, line_y, lt, T, fade):
+    spr = _ease_out_back(_seg(lt, 2.0, 2.5))
+    py = line_y + 22 + (1 - spr) * 10
+    cr.save()
+    cr.translate(px + 70, py + 20)
+    cr.scale(0.6 + 0.4 * spr, 0.6 + 0.4 * spr)
+    cr.translate(-(px + 70), -(py + 20))
+    _popupbar(cr, px, py, 4, fade)
+    cr.restore()
+    click = _bump(_seg(lt, 3.6, 4.3))
+    approach = 1 - _ease_out(_seg(lt, 2.9, 3.7))
+    if lt > 2.7:
+        _pointer(cr, px + 24 + 18 * approach, py + 20 + 30 * approach, 1.05, click)
+    rr = _seg(lt, 4.2, 5.0)
+    if rr > 0:
+        _how_done_chip(cr, px, py - 8 - 16 * _ease_out(rr), fade * (1 - _seg(lt, T - 1.0, T)), fade)
+
+
+def _how_done_chip(cr, px, ry, bg_fade, fade):
+    _rrect(cr, px + 6, ry, 78, 22, 8)
+    cr.set_source_rgba(*FOREST, 0.16 * bg_fade)
+    cr.fill()
+    cr.set_source_rgba(*FOREST, fade)
+    cr.set_line_width(2)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(px + 16, ry + 11)
+    cr.line_to(px + 21, ry + 16)
+    cr.line_to(px + 30, ry + 6)
+    cr.stroke()
+    _text(cr, px + 38, ry + 15, "done", 11, FOREST, fade, bold=True)
+
+
+SEG_POPUP_HOTKEY = 0
+SEG_CLIPBOARD = 1
+SEG_SNIPPETS = 2
+_SUMMON_BEAT_S = 4.0
+
+
 def _draw_summon(cr, w, h, t):
+    """Scene: one beat per switched-on way to summon (`_draw_summon.segs`)."""
     sx, sy, sw, sh = _stage(cr, w, h)
-    keys1 = getattr(_draw_summon, "keys", ["Super", "Shift", "Y"])
-    keys2 = getattr(_draw_summon, "clip_keys", ["Ctrl", "Super", "V"])
-    # 0 popup hotkey, 1 clipboard, 2 snippets; only those that are switched on
-    segs = getattr(_draw_summon, "segs", (0, 1, 2)) or (0,)
-    lt = t % (4.0 * len(segs))
-    beat = int(lt // 4.0)
+    popup_keys = getattr(_draw_summon, "keys", ["Super", "Shift", "Y"])
+    clip_keys = getattr(_draw_summon, "clip_keys", ["Ctrl", "Super", "V"])
+    segs = getattr(_draw_summon, "segs", (0, 1, 2)) or (SEG_POPUP_HOTKEY,)
+    lt = t % (_SUMMON_BEAT_S * len(segs))
+    beat = int(lt // _SUMMON_BEAT_S)
     seg = segs[beat]
-    base = lt - beat * 4.0  # 0..4 within the beat
+    base = lt - beat * _SUMMON_BEAT_S
     cx = sx + sw / 2 + 18
     cy = sy + 50
-    if seg < 2:
-        keys = keys2 if seg == 1 else keys1
-        label = "Clipboard history" if seg == 1 else "Popup hotkey" if keys else "Select text"
-        accent = OCHRE if seg == 1 else GREEN
-        # keycaps press in sequence
-        widths = [26 + 15 * len(k) for k in keys]
-        total = sum(widths) + 26 * (len(keys) - 1)
-        x = cx - total / 2
-        for i, k in enumerate(keys):
-            press = _seg(base, 0.5 + i * 0.30, 0.72 + i * 0.30) - _seg(base, 1.5, 1.72)
-            kw = _keycap(cr, x, cy, k, press, accent)
-            if i < len(keys) - 1:
-                _text(cr, x + kw + 6, cy + 26, "+", 17, MUTE, center=False)
-            x += kw + 26
-        _text(cr, cx, cy - 18, label, 13, accent, bold=True, center=True)
-        if seg == 0:
-            blip = _bump(_seg(base, 1.6, 2.9))
-            if blip > 0:
-                _popupbar(cr, cx - 64, cy + 64, 3, blip)
-        else:
-            rise = _eo(_seg(base, 1.6, 2.4))
-            if rise > 0:
-                lx = cx - 90
-                ly = cy + 60
-                _shadow(cr, lx, ly, 180, 70, 10)
-                _rrect(cr, lx, ly, 180, 70, 10)
-                cr.set_source_rgb(1, 1, 1)
-                cr.fill_preserve()
-                cr.set_source_rgba(*STAGE_BORDER, 1)
-                cr.set_line_width(1)
-                cr.stroke()
-                for r in range(3):
-                    ry = ly + 12 + r * 18
-                    ra = _eo(_seg(base, 1.7 + r * 0.18, 2.3 + r * 0.18))
-                    cr.arc(lx + 16, ry + 4, 4, 0, 2 * math.pi)
-                    cr.set_source_rgba(*_ACCENTS[r], ra)
-                    cr.fill()
-                    _bar(cr, lx + 28, ry + 1, 140 * ra, 7, (0.82, 0.85, 0.91))
+    if seg == SEG_POPUP_HOTKEY:
+        label = "Popup hotkey" if popup_keys else "Select text"
+        _summon_keys(cr, cx, cy, base, popup_keys, label, GREEN)
+        blip = _bump(_seg(base, 1.6, 2.9))
+        if blip > 0:
+            _popupbar(cr, cx - 64, cy + 64, 3, blip)
+    elif seg == SEG_CLIPBOARD:
+        _summon_keys(cr, cx, cy, base, clip_keys, "Clipboard history", OCHRE)
+        _summon_history_list(cr, cx, cy, base)
     else:
-        # seg 2: snippets / text expansion - type a short trigger, it
-        # expands into the whole text. Lives inside clipboard history.
-        accent = MINT
-        _text(cr, cx, cy - 18, "Snippets & text expansion", 13, accent, bold=True, center=True)
-        fw, fh = 224, 46
-        fx = cx - fw / 2
-        fy = cy + 14
-        _shadow(cr, fx, fy, fw, fh, 9)
-        _rrect(cr, fx, fy, fw, fh, 9)
-        cr.set_source_rgb(1, 1, 1)
-        cr.fill_preserve()
-        cr.set_source_rgba(*STAGE_BORDER, 1)
-        cr.set_line_width(1)
-        cr.stroke()
-        trigger = ";sig"
-        expanded = "Best regards, Alex"
-        ty = fy + fh / 2 + 5
-        if _seg(base, 2.0, 2.45) < 0.5:
-            n = int(round(len(trigger) * _seg(base, 0.5, 1.8)))
-            shown = trigger[:n]
-            _text(cr, fx + 16, ty, shown, 15, (0.20, 0.22, 0.28), center=False)
-            if int(t * 2) % 2 == 0:  # blinking caret
-                cw = fx + 16 + len(shown) * 8.6
-                cr.set_source_rgba(0.20, 0.22, 0.28, 0.8)
-                cr.set_line_width(1.5)
-                cr.move_to(cw, fy + 12)
-                cr.line_to(cw, fy + fh - 12)
-                cr.stroke()
-        else:
-            a = _eo(_seg(base, 2.0, 2.7))
-            _text(cr, fx + 16, ty, expanded, 14, (0.20, 0.22, 0.28), a=a, center=False)
-        spark = _bump(_seg(base, 1.95, 2.7))  # pop at the swap
-        if spark > 0:
-            scx, scy = fx + fw - 22, fy + fh / 2
-            cr.set_line_width(2)
-            for k in range(4):
-                ang = k * (math.pi / 2) + 0.4
-                rr = 6 + 10 * spark
-                cr.set_source_rgba(*MINT, spark)
-                cr.move_to(scx + 3 * math.cos(ang), scy + 3 * math.sin(ang))
-                cr.line_to(scx + rr * math.cos(ang), scy + rr * math.sin(ang))
-                cr.stroke()
-        _text(cr, cx, fy + fh + 22, "Type a shortcut, get the whole text", 11, MUTE, center=True)
-    # guide on the left, hops with the key presses
+        _summon_snippet(cr, cx, cy, base, t)
     hop = abs(math.sin(base * 3.0)) * 6 if base < 1.6 else 0
     _mascot(
         cr,
@@ -587,11 +563,83 @@ def _draw_summon(cr, w, h, t):
         sx + 30,
         sy + 20,
         speeches[seg],
-        a=_eo(_seg(base, 0.2, 0.7)) * (1 - _seg(base, 3.4, 4.0)),
+        a=_ease_out(_seg(base, 0.2, 0.7)) * (1 - _seg(base, 3.4, 4.0)),
     )
 
 
-# ── scene 3: add ready-made plugins (a little store) ─────────────────────────
+def _summon_keys(cr, cx, cy, base, keys, label, accent):
+    """Keycaps pressed in sequence, under `label`."""
+    widths = [_keycap_width(k) for k in keys]
+    total = sum(widths) + 26 * (len(keys) - 1)
+    x = cx - total / 2
+    for i, k in enumerate(keys):
+        press = _seg(base, 0.5 + i * 0.30, 0.72 + i * 0.30) - _seg(base, 1.5, 1.72)
+        kw = _keycap(cr, x, cy, k, press, accent)
+        if i < len(keys) - 1:
+            _text(cr, x + kw + 6, cy + 26, "+", 17, MUTE, center=False)
+        x += kw + 26
+    _text(cr, cx, cy - 18, label, 13, accent, bold=True, center=True)
+
+
+def _summon_history_list(cr, cx, cy, base):
+    rise = _ease_out(_seg(base, 1.6, 2.4))
+    if rise <= 0:
+        return
+    lx = cx - 90
+    ly = cy + 60
+    _card(cr, lx, ly, 180, 70, 10)
+    for r in range(3):
+        ry = ly + 12 + r * 18
+        ra = _ease_out(_seg(base, 1.7 + r * 0.18, 2.3 + r * 0.18))
+        cr.arc(lx + 16, ry + 4, 4, 0, 2 * math.pi)
+        cr.set_source_rgba(*_ACCENTS[r], ra)
+        cr.fill()
+        _bar(cr, lx + 28, ry + 1, 140 * ra, 7, (0.82, 0.85, 0.91))
+
+
+def _summon_snippet(cr, cx, cy, base, t):
+    """A short trigger typed into a field expands into the whole text."""
+    _text(cr, cx, cy - 18, "Snippets & text expansion", 13, MINT, bold=True, center=True)
+    fw, fh = 224, 46
+    fx = cx - fw / 2
+    fy = cy + 14
+    _card(cr, fx, fy, fw, fh, 9)
+    trigger = ";sig"
+    expanded = "Best regards, Alex"
+    ink = (0.20, 0.22, 0.28)
+    ty = fy + fh / 2 + 5
+    if _seg(base, 2.0, 2.45) < 0.5:
+        n = int(round(len(trigger) * _seg(base, 0.5, 1.8)))
+        shown = trigger[:n]
+        _text(cr, fx + 16, ty, shown, 15, ink, center=False)
+        caret_on = int(t * 2) % 2 == 0
+        if caret_on:
+            cw = fx + 16 + len(shown) * 8.6
+            cr.set_source_rgba(*ink, 0.8)
+            cr.set_line_width(1.5)
+            cr.move_to(cw, fy + 12)
+            cr.line_to(cw, fy + fh - 12)
+            cr.stroke()
+    else:
+        a = _ease_out(_seg(base, 2.0, 2.7))
+        _text(cr, fx + 16, ty, expanded, 14, ink, a=a, center=False)
+    _sparkle(cr, fx + fw - 22, fy + fh / 2, _bump(_seg(base, 1.95, 2.7)))
+    _text(cr, cx, fy + fh + 22, "Type a shortcut, get the whole text", 11, MUTE, center=True)
+
+
+def _sparkle(cr, scx, scy, spark):
+    if spark <= 0:
+        return
+    cr.set_line_width(2)
+    for k in range(4):
+        ang = k * (math.pi / 2) + 0.4
+        rr = 6 + 10 * spark
+        cr.set_source_rgba(*MINT, spark)
+        cr.move_to(scx + 3 * math.cos(ang), scy + 3 * math.sin(ang))
+        cr.line_to(scx + rr * math.cos(ang), scy + rr * math.sin(ang))
+        cr.stroke()
+
+
 _PLUGINS = [
     ("Translate", GREEN),
     ("Clipboard", OCHRE),
@@ -600,73 +648,20 @@ _PLUGINS = [
     ("QR code", AMBER),
     ("Search", GREEN),
 ]
+_PLUGIN_PICKS = [0, 3, 4]
+_PLUGIN_PICK_S = 2.4
 
 
 def _draw_plugins(cr, w, h, t):
+    """Scene: a shelf of plugin cards; three in turn fly into the Installed tray."""
     sx, sy, sw, sh = _stage(cr, w, h)
     T = 7.6
     lt = t % T
-    # shelf of cards (top), installed tray (bottom)
-    cols = 3
-    gap = 12
-    cw = (sw - 150 - (cols - 1) * gap) / cols
-    ch = 38
-    ox = sx + 24
-    oy = sy + 26
-    # which card is being grabbed/installed this loop
-    picks = [0, 3, 4]
-    stagei = int(_clamp(lt / 2.4, 0, 2.999))
-    pick = picks[stagei]
-    local = lt - stagei * 2.4
+    stagei = int(_clamp(lt / _PLUGIN_PICK_S, 0, 2.999))
+    local = lt - stagei * _PLUGIN_PICK_S
     installed_count = stagei + (1 if local > 1.9 else 0)
-    for idx, (name, acc) in enumerate(_PLUGINS):
-        r, c = divmod(idx, cols)
-        x = ox + c * (cw + gap)
-        y = oy + r * (ch + gap)
-        appear = _eo(_seg(lt, 0.05 * idx, 0.4 + 0.05 * idx))
-        already = idx in picks[:stagei]
-        if already:
-            continue
-        lift = 0.0
-        fly = 0.0
-        if idx == pick:
-            lift = _bump(_seg(local, 0.2, 1.9)) * 10
-            fly = _eio(_seg(local, 1.1, 1.9))
-        if fly > 0:
-            # animate toward the installed tray slot
-            tx = sx + sw - 118
-            ty = sy + sh - 54 + stagei * 0
-            x = x + (tx - x) * fly
-            y = y + (ty - y) * fly
-            sc = 1 - 0.35 * fly
-            cr.save()
-            cr.translate(x + cw / 2, y + ch / 2)
-            cr.scale(sc, sc)
-            cr.translate(-(x + cw / 2), -(y + ch / 2))
-            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=_seg(local, 1.7, 2.0))
-            cr.restore()
-        else:
-            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=0.0)
-    # installed tray
-    tx, ty, tw, th = sx + sw - 130, sy + 28, 108, sh - 56
-    _rrect(cr, tx, ty, tw, th, 12)
-    cr.set_source_rgba(*PANEL, 1)
-    cr.fill_preserve()
-    cr.set_source_rgba(*FOREST, 0.35)
-    cr.set_line_width(1.2)
-    cr.stroke()
-    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, FOREST, bold=True, center=True)
-    for i in range(installed_count):
-        iy = ty + 30 + i * 26
-        acc = _PLUGINS[picks[i]][1]
-        _rrect(cr, tx + 10, iy, tw - 20, 20, 6)
-        cr.set_source_rgb(1, 1, 1)
-        cr.fill()
-        cr.arc(tx + 22, iy + 10, 6, 0, 2 * math.pi)
-        cr.set_source_rgba(*acc, 1)
-        cr.fill()
-        _bar(cr, tx + 34, iy + 7, tw - 56, 6, (0.84, 0.86, 0.92))
-    # guide shops along the shelf
+    _plugins_shelf(cr, sx, sy, sw, sh, lt, stagei, local)
+    _plugins_tray(cr, sx, sy, sw, sh, installed_count)
     _mascot(
         cr,
         sx + 40,
@@ -682,71 +677,99 @@ def _draw_plugins(cr, w, h, t):
         sx + 18,
         sy + sh - 100,
         "One click!",
-        a=_eo(_seg(local, 1.6, 2.0)) * (1 - _seg(local, 2.2, 2.4)),
+        a=_ease_out(_seg(local, 1.6, 2.0)) * (1 - _seg(local, 2.2, 2.4)),
     )
 
 
-# ── scene 4: build your own (recipe workshop) ────────────────────────────────
+def _plugins_shelf(cr, sx, sy, sw, sh, lt, stagei, local):
+    cols = 3
+    gap = 12
+    cw = (sw - 150 - (cols - 1) * gap) / cols
+    ch = 38
+    ox = sx + 24
+    oy = sy + 26
+    pick = _PLUGIN_PICKS[stagei]
+    for idx, (name, acc) in enumerate(_PLUGINS):
+        if idx in _PLUGIN_PICKS[:stagei]:
+            continue
+        r, c = divmod(idx, cols)
+        x = ox + c * (cw + gap)
+        y = oy + r * (ch + gap)
+        appear = _ease_out(_seg(lt, 0.05 * idx, 0.4 + 0.05 * idx))
+        lift = 0.0
+        fly = 0.0
+        if idx == pick:
+            lift = _bump(_seg(local, 0.2, 1.9)) * 10
+            fly = _ease_in_out(_seg(local, 1.1, 1.9))
+        if fly <= 0:
+            _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=0.0)
+            continue
+        tx = sx + sw - 118
+        ty = sy + sh - 54
+        x = x + (tx - x) * fly
+        y = y + (ty - y) * fly
+        sc = 1 - 0.35 * fly
+        cr.save()
+        cr.translate(x + cw / 2, y + ch / 2)
+        cr.scale(sc, sc)
+        cr.translate(-(x + cw / 2), -(y + ch / 2))
+        _plugcard(cr, x, y, cw, ch, acc, name, appear, lift, check=_seg(local, 1.7, 2.0))
+        cr.restore()
+
+
+def _plugins_tray(cr, sx, sy, sw, sh, installed_count):
+    tx, ty, tw, th = sx + sw - 130, sy + 28, 108, sh - 56
+    _rrect(cr, tx, ty, tw, th, 12)
+    cr.set_source_rgba(*PANEL, 1)
+    cr.fill_preserve()
+    cr.set_source_rgba(*FOREST, 0.35)
+    cr.set_line_width(1.2)
+    cr.stroke()
+    _text(cr, tx + tw / 2, ty + 18, "Installed", 11.5, FOREST, bold=True, center=True)
+    for i in range(installed_count):
+        iy = ty + 30 + i * 26
+        acc = _PLUGINS[_PLUGIN_PICKS[i]][1]
+        _rrect(cr, tx + 10, iy, tw - 20, 20, 6)
+        cr.set_source_rgb(1, 1, 1)
+        cr.fill()
+        cr.arc(tx + 22, iy + 10, 6, 0, 2 * math.pi)
+        cr.set_source_rgba(*acc, 1)
+        cr.fill()
+        _bar(cr, tx + 34, iy + 7, tw - 56, 6, TEXT_BAR)
+
+
+_RECIPE_BLOCKS = [
+    ("When", "text is a URL", GREEN),
+    ("Then", "open in browser", OCHRE),
+    ("Run", "your action", FOREST),
+]
+
+
 def _draw_recipe(cr, w, h, t):
+    """Scene: recipe blocks snap together, a gear turns, a new button appears."""
     sx, sy, sw, sh = _stage(cr, w, h)
     T = 7.4
     lt = t % T
-    blocks = [
-        ("When", "text is a URL", GREEN),
-        ("Then", "open in browser", OCHRE),
-        ("Run", "your action", FOREST),
-    ]
     bw, bh = 132, 56
     gap = 18
-    total = len(blocks) * bw + (len(blocks) - 1) * gap
-    bx = sx + (sw - total) / 2
+    n = len(_RECIPE_BLOCKS)
+    bx = sx + (sw - (n * bw + (n - 1) * gap)) / 2
     by = sy + 44
-    # connectors
-    for i in range(len(blocks) - 1):
+    for i in range(n - 1):
         x0 = bx + (i + 1) * bw + i * gap
-        ln = _eo(_seg(lt, 0.9 + i * 0.25, 1.4 + i * 0.25))
+        ln = _ease_out(_seg(lt, 0.9 + i * 0.25, 1.4 + i * 0.25))
         cr.set_source_rgba(*MUTE, 0.7)
         cr.set_line_width(2.2)
         cr.move_to(x0, by + bh / 2)
         cr.line_to(x0 + gap * ln, by + bh / 2)
         cr.stroke()
-    snap = 0.0
-    for i, (head, sub, acc) in enumerate(blocks):
-        appear = _eo(_seg(lt, 0.15 * i, 0.55 + 0.15 * i))
+    for i, (head, sub, acc) in enumerate(_RECIPE_BLOCKS):
+        appear = _ease_out(_seg(lt, 0.15 * i, 0.55 + 0.15 * i))
         if appear <= 0.01:
             continue
-        # slide in from the side + a snap settle
-        sd = (1 - _eob(_seg(lt, 0.15 * i, 0.85 + 0.15 * i))) * (40 + i * 10)
-        x = bx + i * (bw + gap) + sd
-        snap = max(snap, _bump(_seg(lt, 0.7 + i * 0.15, 1.1 + i * 0.15)))
-        cr.save()
-        _shadow(cr, x, by, bw, bh, 12)
-        _rrect(cr, x, by, bw, bh, 12)
-        cr.set_source_rgba(1, 1, 1, appear)
-        cr.fill_preserve()
-        cr.set_source_rgba(*acc, 0.55 * appear)
-        cr.set_line_width(1.6)
-        cr.stroke()
-        _rrect(cr, x, by, 6, bh, 3)
-        cr.set_source_rgba(*acc, appear)
-        cr.fill()
-        _text(cr, x + 18, by + 24, head, 14, INK, appear, bold=True)
-        _text(cr, x + 18, by + 42, sub, 11.5, MUTE, appear)
-        cr.restore()
-    # a gear turns while it "compiles", then a new button drops into a popup
-    gear_a = _seg(lt, 1.8, 2.4) * (1 - _seg(lt, 3.4, 3.8))
-    if gear_a > 0:
-        _gear(cr, sx + sw / 2, by + bh + 34, 12, lt * 4, (*MUTE,))
-        _gear(cr, sx + sw / 2 + 20, by + bh + 42, 8, -lt * 5, (*MUTE,))
-    built = _seg(lt, 3.4, 4.0)
-    if built > 0:
-        py = by + bh + 26 + (1 - _eob(built)) * 14
-        _popupbar(cr, sx + sw / 2 - 64, py, 3, built)
-        # the new custom button glows
-        glow = _bump(_seg(lt, 4.0, 5.4))
-        cr.arc(sx + sw / 2 - 40, py + 20, 12 + 8 * glow, 0, 2 * math.pi)
-        cr.set_source_rgba(*FOREST, 0.30 * glow)
-        cr.fill()
+        slide = (1 - _ease_out_back(_seg(lt, 0.15 * i, 0.85 + 0.15 * i))) * (40 + i * 10)
+        _recipe_block(cr, bx + i * (bw + gap) + slide, by, bw, bh, head, sub, acc, appear)
+    _recipe_result(cr, sx, sw, by + bh, lt)
     _mascot(
         cr,
         sx + sw - 58,
@@ -762,19 +785,52 @@ def _draw_recipe(cr, w, h, t):
         sx + sw - 218,
         by + bh - 4,
         "You built a plugin!",
-        a=_eo(_seg(lt, 3.8, 4.3)) * (1 - _seg(lt, T - 0.8, T)),
+        a=_ease_out(_seg(lt, 3.8, 4.3)) * (1 - _seg(lt, T - 0.8, T)),
     )
 
 
-# ── scene 5: offline AI model (only when there's one to download) ──────────
+def _recipe_block(cr, x, y, bw, bh, head, sub, acc, appear):
+    cr.save()
+    _shadow(cr, x, y, bw, bh, 12)
+    _rrect(cr, x, y, bw, bh, 12)
+    cr.set_source_rgba(1, 1, 1, appear)
+    cr.fill_preserve()
+    cr.set_source_rgba(*acc, 0.55 * appear)
+    cr.set_line_width(1.6)
+    cr.stroke()
+    _rrect(cr, x, y, 6, bh, 3)
+    cr.set_source_rgba(*acc, appear)
+    cr.fill()
+    _text(cr, x + 18, y + 24, head, 14, INK, appear, bold=True)
+    _text(cr, x + 18, y + 42, sub, 11.5, MUTE, appear)
+    cr.restore()
+
+
+def _recipe_result(cr, sx, sw, blocks_bottom, lt):
+    """Gears turn while it builds, then a popup with the new button, glowing."""
+    gear_a = _seg(lt, 1.8, 2.4) * (1 - _seg(lt, 3.4, 3.8))
+    if gear_a > 0:
+        _gear(cr, sx + sw / 2, blocks_bottom + 34, 12, lt * 4, (*MUTE,))
+        _gear(cr, sx + sw / 2 + 20, blocks_bottom + 42, 8, -lt * 5, (*MUTE,))
+    built = _seg(lt, 3.4, 4.0)
+    if built <= 0:
+        return
+    py = blocks_bottom + 26 + (1 - _ease_out_back(built)) * 14
+    _popupbar(cr, sx + sw / 2 - 64, py, 3, built)
+    glow = _bump(_seg(lt, 4.0, 5.4))
+    cr.arc(sx + sw / 2 - 40, py + 20, 12 + 8 * glow, 0, 2 * math.pi)
+    cr.set_source_rgba(*FOREST, 0.30 * glow)
+    cr.fill()
+
+
 def _draw_ai(cr, w, h, t):
+    """Scene: the model's download card, its bar filling and resetting."""
     sx, sy, sw, sh = _stage(cr, w, h)
     T = 6.0
     lt = t % T
-    # a download card: chip icon, model size, a bar that fills and resets
     cw, ch = 300, 92
     cx, cy = sx + sw / 2 - cw / 2 + 50, sy + 30
-    a = _eo(_seg(lt, 0.0, 0.4))
+    a = _ease_out(_seg(lt, 0.0, 0.4))
     _shadow(cr, cx, cy, cw, ch, 14)
     _rrect(cr, cx, cy, cw, ch, 14)
     cr.set_source_rgba(1, 1, 1, a)
@@ -782,23 +838,11 @@ def _draw_ai(cr, w, h, t):
     cr.set_source_rgba(*OCHRE, 0.30 * a)
     cr.set_line_width(1.2)
     cr.stroke()
-    _rrect(cr, cx + 16, cy + 18, 34, 34, 9)
-    cr.set_source_rgba(*OCHRE, a)
-    cr.fill()
-    # down arrow on the chip
-    cr.set_source_rgba(1, 1, 1, a)
-    cr.set_line_width(2.6)
-    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-    cr.move_to(cx + 33, cy + 25)
-    cr.line_to(cx + 33, cy + 44)
-    cr.move_to(cx + 26, cy + 37)
-    cr.line_to(cx + 33, cy + 44)
-    cr.line_to(cx + 40, cy + 37)
-    cr.stroke()
+    _download_chip(cr, cx + 16, cy + 18, a)
     _text(cr, cx + 64, cy + 32, "On-device AI model", 14, INK, a, bold=True)
     size = getattr(_draw_ai, "size", "")
     _text(cr, cx + 64, cy + 50, f"{size}, one time" if size else "one time", 12, MUTE, a)
-    fill = _eio(_seg(lt, 0.6, 4.6))
+    fill = _ease_in_out(_seg(lt, 0.6, 4.6))
     _bar(cr, cx + 16, cy + 66, cw - 32, 8, (0.88, 0.90, 0.95), a)
     if fill > 0.01:
         _bar(cr, cx + 16, cy + 66, (cw - 32) * fill, 8, FOREST if fill >= 1 else OCHRE, a)
@@ -817,8 +861,23 @@ def _draw_ai(cr, w, h, t):
         sx + 40,
         sy + sh - 118,
         "Stays on your machine",
-        a=_eo(_seg(lt, 4.6, 5.0)) * (1 - _seg(lt, T - 0.3, T)),
+        a=_ease_out(_seg(lt, 4.6, 5.0)) * (1 - _seg(lt, T - 0.3, T)),
     )
+
+
+def _download_chip(cr, x, y, a):
+    _rrect(cr, x, y, 34, 34, 9)
+    cr.set_source_rgba(*OCHRE, a)
+    cr.fill()
+    cr.set_source_rgba(1, 1, 1, a)
+    cr.set_line_width(2.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(x + 17, y + 7)
+    cr.line_to(x + 17, y + 26)
+    cr.move_to(x + 10, y + 19)
+    cr.line_to(x + 17, y + 26)
+    cr.line_to(x + 24, y + 19)
+    cr.stroke()
 
 
 def _model_to_offer():
@@ -835,24 +894,13 @@ def _model_to_offer():
         return None
 
 
-# ── scene 6: you're all set ──────────────────────────────────────────────────
 def _draw_done(cr, w, h, t):
+    """Scene: Pip waves in confetti."""
     sx, sy, sw, sh = _stage(cr, w, h)
     cx, cy = sx + sw / 2, sy + sh / 2 + 6
-    # tray hint: a little "Settings & Plugins" tag. No arrow: the panel can be
-    # at any edge (top on GNOME, bottom on Plasma).
-    tagx, tagy = sx + sw - 150, sy + 16
-    _rrect(cr, tagx, tagy, 134, 26, 8)
-    cr.set_source_rgba(*PANEL, 1)
-    cr.fill_preserve()
-    cr.set_source_rgba(*GREEN, 0.30)
-    cr.set_line_width(1)
-    cr.stroke()
-    _text(cr, tagx + 12, tagy + 17, "Settings & Plugins", 11.5, INK, bold=True)
-    # confetti + the guide waving
+    _tray_tag(cr, sx + sw - 150, sy + 16)
     if t > 0.3:
         _confetti(cr, cx, cy - 6, t)
-    wave = math.sin(t * 4) * 0.18
     _mascot(
         cr,
         cx,
@@ -861,10 +909,21 @@ def _draw_done(cr, w, h, t):
         look=(0, 0.05),
         blink=_blink_at(t),
         mouth="happy",
-        tilt=wave,
+        tilt=math.sin(t * 4) * 0.18,
         bob=3 * math.sin(t * 2.2),
     )
     _text(cr, cx, cy + 68, "Now select some text and try it!", 14, INK, bold=True, center=True)
+
+
+def _tray_tag(cr, tagx, tagy):
+    """A "Settings & Plugins" tag with no arrow: the panel can be at any edge."""
+    _rrect(cr, tagx, tagy, 134, 26, 8)
+    cr.set_source_rgba(*PANEL, 1)
+    cr.fill_preserve()
+    cr.set_source_rgba(*GREEN, 0.30)
+    cr.set_line_width(1)
+    cr.stroke()
+    _text(cr, tagx + 12, tagy + 17, "Settings & Plugins", 11.5, INK, bold=True)
 
 
 def _keys(combo: str) -> list[str]:
@@ -872,9 +931,11 @@ def _keys(combo: str) -> list[str]:
 
 
 def _summon_copy(popup_key: str, clip_key: str, history: bool) -> tuple[str, tuple[int, ...]]:
-    """Body text and _draw_summon segments for the hotkeys really bound.
-    An empty hotkey is switched off (main.py binds nothing), and the
-    clipboard hotkey and snippets need clipboard history."""
+    """Body text and _draw_summon segments for the hotkeys really bound: an
+    empty hotkey is off, and the clipboard hotkey and snippets need clipboard
+    history (pinned by `tests/test_onboarding.py::test_a_cleared_clipboard_hotkey_is_not_advertised`,
+    `tests/test_onboarding.py::test_history_off_hides_the_clipboard_hotkey_and_snippets`,
+    `tests/test_onboarding.py::test_build_pages_keeps_an_empty_hotkey_empty`)."""
     if not history:
         clip_key = ""
     body = "It appears automatically when you select text."
@@ -888,7 +949,12 @@ def _summon_copy(popup_key: str, clip_key: str, history: bool) -> tuple[str, tup
         )
     elif history:
         body += " Snippets expand a short trigger into the whole text as you type."
-    segs = tuple(seg for seg, on in ((0, bool(popup_key)), (1, bool(clip_key)), (2, history)) if on)
+    shown = (
+        (SEG_POPUP_HOTKEY, bool(popup_key)),
+        (SEG_CLIPBOARD, bool(clip_key)),
+        (SEG_SNIPPETS, history),
+    )
+    segs = tuple(seg for seg, on in shown if on)
     return body, segs
 
 
@@ -958,8 +1024,6 @@ def _build_pages(settings):
     ]
 
 
-# Window-local CSS: the scene stage keeps the brand look (it's a Cairo
-# drawing), and the page titles take the brand blue as a soft accent.
 _CSS = """
 .lp-onboarding-title {
     color: @accent_color;
@@ -976,7 +1040,7 @@ def _install_css() -> None:
     if display is None:
         return
     provider = Gtk.CssProvider()
-    if hasattr(provider, "load_from_string"):  # GTK 4.12+
+    if hasattr(provider, "load_from_string"):
         provider.load_from_string(_CSS)
     else:
         provider.load_from_data(_CSS, -1)
@@ -988,9 +1052,10 @@ def _install_css() -> None:
 
 def _page_key(keyval: int, on_control: bool) -> int | str | None:
     """What a key does window-wide: +1 / -1 page, "close", or None to let
-    the focused widget have it. Enter and Space belong to a focused button
-    or checkbox (Space ticks "Don't show this again", Enter on Skip or Back
-    does that), so they only turn the page when focus is elsewhere."""
+    the focused widget have it. Enter and Space turn the page only when no
+    button or checkbox has focus (pinned by
+    `tests/test_onboarding.py::test_enter_and_space_belong_to_a_focused_control`,
+    `tests/test_onboarding.py::test_arrows_and_escape_work_from_anywhere`)."""
     if keyval == Gdk.KEY_Right or (
         keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space) and not on_control
     ):
@@ -1002,8 +1067,8 @@ def _page_key(keyval: int, on_control: bool) -> int | str | None:
     return None
 
 
-# The moment of each scene's loop shown as a still frame when animations are
-# off: the point where the scene has played out (popup up, plugin built...).
+# Seconds into each scene's loop shown as its still frame with animations off:
+# once the scene has played out
 _STILL_AT = {
     "_draw_how": 4.0,
     "_draw_summon": 2.0,
@@ -1042,56 +1107,75 @@ class OnboardingWindow(Adw.Window):
             pass
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        root.append(self._build_scene())
+        root.append(self._build_carousel())
+        self._dots = Adw.CarouselIndicatorDots(carousel=self._carousel)
+        self._dots.set_halign(Gtk.Align.CENTER)
+        self._dots.set_margin_top(6)
+        root.append(self._dots)
 
-        # The animated scene: one Cairo stage, redrawn every frame, whose
-        # contents follow the current page. It illustrates the text below
-        # it, so assistive tech skips it.
+        header = Adw.HeaderBar()
+        header.add_css_class("flat")
+        header.set_show_title(False)
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(header)
+        toolbar.set_content(root)
+        toolbar.add_bottom_bar(self._build_controls())
+        self.set_content(toolbar)
+
+        self._catch_page_keys()
+        self.connect("destroy", self._on_destroy)
+        self._start_animation()
+        self._update_controls()
+        self._focus_next()
+
+    def _build_scene(self) -> Gtk.DrawingArea:
+        """The Cairo stage for the current page; decorative, so assistive tech
+        skips it (pinned by `tests/test_a11y.py::test_onboarding_scene_is_decorative`)."""
         self._area = Gtk.DrawingArea(accessible_role=Gtk.AccessibleRole.PRESENTATION)
         self._area.set_content_height(280)
         self._area.set_draw_func(self._on_draw)
         self._area.set_margin_start(22)
         self._area.set_margin_end(22)
-        root.append(self._area)
+        return self._area
 
-        # Page texts live in an Adw.Carousel so they slide (and can be
-        # swiped / scrolled) between steps; the scene follows the carousel.
+    def _build_carousel(self) -> Adw.Carousel:
         self._carousel = Adw.Carousel()
         self._carousel.set_vexpand(True)
         self._carousel.set_spacing(24)
         self._carousel.set_allow_scroll_wheel(False)
         self._page_texts: list[str] = []
         for pg in self._pages:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-            box.set_hexpand(True)
-            box.set_margin_top(12)
-            box.set_margin_start(44)
-            box.set_margin_end(44)
-            title = Gtk.Label(label=pg["title"], xalign=0.5)
-            title.add_css_class("title-1")
-            title.add_css_class("lp-onboarding-title")
-            title.set_justify(Gtk.Justification.CENTER)
-            title.set_wrap(True)
-            box.append(title)
-            body = Gtk.Label(xalign=0.5)
-            body.set_markup(f"<span size='large'>{pg['body']}</span>")
-            body.set_justify(Gtk.Justification.CENTER)
-            body.set_wrap(True)
-            body.set_max_width_chars(54)
-            box.append(body)
-            self._page_texts.append(f"{pg['title']}. {body.get_text()}")
-            if pg.get("ask_model"):
-                box.append(self._model_choice())
-            if pg.get("open_plugins") and self._on_open_plugins is not None:
-                box.append(self._plugins_button())
-            self._carousel.append(box)
+            self._carousel.append(self._build_page_text(pg))
         self._carousel.connect("page-changed", self._on_page_changed)
-        root.append(self._carousel)
+        return self._carousel
 
-        self._dots = Adw.CarouselIndicatorDots(carousel=self._carousel)
-        self._dots.set_halign(Gtk.Align.CENTER)
-        self._dots.set_margin_top(6)
-        root.append(self._dots)
+    def _build_page_text(self, pg: dict) -> Gtk.Box:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_hexpand(True)
+        box.set_margin_top(12)
+        box.set_margin_start(44)
+        box.set_margin_end(44)
+        title = Gtk.Label(label=pg["title"], xalign=0.5)
+        title.add_css_class("title-1")
+        title.add_css_class("lp-onboarding-title")
+        title.set_justify(Gtk.Justification.CENTER)
+        title.set_wrap(True)
+        box.append(title)
+        body = Gtk.Label(xalign=0.5)
+        body.set_markup(f"<span size='large'>{pg['body']}</span>")
+        body.set_justify(Gtk.Justification.CENTER)
+        body.set_wrap(True)
+        body.set_max_width_chars(54)
+        box.append(body)
+        self._page_texts.append(f"{pg['title']}. {body.get_text()}")
+        if pg.get("ask_model"):
+            box.append(self._model_choice())
+        if pg.get("open_plugins") and self._on_open_plugins is not None:
+            box.append(self._plugins_button())
+        return box
 
+    def _build_controls(self) -> Gtk.Box:
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         controls.set_margin_top(14)
         controls.set_margin_bottom(16)
@@ -1114,32 +1198,27 @@ class OnboardingWindow(Adw.Window):
         self._next.add_css_class("pill")
         self._next.connect("clicked", lambda _b: self._go(1))
         controls.append(self._next)
+        return controls
 
-        # Flat, title-less header (just the close button) over the scene.
-        header = Adw.HeaderBar()
-        header.add_css_class("flat")
-        header.set_show_title(False)
-        toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(header)
-        toolbar.set_content(root)
-        toolbar.add_bottom_bar(controls)
-        self.set_content(toolbar)
-
-        # Window-wide arrows / Enter / Space / Esc, caught in the capture
-        # phase so they work whichever widget has focus (see _page_key for
-        # when Enter / Space are left to the focused control).
+    def _catch_page_keys(self) -> None:
+        """Paging keys work whichever widget has focus, so they're caught in
+        the capture phase (pinned by
+        `tests/test_a11y.py::test_onboarding_is_named_and_closes_on_escape`)."""
         keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
 
-        self.connect("destroy", self._on_destroy)
-        # Frame-clock driven animation (replaces the old 33 ms timeout).
-        # With animations off (reduced motion) each page is one still frame.
+    def _start_animation(self) -> None:
+        """Redraw every frame, or with reduced motion show each page as one
+        still frame (pinned by
+        `tests/test_a11y.py::test_onboarding_holds_still_without_animations`)."""
         self._animate = _animations_enabled()
         self._timer = self._area.add_tick_callback(self._tick) if self._animate else None
-        self._update_controls()
-        # Start on Next, not on the first control in the bar (the checkbox)
+
+    def _focus_next(self) -> None:
+        """Start on Next, not the checkbox first in the bar (pinned by
+        `tests/test_a11y.py::test_onboarding_focus_starts_on_next`)."""
         self.set_default_widget(self._next)
         self.set_focus(self._next)
 
@@ -1238,8 +1317,7 @@ class OnboardingWindow(Adw.Window):
         self._t0 = GLib.get_monotonic_time()
         self._update_controls()
         self._area.queue_draw()
-        # Focus stays on Next, so a screen reader wouldn't hear the new
-        # page: read its title and text out (GTK 4.14+).
+        # Focus stays on Next, so announce the new page to screen readers (GTK 4.14+)
         if hasattr(self, "announce"):
             try:
                 self.announce(self._page_texts[ni], Gtk.AccessibleAnnouncementPriority.MEDIUM)
@@ -1297,7 +1375,7 @@ def show_onboarding(settings, on_open_plugins=None, parent=None, on_download_mod
     return True
 
 
-if __name__ == "__main__":  # standalone preview / replay
+if __name__ == "__main__":
     import os
     import sys
 

@@ -8,26 +8,28 @@ the process is called `vinopop` in ps, top and pgrep/pkill rather than
 
 import sys
 
+PR_SET_NAME = 15
+
 
 def _set_process_name(name: bytes) -> None:
-    # PR_SET_NAME sets `comm`; threads started afterwards inherit it.
+    """Set `comm`, which threads started afterwards inherit."""
     try:
         import ctypes
 
-        ctypes.CDLL(None).prctl(15, name, 0, 0, 0)
+        ctypes.CDLL(None).prctl(PR_SET_NAME, name, 0, 0, 0)
     except (OSError, AttributeError):
         pass
 
 
 _set_process_name(b"vinopop")
 
-# Before GTK is imported, as in main.py, so it works over SSH too.
+# `--doctor` (over SSH, or with a broken display) and `--trigger` (run by a
+# desktop shortcut on every press) exit before GTK is imported.
 if "--doctor" in sys.argv[1:]:
     from vino_ai import doctor
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
-# Before GTK too: a desktop shortcut runs this on every key press.
 from core import remote  # noqa: E402
 
 if (action := remote.trigger_arg(sys.argv[1:])) is not None:

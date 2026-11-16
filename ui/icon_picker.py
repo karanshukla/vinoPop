@@ -1,12 +1,4 @@
-"""Searchable icon-picker dialog backed by the current GTK icon theme.
-
-Lists every icon name the running theme exposes (usually 1500-3000), with
-a live search box and a grid of preview thumbnails. Click → returns the
-chosen icon name; Esc → returns None.
-
-Usage:
-    chosen = IconPicker(parent=some_window, initial="folder-symbolic").run()
-"""
+"""Searchable icon-picker dialog over every icon in the current GTK theme."""
 
 from __future__ import annotations
 
@@ -23,14 +15,13 @@ from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 from core.xdg_paths import HICOLOR_APPS, USER_ICONS_DIR  # noqa: E402
 from ui import gtk4_app  # noqa: E402
 
-# How many icons to render per "page". GTK FlowBox is fast enough that
-# 1000+ per page is fine on modern hardware; lazy loading was solving a
-# problem we didn't really have.
 _PAGE_SIZE = 1500
-_ICON_RENDER_SIZE = 24  # pixels in the preview grid
+_PREVIEW_ICON_PX = 24
+_DIALOG_SIZE = (640, 520)
+_SCROLL_PAGE_AHEAD_PX = 100
+_USER_ICONS_LINK = "vinopop://open-user-icons"
 
-# When a search has zero matches, offer these generic icons. Brand-specific
-# icons aren't in standard themes (Adwaita, hicolor) for trademark reasons.
+# Offered when a search matches nothing: standard themes ship no brand icons
 _FALLBACK_SUGGESTIONS = [
     "applications-internet-symbolic",
     "web-browser-symbolic",
@@ -65,10 +56,8 @@ def _icon_theme() -> Gtk.IconTheme | None:
 
 
 def _sync_user_icons() -> None:
-    """Make sure user-supplied icons in ~/.config/vinopop/icons/ are
-    visible to the GTK icon theme. Mirror them into hicolor so they show
-    up by basename in the picker and in plugin button references.
-    """
+    """Mirror the user's icons in ~/.config/vinopop/icons/ into hicolor, so
+    they resolve by basename in the picker and on plugin buttons."""
     USER_ICONS_DIR.mkdir(parents=True, exist_ok=True)
     HICOLOR_APPS.mkdir(parents=True, exist_ok=True)
     copied = False
@@ -81,9 +70,8 @@ def _sync_user_icons() -> None:
             except OSError as exc:
                 print(f"[icon_picker] could not mirror {src.name}: {exc}")
     if copied:
-        # Force GTK to rescan so the new icons appear without a restart.
-        # GTK 4 has no rescan_if_needed(); re-setting the search path
-        # invalidates the theme and makes it reload its directories.
+        # GTK 4 has no rescan_if_needed(); re-setting the search path makes
+        # the theme reload its directories
         try:
             theme = _icon_theme()
             if theme is not None:
@@ -101,11 +89,13 @@ def _list_all_icons() -> list[str]:
         names = list(theme.get_icon_names())
     except Exception:
         return []
-    # Stable order, deduplicated
     return sorted(set(names))
 
 
 class IconPicker:
+    """Modal icon chooser: `IconPicker(parent, initial).run()` returns the
+    chosen icon name, or None on cancel."""
+
     def __init__(self, parent=None, initial: str = "") -> None:
         self._parent = parent
         self._initial = initial
@@ -116,20 +106,33 @@ class IconPicker:
         self._symbolic_only = True
         self._loop: GLib.MainLoop | None = None
 
-    # ---- public ----------------------------------------------------------
-
     def run(self) -> str | None:
         """Show the picker modally and block (nested main loop) until the
         user picks an icon or cancels. Returns the icon name or None."""
         self._all_icons = _list_all_icons()
-
-        # An Adw.Dialog attaches to the recipe wizard it was opened from
         dlg = Adw.Dialog(title="Pick an Icon")
-        dlg.set_content_width(640)
-        dlg.set_content_height(520)
+        dlg.set_content_width(_DIALOG_SIZE[0])
+        dlg.set_content_height(_DIALOG_SIZE[1])
         self._dialog = dlg
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(self._build_header(dlg))
+        toolbar.set_content(self._build_results())
+        dlg.set_child(toolbar)
+        # Adw.Dialog closes itself (returning None) on Escape
+        dlg.set_focus(self._search)
 
-        # Header: Cancel on the left, the search entry as the title widget
+        self._loop = GLib.MainLoop()
+        self._apply_filter()
+        parent = self._parent if isinstance(self._parent, Gtk.Widget) else None
+        gtk4_app.present_dialog(dlg, parent, self._on_closed)
+        self._loop.run()
+        self._loop = None
+        return self._chosen
+
+    def _build_header(self, dlg: Adw.Dialog) -> Adw.HeaderBar:
+        """Cancel, the search entry as the title, and the Symbolic toggle.
+        The entry is labelled: a placeholder isn't an accessible name (pinned
+        by `tests/test_a11y.py::test_icon_picker_is_named`)."""
         header = Adw.HeaderBar()
         header.set_show_end_title_buttons(False)
         cancel = Gtk.Button(label="Cancel")
@@ -138,12 +141,10 @@ class IconPicker:
 
         self._search = Gtk.SearchEntry()
         self._search.set_placeholder_text("Search icons, like folder or mail")
-        # A placeholder isn't a name: without this it reads as a blank field
         self._search.update_property([Gtk.AccessibleProperty.LABEL], ["Search icons"])
         self._search.set_hexpand(True)
         self._search.set_max_width_chars(40)
         self._search.connect("search-changed", self._on_search)
-        # Esc inside the search box cancels the whole picker
         self._search.connect("stop-search", lambda _e: dlg.close())
         header.set_title_widget(self._search)
 
@@ -154,20 +155,21 @@ class IconPicker:
         )
         self._symbolic_toggle.connect("toggled", self._on_symbolic_toggle)
         header.pack_end(self._symbolic_toggle)
+        return header
 
+    def _build_results(self) -> Gtk.Box:
+        """The match count line (with the add-your-own link) over the grid."""
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         outer.set_margin_top(6)
         outer.set_margin_bottom(10)
         outer.set_margin_start(10)
         outer.set_margin_end(10)
 
-        # Result count line - supports clickable links in empty-state
         self._count_label = Gtk.Label(xalign=0)
         self._count_label.set_wrap(True)
         self._count_label.connect("activate-link", self._on_link_clicked)
         outer.append(self._count_label)
 
-        # Scrollable grid
         self._scroll = Gtk.ScrolledWindow()
         self._scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._scroll.set_hexpand(True)
@@ -175,40 +177,18 @@ class IconPicker:
         self._scroll.get_vadjustment().connect("value-changed", self._on_scroll)
 
         self._flowbox = Gtk.FlowBox()
-        # valign=START keeps rows packed at the top of the scroller instead
-        # of GTK spreading a short result list over the whole height.
+        # Without START GTK spreads a short result list over the whole height
         self._flowbox.set_valign(Gtk.Align.START)
         self._flowbox.set_halign(Gtk.Align.FILL)
         self._flowbox.set_hexpand(True)
-        # A generous max (the default is 7) lets GTK lay out as many
-        # children per line as the current width allows.
+        # The default is 7 per line, whatever the width
         self._flowbox.set_max_children_per_line(64)
         self._flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
         self._flowbox.set_row_spacing(2)
         self._flowbox.set_column_spacing(2)
         self._scroll.set_child(self._flowbox)
         outer.append(self._scroll)
-
-        toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(header)
-        toolbar.set_content(outer)
-        dlg.set_child(toolbar)
-        # Esc anywhere in the dialog cancels (returns None): Adw.Dialog
-        # closes itself on Escape.
-        dlg.set_focus(self._search)
-
-        self._loop = GLib.MainLoop()
-
-        # Initial population
-        self._apply_filter()
-
-        parent = self._parent if isinstance(self._parent, Gtk.Widget) else None
-        gtk4_app.present_dialog(dlg, parent, self._on_closed)
-        self._loop.run()
-        self._loop = None
-        return self._chosen
-
-    # ---- filtering -------------------------------------------------------
+        return outer
 
     def _apply_filter(self) -> bool:
         query = self._search.get_text().strip().lower()
@@ -220,17 +200,14 @@ class IconPicker:
             pool = list(self._all_icons)
 
         if query:
-            # Substring match across icon names
             self._filtered = [n for n in pool if query in n.lower()]
         else:
             self._filtered = pool
 
-        # Wipe current grid
         self._flowbox.remove_all()
         self._rendered = 0
 
         if not self._filtered and query:
-            # Zero matches - show suggestions + hint about Symbolic toggle + user icons
             esc_query = GLib.markup_escape_text(query)
             symbolic_hint = (
                 " <b>Tip:</b> if you added a colored brand icon, "
@@ -242,7 +219,7 @@ class IconPicker:
                 f"<i>No icons match “{esc_query}”. Standard themes don't ship "
                 f"brand-specific icons (Wikipedia, GitHub etc.).</i>\n"
                 f"<small>Drop your own <tt>.svg</tt> or <tt>.png</tt> files in "
-                f'<a href="vinopop://open-user-icons">'
+                f'<a href="{_USER_ICONS_LINK}">'
                 f"~/.config/vinopop/icons/</a>.{symbolic_hint} "
                 f"Or pick a generic one:</small>"
             )
@@ -251,11 +228,11 @@ class IconPicker:
             self._count_label.set_markup(
                 f"{len(self._filtered)} matching icons "
                 f"({len(self._all_icons)} total in your theme) - "
-                f'<a href="vinopop://open-user-icons">add your own</a>'
+                f'<a href="{_USER_ICONS_LINK}">add your own</a>'
             )
 
         self._render_next_page()
-        return False  # one-shot when scheduled via idle_add
+        return GLib.SOURCE_REMOVE
 
     def _render_next_page(self) -> None:
         end = min(self._rendered + _PAGE_SIZE, len(self._filtered))
@@ -270,25 +247,22 @@ class IconPicker:
         btn.add_css_class("flat")
         btn.set_tooltip_text(name)
         img = Gtk.Image.new_from_icon_name(name)
-        img.set_pixel_size(_ICON_RENDER_SIZE)
+        img.set_pixel_size(_PREVIEW_ICON_PX)
         btn.set_child(img)
         btn.connect("clicked", self._on_icon_clicked, name)
         return btn
 
-    # ---- events ----------------------------------------------------------
-
     def _on_search(self, _entry) -> None:
-        # Debounce slightly: tiny GLib timeout
         GLib.idle_add(self._apply_filter)
 
     def _on_symbolic_toggle(self, _btn) -> None:
         self._apply_filter()
 
     def _on_scroll(self, adj) -> None:
-        # When near the bottom, render the next page
+        """Render the next page once the view nears the bottom."""
         if self._rendered >= len(self._filtered):
             return
-        if adj.get_value() + adj.get_page_size() >= adj.get_upper() - 100:
+        if adj.get_value() + adj.get_page_size() >= adj.get_upper() - _SCROLL_PAGE_AHEAD_PX:
             self._render_next_page()
 
     def _on_icon_clicked(self, _btn, name: str) -> None:
@@ -300,12 +274,12 @@ class IconPicker:
             self._loop.quit()
 
     def _on_link_clicked(self, _label, uri: str) -> bool:
-        """Handle the custom vinopop:// link in the empty-state message."""
-        if uri == "vinopop://open-user-icons":
+        """Open the user icon folder for our link; True when handled."""
+        if uri == _USER_ICONS_LINK:
             USER_ICONS_DIR.mkdir(parents=True, exist_ok=True)
             try:
                 subprocess.Popen(["xdg-open", str(USER_ICONS_DIR)], start_new_session=True)
             except FileNotFoundError:
                 pass
-            return True  # consumed
-        return False  # let GTK handle real URIs
+            return True
+        return False

@@ -1,24 +1,17 @@
 """Key injection on Wayland: Paste / Cut / Select all / Backspace.
 
-Backends, tried in this order until one reports success:
+Backends, tried in this order until one succeeds:
 
-1. xdg-desktop-portal RemoteDesktop, NotifyKeyboardKeysym. No root, no
-   daemon, no group. It sends keysyms, and the compositor (KWin:
-   FakeInputBackend keyboard_keysym) finds the key for each one in the
-   user's live keymap, so Ctrl+A is Ctrl+A on AZERTY and Dvorak too. The
-   first use shows KDE's "Remote control requested" dialog; we ask for
-   persist_mode=2, so ticking "Allow restoring" there makes later sessions
-   start without asking (restore token saved under ~/.local/state/vinopop).
-2. ydotool + ydotoold: writes evdev keycodes through /dev/uinput. Needs the
-   daemon running and its socket reachable. Keycodes are physical, so we map
-   keysyms to keycodes through the user's xkb layout first (see xkb.Keymap).
-3. wtype: zwp_virtual_keyboard_v1. KWin doesn't implement that protocol
-   (wtype exits with "Compositor does not support the virtual keyboard
-   protocol"), so it's only tried off KDE (Sway, Hyprland, ...).
+1. xdg-desktop-portal RemoteDesktop, NotifyKeyboardKeysym. Sends keysyms,
+   which the compositor maps through the live keymap, so Ctrl+A is Ctrl+A
+   on any layout. The first use shows a "Remote control" dialog; a saved
+   restore token lets later sessions start without it.
+2. ydotool + ydotoold: evdev keycodes through /dev/uinput, which are
+   physical, so keysyms are mapped through the user's xkb layout first.
+3. wtype: zwp_virtual_keyboard_v1, which KWin doesn't implement, so it's
+   never tried on KDE.
 
-When all of them fail, one desktop notification per session says what to
-enable. Nothing here imports GTK at module level; the portal client uses Gio
-on the injector's own thread.
+When all fail, one notification per session says what to enable.
 """
 
 from __future__ import annotations
@@ -36,11 +29,12 @@ from . import xkb
 
 APP_ID = "io.github.karanshukla.vinoPop"
 YDOTOOL_TIMEOUT_S = 2.0
+WTYPE_TIMEOUT_S = 2.0
+_KEY_1 = 2  # evdev; KEY_2..KEY_0 follow
 
-# US QWERTY evdev codes (linux/input-event-codes.h), for when the layout is
-# us/unknown or libxkbcommon is missing.
+# US QWERTY evdev codes, for a us/unknown layout or no libxkbcommon.
 QWERTY_KEYCODES = {
-    **{d: 2 + i for i, d in enumerate("1234567890")},  # KEY_1=2 .. KEY_0=11
+    **{d: _KEY_1 + i for i, d in enumerate("1234567890")},
     "a": 30,
     "b": 48,
     "c": 46,
@@ -115,6 +109,9 @@ def parse_chord(combo: str) -> Chord | None:
     return Chord(mods, parts[-1])
 
 
+PRESSED, RELEASED = 1, 0
+
+
 def chord_keysyms(chord: Chord) -> list[tuple[int, int]] | None:
     """(keysym, pressed) sequence for the portal: modifiers down, key down/up,
     modifiers up in reverse."""
@@ -123,13 +120,10 @@ def chord_keysyms(chord: Chord) -> list[tuple[int, int]] | None:
         print(f"[keys] unknown key {chord.key!r}")
         return None
     mods = [xkb.MODIFIER_KEYSYMS[m] for m in chord.modifiers]
-    seq = [(m, 1) for m in mods] + [(key, 1), (key, 0)]
-    return seq + [(m, 0) for m in reversed(mods)]
+    seq = [(m, PRESSED) for m in mods] + [(key, PRESSED), (key, RELEASED)]
+    return seq + [(m, RELEASED) for m in reversed(mods)]
 
 
-# ---------------------------------------------------------------------------
-# ydotool
-# ---------------------------------------------------------------------------
 def ydotool_socket() -> str | None:
     """The socket ydotool will talk to, if it exists. Same lookup order as
     the ydotool client: $YDOTOOL_SOCKET, $XDG_RUNTIME_DIR/.ydotool_socket,
@@ -157,9 +151,10 @@ def _ydotool_env() -> dict[str, str]:
 
 
 def _ydotool_run(sub_argv: list[str], runner: Callable = subprocess.run) -> bool:
-    """Run `ydotool <sub_argv>`. True only if it exited 0 within the timeout:
-    with ydotoold down the client prints "failed to connect socket" and
-    exits 2, which used to count as success."""
+    """Run `ydotool <sub_argv>`. True only for exit 0 within the timeout
+    (pinned by `tests/test_wayland_input.py::test_ydotool_run_success`,
+    `tests/test_wayland_input.py::test_ydotool_run_reports_daemon_failure`,
+    `tests/test_wayland_input.py::test_ydotool_run_times_out_instead_of_hanging`)."""
     try:
         out = runner(
             ["ydotool", *sub_argv],
@@ -221,14 +216,13 @@ def ydotool_key_events(
     return events
 
 
-# ---------------------------------------------------------------------------
-# wtype (wlroots only)
-# ---------------------------------------------------------------------------
 def on_kwin() -> bool:
     return "KDE" in (os.environ.get("XDG_CURRENT_DESKTOP") or "").upper()
 
 
 def wtype_usable() -> bool:
+    """Never on KWin, which lacks zwp_virtual_keyboard_v1 (pinned by
+    `tests/test_wayland_input.py::test_wtype_is_never_used_on_kwin`)."""
     return not on_kwin() and bool(shutil.which("wtype"))
 
 
@@ -255,7 +249,7 @@ def wtype_args(chord: Chord) -> list[str]:
 def _wtype_run(args: list[str]) -> bool:
     try:
         out = subprocess.run(
-            ["wtype", *args], capture_output=True, text=True, timeout=2.0, check=False
+            ["wtype", *args], capture_output=True, text=True, timeout=WTYPE_TIMEOUT_S, check=False
         )
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"[keys] wtype failed: {exc}")
@@ -266,14 +260,15 @@ def _wtype_run(args: list[str]) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# xdg-desktop-portal RemoteDesktop
-# ---------------------------------------------------------------------------
 _PORTAL_BUS = "org.freedesktop.portal.Desktop"
 _PORTAL_PATH = "/org/freedesktop/portal/desktop"
 _RD_IFACE = "org.freedesktop.portal.RemoteDesktop"
 _DEVICE_KEYBOARD = 1
 _PERSIST_UNTIL_REVOKED = 2
+_RESPONSE_SUCCESS, _RESPONSE_CANCELLED = 0, 1
+_PROBE_TIMEOUT_MS = 1500
+_DBUS_CALL_TIMEOUT_MS = 2000
+_RESPONSE_POLL_S = 0.02
 
 
 def _token_path() -> str:
@@ -303,7 +298,7 @@ def portal_keyboard_available() -> bool | None:
             GLib.Variant("(ss)", (_RD_IFACE, "AvailableDeviceTypes")),
             GLib.VariantType("(v)"),
             Gio.DBusCallFlags.NONE,
-            1500,
+            _PROBE_TIMEOUT_MS,
             None,
         )
     except Exception as exc:  # noqa: BLE001 - GLib.Error: no portal / no RemoteDesktop
@@ -322,11 +317,10 @@ class PortalDenied(Exception):
 class PortalKeyboard:
     """A RemoteDesktop portal session with KEYBOARD access.
 
-    Must be used from a single thread (the injector's): it owns a private
-    D-Bus connection whose signals are dispatched on that thread's
-    GLib.MainContext. The session is opened on first use and closed after
-    IDLE_CLOSE_S without keys, because KDE shows a "Remote Control" tray
-    item for as long as it is open."""
+    Single-threaded (the injector's thread): its private D-Bus connection
+    dispatches signals on that thread's GLib.MainContext. Closed after
+    IDLE_CLOSE_S without keys, since KDE shows a "Remote Control" tray item
+    while it's open."""
 
     IDLE_CLOSE_S = 300.0
     START_TIMEOUT_S = 120.0  # the user is reading a dialog
@@ -342,14 +336,13 @@ class PortalKeyboard:
         self._counter = 0
         self.denied = False
 
-    # ---- plumbing ------------------------------------------------------
     def _connect(self):
         from gi.repository import Gio, GLib
 
         if self._conn is not None:
             return self._conn
         self._ctx = GLib.MainContext.new()
-        self._ctx.push_thread_default()  # this thread is ours for good
+        self._ctx.push_thread_default()
         addr = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
         self._conn = Gio.DBusConnection.new_for_address_sync(
             addr,
@@ -358,9 +351,8 @@ class PortalKeyboard:
             None,
             None,
         )
-        # Name ourselves to the portal (xdg-desktop-portal >= 1.19), so the
-        # dialog says "vinoPop" and the stored permission is keyed to us.
-        # Must precede any other portal call on this connection.
+        # Registry.Register (xdg-desktop-portal >= 1.19) names us in the dialog
+        # and keys the stored permission; it must be the first portal call.
         try:
             self._conn.call_sync(
                 _PORTAL_BUS,
@@ -370,7 +362,7 @@ class PortalKeyboard:
                 GLib.Variant("(sa{sv})", (APP_ID, {})),
                 None,
                 Gio.DBusCallFlags.NONE,
-                2000,
+                _DBUS_CALL_TIMEOUT_MS,
                 None,
             )
         except Exception as exc:  # noqa: BLE001 - older portal, or already registered
@@ -422,14 +414,14 @@ class PortalKeyboard:
             while "code" not in got and time.monotonic() < deadline:
                 self._pump()
                 if "code" not in got:
-                    time.sleep(0.02)
+                    time.sleep(_RESPONSE_POLL_S)
         finally:
             conn.signal_unsubscribe(sub)
         if "code" not in got:
             raise TimeoutError(f"{method}: no answer in {timeout:.0f}s")
-        if got["code"] == 1:
+        if got["code"] == _RESPONSE_CANCELLED:
             raise PortalDenied(method)
-        if got["code"] != 0:
+        if got["code"] != _RESPONSE_SUCCESS:
             raise RuntimeError(f"{method} failed (response {got['code']})")
         return got["results"]
 
@@ -449,7 +441,6 @@ class PortalKeyboard:
         except OSError as exc:
             print(f"[keys] could not save the portal restore token: {exc}")
 
-    # ---- session -------------------------------------------------------
     def _open(self) -> str:
         from gi.repository import Gio, GLib
 
@@ -496,7 +487,7 @@ class PortalKeyboard:
             self._close_handle(session)
             raise PortalDenied("keyboard not granted")
         if res.get("restore_token"):
-            self._save_token(str(res["restore_token"]))  # single use: keep the new one
+            self._save_token(str(res["restore_token"]))  # tokens are single-use
 
         def on_closed(*_):
             print("[keys] portal session closed by the desktop")
@@ -526,7 +517,7 @@ class PortalKeyboard:
                 None,
                 None,
                 Gio.DBusCallFlags.NONE,
-                2000,
+                _DBUS_CALL_TIMEOUT_MS,
                 None,
             )
         except Exception:  # noqa: BLE001 - already gone
@@ -551,7 +542,7 @@ class PortalKeyboard:
         if self.denied:
             return False
         try:
-            self._pump()  # deliver a pending Session.Closed
+            self._pump()  # a pending Session.Closed
             if self._session is None:
                 self._session = self._open()
             for keysym, pressed in seq:
@@ -563,7 +554,7 @@ class PortalKeyboard:
                     GLib.Variant("(oa{sv}iu)", (self._session, {}, keysym, pressed)),
                     None,
                     Gio.DBusCallFlags.NONE,
-                    2000,
+                    _DBUS_CALL_TIMEOUT_MS,
                     None,
                 )
         except PortalDenied as exc:
@@ -578,16 +569,12 @@ class PortalKeyboard:
         return True
 
 
-# ---------------------------------------------------------------------------
-# The injector: one worker thread, backends in order, one notice on failure
-# ---------------------------------------------------------------------------
 class KeyInjector:
-    """Queue key chords and text for the focused window.
+    """Queue key chords and text for the focused window. send_key() and
+    type_text() return at once; one worker thread delivers jobs in order,
+    off the GTK main loop (the portal's dialog can take minutes)."""
 
-    send_key() / type_text() return at once; a worker thread delivers jobs
-    in order (so Paste, then Return, still arrive in that order) and never
-    blocks the GTK main loop, which matters while the portal's permission
-    dialog is up."""
+    IDLE_CHECK_S = 30.0
 
     def __init__(
         self,
@@ -603,7 +590,6 @@ class KeyInjector:
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
 
-    # ---- public --------------------------------------------------------
     def send_key(self, combo: str) -> None:
         self._submit(("key", combo))
 
@@ -626,7 +612,6 @@ class KeyInjector:
             names.append("wtype")
         return names
 
-    # ---- worker --------------------------------------------------------
     def _submit(self, job: tuple[str, str]) -> None:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
@@ -637,7 +622,7 @@ class KeyInjector:
     def _run(self) -> None:
         while True:
             try:
-                job = self._jobs.get(timeout=30.0)
+                job = self._jobs.get(timeout=self.IDLE_CHECK_S)
             except queue.Empty:
                 if self._portal is not None:
                     self._portal.close_if_idle()
@@ -659,9 +644,11 @@ class KeyInjector:
             self._portal = PortalKeyboard()
         return self._portal
 
-    # ---- delivery (synchronous; the worker calls these) ----------------
     def deliver(self, kind: str, payload: str) -> bool:
-        """Try each backend in order. True if one of them took it."""
+        """Try each backend in order (pinned by
+        `tests/test_wayland_input.py::test_portal_failure_falls_back_to_ydotool`,
+        `tests/test_wayland_input.py::test_everything_failing_returns_false_and_notifies`).
+        True if one took it."""
         if kind == "key":
             ok = self._deliver_key(payload)
         else:
@@ -689,11 +676,10 @@ class KeyInjector:
             seq: list[tuple[int, int]] = []
             for ch in text:
                 ks = xkb.keysym_for_char(ch)
-                seq += [(ks, 1), (ks, 0)]
+                seq += [(ks, PRESSED), (ks, RELEASED)]
             if self._get_portal().send(seq):
                 return True
-        # ydotool types through its own US table: fine for ASCII on QWERTY.
-        # `--` stops option parsing so text starting with '-' is typed.
+        # ydotool types through its own US table, so only ASCII on QWERTY is right.
         if shutil.which("ydotool") and _ydotool_run(["type", "--", text]):
             return True
         return wtype_usable() and _wtype_run([text])
@@ -722,5 +708,5 @@ class KeyInjector:
 def _notify_once(message: str) -> None:
     from .base import _warn_missing_injector
 
-    # Keyed by the message: "declined" still shows after a "not set up" notice.
+    # Once per message, so "declined" still shows after a "not set up" notice.
     _warn_missing_injector(f"wayland_keys:{message}", message)

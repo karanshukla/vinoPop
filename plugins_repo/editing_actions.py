@@ -1,31 +1,21 @@
 # vinopop-plugin-version: 3
-"""Editing actions - Cut, Paste, Backspace, Select All.
+"""Editing actions: Cut, Paste, Paste & Enter, Backspace, Select All.
 
-PopClip's bread-and-butter buttons. They all operate on the currently
-focused editable text input by simulating the standard keyboard
-shortcut through the platform backend:
-
-  Cut         → Ctrl+X        (copy selection + remove from source)
-  Paste       → Ctrl+V        (replace selection with clipboard content)
-  Backspace   → BackSpace     (delete selection)
-  Select All  → Ctrl+A        (expand selection to the whole field)
-
-vinoPop's popup has set_accept_focus(False), so the source app keeps
-keyboard focus the whole time the popup is up - the injected key event
-lands there, not on the popup window. Will only have a visible effect
-in an editable field; clicking 'Cut' on a read-only web page does
-nothing, same as PopClip on macOS.
+Each sends the usual shortcut through the platform backend. The popup
+never takes keyboard focus, so the keys land in the app the text was
+selected in; in a read-only view they do nothing.
 """
 
 from __future__ import annotations
 
 from plugin_base import Plugin
 
+# Electron apps debounce input: an Enter sooner than this after the paste
+# submits the field empty
+_PASTE_SETTLE_S = 0.08
+
 
 def _send_keys(combo: str) -> None:
-    # Key injection goes through the platform backend: XTEST on X11, the
-    # RemoteDesktop portal or ydotool on KDE Wayland. The backend handles a
-    # missing injector itself.
     from platform_backend import get_backend
 
     get_backend().send_key(combo)
@@ -39,24 +29,22 @@ def _paste(_text: str) -> None:
     _send_keys("ctrl+v")
 
 
-# WM_CLASS substrings of apps where pressing plain Return inserts a
-# newline instead of submitting. For those, Paste & Enter sends
-# Ctrl+Return (or Ctrl+Shift+Return for Discord's "send" binding).
+# WM_CLASS substrings of apps where plain Return inserts a newline
 _NEWLINE_ENTER_CLASSES = (
-    "slack",  # Slack desktop and web client (chrome-app)
-    "discord",  # Discord desktop
-    "ms-teams",  # Microsoft Teams
+    "slack",
+    "discord",
+    "ms-teams",
     "teams-for-linux",
-    "element",  # Element (Matrix client) - shift+enter newline
-    "thunderbird",  # Compose window
+    "element",
+    "thunderbird",
 )
 
 
 def _submit_keystroke_for_focus() -> str:
-    """Probe the focused window's WM_CLASS and decide whether plain
-    Return submits, or whether we need Ctrl+Return. Default is plain
-    Return - it's the right answer for terminals, search bars,
-    address bars, Claude/ChatGPT/Gemini web, single-line chat boxes."""
+    """Ctrl+Return in the _NEWLINE_ENTER_CLASSES apps, plain Return
+    everywhere else (pinned by
+    `tests/test_plugins_editing.py::test_paste_and_enter_submits_with_ctrl_return_in_slack`,
+    `tests/test_plugins_editing.py::test_paste_and_enter_submits_with_return_elsewhere`)."""
     from platform_backend import get_backend
 
     blob = " ".join(get_backend().active_window_haystacks())
@@ -67,18 +55,11 @@ def _submit_keystroke_for_focus() -> str:
 
 
 def _paste_and_enter(_text: str) -> None:
-    """Paste clipboard, settle, then submit. Picks Ctrl+Return for apps
-    where Return inserts a newline (Slack, Discord, Teams, Element,
-    Thunderbird compose) and plain Return everywhere else (terminals,
-    search bars, single-line chat boxes, Claude/ChatGPT/Gemini web).
-    The settle pause matters - Electron apps debounce input events;
-    without it Enter beats the paste's committed-text state and the
-    field submits empty."""
     import time as _t
 
     submit_key = _submit_keystroke_for_focus()
     _send_keys("ctrl+v")
-    _t.sleep(0.08)
+    _t.sleep(_PASTE_SETTLE_S)
     _send_keys(submit_key)
 
 
@@ -91,15 +72,14 @@ def _select_all(_text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    # Priority: just behind the universal "copy" (which is 10) so the
-    # editing cluster sits together at the start of the popup row.
+    # Priorities 11-15: right after Copy (10), so the editing buttons sit together
     register_plugin(
         Plugin(
             name="cut",
             icon="edit-cut-symbolic",
             tooltip="Cut",
             handler=_cut,
-            content_types=(),  # universal - show for every selection
+            content_types=(),
             priority=11,
             requires_editable=True,
         )
@@ -115,9 +95,6 @@ def register(register_plugin) -> None:
             requires_editable=True,
         )
     )
-    # Paste & Enter: paste the clipboard then submit. The icon is the
-    # standard send / right-arrow glyph so the difference from plain
-    # Paste reads at a glance.
     register_plugin(
         Plugin(
             name="paste-and-enter",
@@ -129,17 +106,10 @@ def register(register_plugin) -> None:
             requires_editable=True,
         )
     )
-    # Same handler (an injected BackSpace key) as the no-selection edit
-    # menu's "Backspace" button - label them the same so the user
-    # doesn't read them as two separate actions. With a selection
-    # active, BackSpace deletes the selection; without one it deletes
-    # the character before the cursor - same key, different effect.
     register_plugin(
         Plugin(
             name="backspace",
-            # edit-clear-symbolic is the LTR Backspace glyph (arrow pointing
-            # left with an X inside). The -rtl variant points right and is
-            # for right-to-left languages - wrong direction for us.
+            # Not -rtl: that one points right, for right-to-left languages
             icon="edit-clear-symbolic",
             tooltip="Backspace (delete the selected text)",
             handler=_backspace,
@@ -148,9 +118,7 @@ def register(register_plugin) -> None:
             requires_editable=True,
         )
     )
-    # Select All is left as 'always show' - Ctrl+A works on read-only
-    # widgets too (browsers, PDF viewers expand the selection to the
-    # whole document), so it stays useful even without an editable focus.
+    # Not requires_editable: Ctrl+A extends a selection in read-only views too
     register_plugin(
         Plugin(
             name="select-all",

@@ -1,12 +1,9 @@
-"""GTK popup window showing context-aware action buttons.
-
-Visual style is inspired by PopClip on macOS: a small, dark, rounded
-floating bar that appears near the selection and disappears when the
-user clicks outside it.
-"""
+"""The popup: a small rounded bar of action buttons shown near the selection,
+dismissed by a click outside it."""
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import threading
@@ -115,9 +112,9 @@ button.vinopop-overflow:hover {
 
 
 def _monitor_for_point(display, x: float, y: float, is_logical: bool = True):
-    """The Gdk.Monitor containing (x, y), or the first monitor. GTK 4 has no
-    get_monitor_at_point(); monitor geometry is logical, so physical X11 root
-    coords are scaled down by each monitor's own factor before the test."""
+    """The Gdk.Monitor containing (x, y), or the first monitor (GTK 4 has no
+    get_monitor_at_point()). Physical X11 coordinates are scaled by each
+    monitor's own factor before the test."""
     try:
         return monitor_at(display.get_monitors(), x, y, is_logical)
     except Exception:
@@ -152,17 +149,22 @@ def _icon_file(icon_name: str, icon_px: int, scale: int) -> str | None:
     return f.get_path() if f is not None else None
 
 
-_BUTTON_SIZE_MIN = 16  # symbolic icons go muddy below this on every screen
-_BUTTON_SIZE_MAX = 32  # > 32 is touch-target territory; mouse users don't benefit
+_BUTTON_SIZE_MIN = 16
+_BUTTON_SIZE_MAX = 32
 _BUTTON_SIZE_DEFAULT = 22
 
 _popup_css_provider: Gtk.CssProvider | None = None
 
 
 def _resolve_button_size() -> int:
-    """Clamp the popup_button_size setting into the supported range.
-    Falls back to the default if the key isn't set or has been hand-
-    edited to nonsense in settings.json."""
+    """The popup_button_size setting clamped to 16-32 px (symbolic icons go
+    muddy below 16; above 32 is touch-target size), or the default when it's
+    unset or not a number (pinned by
+    `tests/test_popup_rules.py::test_a_button_size_of_sixteen_is_kept`,
+    `tests/test_popup_rules.py::test_a_button_size_under_sixteen_is_raised_to_it`,
+    `tests/test_popup_rules.py::test_a_button_size_of_thirty_two_is_kept`,
+    `tests/test_popup_rules.py::test_a_button_size_over_thirty_two_is_lowered_to_it`,
+    `tests/test_popup_rules.py::test_a_nonsense_button_size_is_the_default`)."""
     try:
         from core.settings import get_settings
 
@@ -197,47 +199,43 @@ def _label_text(tooltip: str) -> str:
     return short or text
 
 
-def _build_css(size: int) -> bytes:
-    """Substitute the per-size measurements into the static CSS template.
-    Padding, radii and inner gutters scale with button size so the
-    popup shrinks/grows as a single visual unit. Colours are remapped
-    through theme._LIGHT_REMAP when the user's theme is light, so the
-    popup background/border/text follow the same palette as the rest
-    of the app."""
-    pad_v = max(1, size // 12)
-    pad_h = max(3, size // 6)
-    win_pad = max(2, size // 7)  # gutter between bar and frame
-    win_radius = max(6, size // 2 - 2)  # outer corner roundness
-    btn_radius = max(3, size // 4)  # button corner roundness
-    css = (
-        _CSS.replace(b"__BTN_SIZE__", str(size).encode())
-        .replace(b"__PAD_V__", str(pad_v).encode())
-        .replace(b"__PAD_H__", str(pad_h).encode())
-        .replace(b"__PAD_H_OVERFLOW__", str(max(pad_h, 8)).encode())
-        .replace(b"__PAD_H_TEXT__", str(_text_pad_h(size)).encode())
-        .replace(b"__WIN_PAD__", str(win_pad).encode())
-        .replace(b"__WIN_RADIUS__", str(win_radius).encode())
-        .replace(b"__BTN_RADIUS__", str(btn_radius).encode())
-    )
-    # Apply the same dark->light palette swap the main theme uses, so
-    # the popup doesn't end up as a dark island in a light window.
+def _theme_is_light() -> bool:
+    """Whether the popup follows the light theme (dark when unsure)."""
     try:
         from ui import theme as _theme
 
-        mode = _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark"))
-        if mode == "light":
-            css = _theme._apply_remap(css, _theme._LIGHT_REMAP)
+        return _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark")) == "light"
     except Exception:
-        # If theme can't be imported, fall back to dark - it was the
-        # default for a long time and won't surprise anyone.
-        pass
+        return False
+
+
+def _build_css(size: int) -> bytes:
+    """The popup CSS for buttons `size` px square: padding and radii scale
+    with it, and a light theme gets theme.py's light palette."""
+    pad_h = max(3, size // 6)
+    bar_gutter = max(2, size // 7)
+    bar_corner_radius = max(6, size // 2 - 2)
+    button_corner_radius = max(3, size // 4)
+    css = (
+        _CSS.replace(b"__BTN_SIZE__", str(size).encode())
+        .replace(b"__PAD_V__", str(max(1, size // 12)).encode())
+        .replace(b"__PAD_H__", str(pad_h).encode())
+        .replace(b"__PAD_H_OVERFLOW__", str(max(pad_h, 8)).encode())
+        .replace(b"__PAD_H_TEXT__", str(_text_pad_h(size)).encode())
+        .replace(b"__WIN_PAD__", str(bar_gutter).encode())
+        .replace(b"__WIN_RADIUS__", str(bar_corner_radius).encode())
+        .replace(b"__BTN_RADIUS__", str(button_corner_radius).encode())
+    )
+    if _theme_is_light():
+        with contextlib.suppress(Exception):
+            from ui import theme as _theme
+
+            css = _theme._apply_remap(css, _theme._LIGHT_REMAP)
     return css
 
 
 def get_settings_func():
-    """Single point that yields the live settings dict-like, or {} if
-    settings can't be reached. Wrapped so _build_css doesn't have to
-    care about import-time ordering."""
+    """The live settings, or {} when they can't be loaded."""
     try:
         from core.settings import get_settings
 
@@ -246,10 +244,13 @@ def get_settings_func():
         return {}
 
 
+# Above theme.py's APPLICATION-priority accents
+_POPUP_CSS_PRIORITY = Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
+
+
 def _install_css() -> None:
-    """Install (or reinstall) the popup CSS provider with the current
-    button-size setting. Safe to call repeatedly; the old provider is
-    removed before the new one is added."""
+    """Install the popup CSS for the current button size, replacing any
+    earlier provider."""
     global _popup_css_provider
     display = Gdk.Display.get_default()
     if display is None:
@@ -265,27 +266,21 @@ def _install_css() -> None:
         provider.load_from_string(css.decode("utf-8"))
     else:
         provider.load_from_data(css, -1)
-    # +1 over APPLICATION so the bar wins over theme.py's own
-    # APPLICATION-priority accents (both sit above libadwaita's stylesheet).
-    Gtk.StyleContext.add_provider_for_display(
-        display,
-        provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-    )
+    Gtk.StyleContext.add_provider_for_display(display, provider, _POPUP_CSS_PRIORITY)
     _popup_css_provider = provider
 
 
 def reinstall_popup_css() -> None:
-    """Public hook for the settings dialog to call when the user
-    changes popup_button_size - rebuilds the CSS so the next popup
-    renders at the new size without a daemon restart."""
+    """For the settings dialog: the next popup uses the new button size."""
     _install_css()
 
 
-_BTN_MOUSE = {0x110, 0x111, 0x112}  # BTN_LEFT / RIGHT / MIDDLE
+_BTN_LEFT, _BTN_RIGHT, _BTN_MIDDLE = 0x110, 0x111, 0x112
+_BTN_MOUSE = {_BTN_LEFT, _BTN_RIGHT, _BTN_MIDDLE}
 _BTN_TOOL_FINGER = 0x145
 _BTN_TOUCH = 0x14A
-# libinput's tap timeout is 180 ms; a contact that lifts within this is a tap.
+_EV_KEY = 0x01
+_INPUT_EVENT = "llHHi"
 _TAP_MAX_S = 0.25
 
 
@@ -310,16 +305,32 @@ def _touch_event_paths() -> set[str]:
     import os
 
     out = set()
-    for cap in glob.glob("/sys/class/input/event*/device/capabilities/key"):
+    for sys_node in glob.glob("/sys/class/input/event*"):
         try:
-            with open(cap) as f:
+            with open(os.path.join(sys_node, "device/capabilities/key")) as f:
                 bitmap = f.read()
         except OSError:
             continue
         if _has_key_bit(bitmap, _BTN_TOUCH) and _has_key_bit(bitmap, _BTN_TOOL_FINGER):
-            node = cap.split("/")[4]  # /sys/class/input/<eventN>/...
-            out.add(os.path.join("/dev/input", node))
+            out.add(os.path.join("/dev/input", os.path.basename(sys_node)))
     return out
+
+
+def _pointer_event_paths() -> set[str]:
+    """The mice and touchpads to watch, or every event node when no mouse
+    is listed by path."""
+    import glob
+    import os
+
+    paths = set()
+    for p in glob.glob("/dev/input/by-path/*-event-mouse"):
+        try:
+            paths.add(os.path.realpath(p))
+        except OSError:
+            pass
+    if not paths:
+        return set(glob.glob("/dev/input/event*"))
+    return paths | _touch_event_paths()
 
 
 class _ClickWatcher:
@@ -331,8 +342,10 @@ class _ClickWatcher:
 
     Touchpad tap-to-click is done by libinput in userspace: the kernel only
     sends BTN_TOUCH down/up, never BTN_LEFT. A contact that lifts within
-    _TAP_MAX_S counts as a click; a longer one is the finger moving the
-    pointer, which must not dismiss."""
+    _TAP_MAX_S (libinput's tap timeout is 180 ms) counts as a click; a longer
+    one is the finger moving the pointer, which must not dismiss (pinned by
+    `tests/test_popup_rules.py::test_a_touch_lifted_within_the_tap_time_is_a_click`,
+    `tests/test_popup_rules.py::test_a_touch_held_past_the_tap_time_is_not`)."""
 
     def __init__(self, on_click) -> None:
         self._on_click = on_click
@@ -364,26 +377,13 @@ class _ClickWatcher:
         return False
 
     def _run(self) -> None:
-        import glob
         import os
         import select as _sel
         import struct
 
-        EV_KEY = 0x01
-        fmt = "llHHi"
-        size = struct.calcsize(fmt)
-        paths = set()
-        for p in glob.glob("/dev/input/by-path/*-event-mouse"):
-            try:
-                paths.add(os.path.realpath(p))
-            except OSError:
-                pass
-        if paths:
-            paths |= _touch_event_paths()
-        else:
-            paths = set(glob.glob("/dev/input/event*"))
+        size = struct.calcsize(_INPUT_EVENT)
         fds = []
-        for path in sorted(paths):
+        for path in sorted(_pointer_event_paths()):
             try:
                 fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
             except OSError:
@@ -399,8 +399,8 @@ class _ClickWatcher:
                     except (BlockingIOError, OSError):
                         continue
                     for off in range(0, len(data) - size + 1, size):
-                        sec, usec, et, code, val = struct.unpack_from(fmt, data, off)
-                        if et == EV_KEY and self._is_click(code, val, sec + usec / 1e6):
+                        sec, usec, et, code, val = struct.unpack_from(_INPUT_EVENT, data, off)
+                        if et == _EV_KEY and self._is_click(code, val, sec + usec / 1e6):
                             GLib.idle_add(self._on_click)
         finally:
             for fd in fds:
@@ -408,6 +408,9 @@ class _ClickWatcher:
                     os.close(fd)
                 except OSError:
                     pass
+
+
+_POLL_MS = 150
 
 
 def _x11_input_state(xdpy, esc_keycode: int) -> tuple[bool, int, int, bool]:
@@ -473,14 +476,15 @@ def _nav_target(rows: list[int], index: int, key: str, shift: bool = False) -> i
     return index
 
 
-# When the keyboard last ran a popup action (time.monotonic()). A window the
-# action opens (the AI bubble) reads it to know the hands are on the keys.
 _kbd_activated_at = 0.0
 
 
 def activated_by_keyboard(within_s: float = 2.0) -> bool:
     """True if a popup action was run from the keyboard in the last
-    `within_s` seconds. Any thread: actions run on a worker."""
+    `within_s` seconds, so a window it opens (the AI bubble) can take the
+    keys too. Any thread: actions run on a worker (pinned by
+    `tests/test_popup_ui.py::test_enter_marks_the_run_as_from_the_keyboard`,
+    `tests/test_popup_ui.py::test_only_keyboard_activation_counts`)."""
     return time.monotonic() - _kbd_activated_at < within_s
 
 
@@ -537,7 +541,6 @@ class _KeyGrab:
         except Exception as exc:  # noqa: BLE001
             print(f"[popup] grabbing the navigation keys failed: {exc}")
         if any(c.get_error() for c in catchers):
-            # Another client owns some of these combos; the rest still work.
             print("[popup] some navigation keys are bound by another app")
         self.active = True
         self._watch_id = GLib.io_add_watch(
@@ -597,7 +600,8 @@ class _XInputPoll:
         self._on_escape = on_escape
         self._xdpy = None
         self._esc_keycode = 0
-        self._prev = (True, True)  # (button, esc): a held input isn't a new press
+        # (button, esc) held at the last poll: a held input isn't a new press
+        self._prev = (True, True)
         self._id: int | None = None
 
     def start(self) -> bool:
@@ -612,7 +616,7 @@ class _XInputPoll:
             self._xdpy = None
             return False
         self._prev = (pressed, esc)
-        self._id = GLib.timeout_add(150, self._tick)
+        self._id = GLib.timeout_add(_POLL_MS, self._tick)
         return True
 
     def stop(self) -> None:
@@ -645,16 +649,16 @@ class _XInputPoll:
 
 
 _EDGE_PAD = 4
-# How far outside the popup, and beside the straight path to it from the
-# selection, the pointer may stray without starting the hide countdown
 _POPUP_MARGIN = 12
 _CORRIDOR_PAD = 24
+_TEXT_ZONE_RADIUS = 80
 _SELECTION_GAP = 10
-# The pointer sits mid-line, so the popup clears a whole line of text
-# (about 24 px) and a gap. On Wayland the pointer is all there is, and it
-# sits inside or under the selection, so the popup is lifted further.
-_POINTER_CLEARANCE = (28, 32)  # above, below
-_WAYLAND_POINTER_CLEARANCE = (64, 56)
+_POINTER_CLEARANCE_ABOVE_BELOW = (28, 32)
+_WAYLAND_POINTER_CLEARANCE_ABOVE_BELOW = (64, 56)
+
+
+_LogicalRect = tuple[int, int, int, int]
+"""x, y, width, height in logical pixels."""
 
 
 class _Spot(NamedTuple):
@@ -676,7 +680,9 @@ def _spot_over_selection(
     rect: tuple[int, int, int, int], width: int, height: int, pixels_per_unit: float
 ) -> _Spot:
     """Centred on the selection's box, just above its top edge or just
-    below its bottom one."""
+    below its bottom one (pinned by
+    `tests/test_popup_show.py::test_with_a_selection_rect_the_popup_centres_just_above_it`,
+    `tests/test_popup_show.py::test_a_selection_at_the_top_edge_gets_the_popup_below_it`)."""
     x, y, rect_width, rect_height = rect
     centre_x = (x + rect_width / 2) / pixels_per_unit
     top, bottom = y / pixels_per_unit, (y + rect_height) / pixels_per_unit
@@ -691,8 +697,14 @@ def _spot_over_selection(
 def _spot_over_pointer(
     x: float, y: float, width: int, height: int, pixels_per_unit: float, is_wayland: bool
 ) -> _Spot:
-    """Centred on the pointer, clear of the line of text it is on."""
-    above, below = _WAYLAND_POINTER_CLEARANCE if is_wayland else _POINTER_CLEARANCE
+    """Centred on the pointer, clear of the line of text it sits in the
+    middle of. On Wayland the pointer is the only hint and sits inside or
+    under the selection, so the popup is lifted further (pinned by
+    `tests/test_popup_show.py::test_on_x11_the_popup_sits_a_line_above_the_pointer`,
+    `tests/test_popup_show.py::test_on_wayland_the_popup_is_lifted_further_and_not_scaled`)."""
+    above, below = (
+        _WAYLAND_POINTER_CLEARANCE_ABOVE_BELOW if is_wayland else _POINTER_CLEARANCE_ABOVE_BELOW
+    )
     pointer_x, pointer_y = x / pixels_per_unit, y / pixels_per_unit
     return _Spot(
         x=int(pointer_x - width / 2),
@@ -702,57 +714,128 @@ def _spot_over_pointer(
     )
 
 
+_DEFAULT_MAX_POPUP_BUTTONS = 10
+
+
 def _max_popup_buttons() -> int:
+    """(pinned by `tests/test_popup_show.py::test_an_unset_cap_is_ten`)"""
     try:
         from core.settings import get_settings
 
-        return get_settings().get_int("max_popup_buttons") or 10
+        return get_settings().get_int("max_popup_buttons") or _DEFAULT_MAX_POPUP_BUTTONS
     except Exception:
-        return 10
+        return _DEFAULT_MAX_POPUP_BUTTONS
+
+
+def _new_action_button(tooltip: str) -> Gtk.Button:
+    """A flat popup button that never takes focus from the source app."""
+    btn = Gtk.Button()
+    btn.add_css_class("flat")
+    btn.set_focus_on_click(False)
+    btn.set_tooltip_text(tooltip)
+    btn.add_css_class("vinopop-action")
+    return btn
+
+
+# The popup_force_all_modifier names, as X11 modifier masks (Alt and Super
+# as Mod1 and Mod4, the usual mapping).
+_FORCE_ALL_MODIFIERS = {"shift": 1 << 0, "ctrl": 1 << 2, "alt": 1 << 3, "super": 1 << 6}
+
+# An icon button's padding and border, slightly over so a row never ends a
+# pixel short
+_ICON_BUTTON_PADDING_PX = 14
+_MIN_ICONS_PER_ROW = 4
+_ROW_MAX_PX = 680
+_ROW_MAX_MONITOR_FRACTION = 0.5
+_FALLBACK_MONITOR_WIDTH = 1920
+_ICON_FRACTION_OF_BUTTON = 0.72
+_CHEVRON_FRACTION_OF_BUTTON = 0.6
+_MIN_ICON_PX = 12
+
+_OVERFLOW_MODES = ("wrap", "expand", "cap")
+_DEFAULT_OVERFLOW_MODE = "wrap"
+
+
+_DARK_GLYPH_COLOURS = ("#fafafa", "#0e0e10")
+_LIGHT_GLYPH_COLOURS = ("#1c1d20", "#ffffff")
+_GLYPH_BODY = b"#f0f0f0"
+# Punch-out holes in older user glyphs (bundled ones use evenodd)
+_GLYPH_HOLE = b"#2b2b2b"
+_GLYPH_PIN_ACCENT = b"#1d7a3a"
+
+
+def _recolour_glyph(svg: bytes, fg: str, bg: str) -> bytes:
+    """A glyph's body and accent in `fg`, its holes in `bg` (pinned by
+    `tests/test_popup_rules.py::test_a_glyph_body_and_accent_take_the_foreground`,
+    `tests/test_popup_rules.py::test_a_glyph_hole_takes_the_background`)."""
+    for colour, new in ((_GLYPH_BODY, fg), (_GLYPH_HOLE, bg), (_GLYPH_PIN_ACCENT, fg)):
+        svg = svg.replace(colour, new.encode()).replace(colour.upper(), new.encode())
+    return svg
+
+
+# The brand tiles' corner radius, as a fraction of the tile
+_TILE_CORNER = 0.24
+
+
+def _stroke_tile_rim(cr, dev: int) -> None:
+    """A thin dark rounded rim just inside a `dev` px square tile."""
+    import math
+
+    r = dev * _TILE_CORNER
+    lw = max(1.0, dev * 0.045)
+    o = lw / 2 + 0.4
+    x, y, w, h = o, o, dev - 2 * o, dev - 2 * o
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
+    cr.close_path()
+    cr.set_line_width(lw)
+    cr.set_source_rgba(0, 0, 0, 0.6)
+    cr.stroke()
 
 
 class PopupWindow:
+    """The popup. `initial_grace_ms` is how long it waits for the pointer to
+    first reach it, `leave_grace_ms` how long once the pointer leaves it and
+    the text; `on_open_plugin_order` runs from the overflow chip."""
+
     def __init__(
         self,
         initial_grace_ms: int = 4000,
         leave_grace_ms: int = 600,
         on_open_plugin_order: Callable[[], None] | None = None,
     ) -> None:
-        # Called when the overflow chip is clicked, to open Plugin Manager > Order
         self._on_open_plugin_order = on_open_plugin_order
         _install_css()
-        self._text_labels = False  # popup_text_labels, read on each show
+        self._text_labels = False
         self._build_window()
         self._build_bar()
         self._attach_controllers()
 
         self._current_text: str = ""
-        # Where the popup is anchored, in the backend's coordinates: picks
-        # the monitor for row sizing and icon scale before the window maps
+        # In the backend's coordinates: picks the monitor for row sizing and
+        # icon scale before the window maps
         self._anchor: tuple[int, int] = (0, 0)
         self._hide_timeout_id: int | None = None
         self._tracker_id: int | None = None
-        # Two auto-hide timers: one from the show until the pointer first
-        # reaches the popup, one from when it leaves the popup and the text
         self._initial_hide_id: int | None = None
         self._initial_grace_ms = initial_grace_ms
         self._leave_grace_ms = leave_grace_ms
-        # Logical pixels around the selection that still count as on the text
-        self._text_zone_radius = 80
+        self._text_zone_radius = _TEXT_ZONE_RADIUS
         self._origin_logical: tuple[float, float] = (0.0, 0.0)
-        self._popup_rect: tuple[int, int, int, int] = (0, 0, 0, 0)  # x, y, w, h logical
+        self._popup_rect: _LogicalRect = (0, 0, 0, 0)
         self._scale: int = 1
         self._open_xlib_display()
         self._prev_button_pressed = False
         self._prev_esc_pressed = False
-        # The popup never auto-hides with the pointer on it. On Wayland this
-        # enter/leave flag is what keeps it up: _tick's screen-space maths
-        # can't work there (the pointer position is surface-local).
+        # On Wayland this enter/leave flag is all that keeps the popup up:
+        # the pointer position there is surface-local
         self._pointer_in_popup = False
-        # When the hotkey last showed the popup (time.monotonic()), None when
-        # it is up for a selection; main.py's hotkey toggle reads it
+        # time.monotonic() of a hotkey show, None for a selection; main.py's
+        # hotkey toggle reads it
         self.hotkey_shown_at: float | None = None
-        # Keyboard navigation (#44), on while a hotkey-opened popup is up
         self._kbd_nav = False
         self._kbd_index = 0
         self._kbd_grab: _KeyGrab | None = None
@@ -774,7 +857,9 @@ class PopupWindow:
             print(f"[popup] backend window init failed: {exc}")
 
     def _build_bar(self) -> None:
-        """The rounded bar and its two rows of buttons, inside a 1 px margin."""
+        """The rounded bar and its two rows of buttons, inside a 1 px margin.
+        The bar is a toolbar to assistive tech (pinned by
+        `tests/test_a11y.py::test_popup_bar_is_a_toolbar`)."""
         self._outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._outer.set_margin_top(1)
         self._outer.set_margin_bottom(1)
@@ -782,7 +867,6 @@ class PopupWindow:
         self._outer.set_margin_end(1)
         self.win.set_child(self._outer)
 
-        # A toolbar to assistive tech, so its buttons read as a set of actions
         self._bar = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
             spacing=2,
@@ -811,16 +895,15 @@ class PopupWindow:
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key_press)
         self.win.add_controller(keys)
-        # Capture phase, never claimed: it records the modifiers of every
-        # press (Shift+click copies) and sees presses outside the bar, and
-        # the buttons still get their clicks
+        # Capture phase, never claimed: it sees every press's modifiers
+        # (Shift+click copies) and presses outside the bar, and the buttons
+        # still get their clicks
         click = Gtk.GestureClick()
         click.set_button(0)
         click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", self._on_button_press)
         self.win.add_controller(click)
         self._last_press_state = Gdk.ModifierType(0)
-        # Only fires if a window manager focused the popup anyway
         self.win.connect("notify::is-active", self._on_active_changed)
 
     def _open_xlib_display(self) -> None:
@@ -838,7 +921,6 @@ class PopupWindow:
                 self._esc_keycode = 0
 
     def _clear_buttons(self) -> None:
-        # GTK 4 has no destroy(): unparenting releases a button and its handlers
         for row in (self._row1, self._row2):
             while (button := row.get_first_child()) is not None:
                 row.remove(button)
@@ -852,30 +934,26 @@ class PopupWindow:
         on_click,
         row: Gtk.Box | None = None,
     ) -> None:
-        target = row if row is not None else self._row1
-        btn = Gtk.Button()
-        btn.add_css_class("flat")
-        btn.set_focus_on_click(False)
-        btn.set_tooltip_text(tooltip)
-        btn.add_css_class("vinopop-action")
+        btn = _new_action_button(tooltip)
         if self._text_labels:
             btn.add_css_class("vinopop-text")
             btn.set_child(Gtk.Label(label=_label_text(tooltip)))
         else:
             btn.set_child(self._make_icon_image(icon_name))
         btn.connect("clicked", on_click)
+        self._append_to_row(btn, row)
+
+    def _append_to_row(self, btn: Gtk.Button, row: Gtk.Box | None) -> None:
+        target = row if row is not None else self._row1
         target.append(btn)
         if target is self._row2:
-            # Once anything lands in row 2, allow it to show.
             self._row2.set_visible(True)
 
     def _force_all_held(self) -> bool:
-        """True if the popup_force_all_modifier setting names a modifier
-        that's currently pressed. Read at the moment show_for runs - the
-        user must hold the key from before the selection finishes until
-        the popup renders (so the modifier survives the 150 ms debounce).
-        Returning False is the safe default; misreads just give the
-        normal filtered popup."""
+        """Whether the popup_force_all_modifier key is held as show_for runs,
+        so it has to be held from before the selection ends (pinned by
+        `tests/test_popup_rules.py::test_holding_the_force_all_modifier_counts`,
+        `tests/test_popup_rules.py::test_holding_another_modifier_does_not`)."""
         try:
             from core.settings import get_settings as _gs
 
@@ -891,39 +969,20 @@ class PopupWindow:
             mask = root.query_pointer().mask
         except Exception:
             return False
-        # X11 mod bitmasks. Mod1Mask is Alt on essentially every modern
-        # X11 desktop; Mod4Mask is Super/Win on Cinnamon, GNOME, KDE,
-        # XFCE, MATE. The rare exception (some i3/sway setups remap)
-        # rarely runs vinoPop anyway.
-        mod_bits = {
-            "shift": 1 << 0,  # ShiftMask
-            "ctrl": 1 << 2,  # ControlMask
-            "alt": 1 << 3,  # Mod1Mask
-            "super": 1 << 6,  # Mod4Mask
-        }
-        bit = mod_bits.get(mod_name)
+        bit = _FORCE_ALL_MODIFIERS.get(mod_name)
         if bit is None:
             return False
         return bool(mask & bit)
 
     def _max_per_row(self, anchor: tuple[int, int] | None = None) -> int:
-        """How many buttons fit in a single row before we wrap.
-
-        Uses logical pixels and the user's chosen button size, capped by
-        a "comfortable reading width" constant so even a 5K screen
-        doesn't grow the popup into a freeway-sized strip.
-        """
-        size = _resolve_button_size()
-        # Button outer width: min-width + horizontal padding on each side
-        # (kept in sync with vinopop.css). Slight overestimate so we
-        # don't push a button half-off the line by one pixel.
-        approx_button_width = size + 14
-        return max(4, self._row_target_px(anchor) // approx_button_width)
+        """How many icon buttons fit on one row."""
+        icon_button_px = _resolve_button_size() + _ICON_BUTTON_PADDING_PX
+        return max(_MIN_ICONS_PER_ROW, self._row_target_px(anchor) // icon_button_px)
 
     def _row_target_px(self, anchor: tuple[int, int] | None = None) -> int:
-        """Widest a row may grow, in logical pixels."""
-        # GTK 4 can't query the global pointer, so size against the monitor
-        # under the popup's anchor (the selection / pointer coords we got).
+        """Widest a row may grow, in logical pixels: half the monitor under
+        the anchor (GTK 4 can't query the global pointer), at most
+        _ROW_MAX_PX even on a 5K screen."""
         if anchor is None:
             anchor = self._anchor
         try:
@@ -931,10 +990,10 @@ class PopupWindow:
             monitor = _monitor_for_point(
                 display, anchor[0], anchor[1], get_backend().pointer_is_logical
             )
-            monitor_w = monitor.get_geometry().width if monitor else 1920
+            monitor_w = monitor.get_geometry().width if monitor else _FALLBACK_MONITOR_WIDTH
         except Exception:
-            monitor_w = 1920
-        return min(680, int(monitor_w * 0.5))
+            monitor_w = _FALLBACK_MONITOR_WIDTH
+        return min(_ROW_MAX_PX, int(monitor_w * _ROW_MAX_MONITOR_FRACTION))
 
     def _text_button_px(self, tooltip: str) -> int:
         """Outer width of a text-label button, slightly overestimated."""
@@ -981,18 +1040,14 @@ class PopupWindow:
             return 1
 
     def _colored_icon_with_rim(self, icon_name: str, icon_px: int):
-        """A colour logo composited onto a surface at device resolution with a
-        thin dark contrast rim hugging the tile edge, so the bright icon reads
-        cleanly against the dark popup bar. Returns None on any failure so the
-        caller can fall back to the plain icon-name path."""
+        """A colour logo at device resolution with a thin dark rim hugging the
+        tile edge, so it separates from the bar; None on any failure."""
         try:
-            import math
-
             import cairo
             from gi.repository import GdkPixbuf
 
             scale = self._device_scale()
-            dev = max(12, icon_px * scale)
+            dev = max(_MIN_ICON_PX, icon_px * scale)
             path = _icon_file(icon_name, icon_px, scale)
             if not path:
                 return None
@@ -1003,22 +1058,8 @@ class PopupWindow:
             cr = cairo.Context(surf)
             Gdk.cairo_set_source_pixbuf(cr, pb, 0, 0)
             cr.paint()
-            # Thin dark rounded rim, matched to the brand tiles' ~24% corner.
-            r = dev * 0.24
-            lw = max(1.0, dev * 0.045)
-            o = lw / 2 + 0.4
-            x, y, w, h = o, o, dev - 2 * o, dev - 2 * o
-            cr.new_sub_path()
-            cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
-            cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-            cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-            cr.arc(x + r, y + r, r, math.pi, 1.5 * math.pi)
-            cr.close_path()
-            cr.set_line_width(lw)
-            cr.set_source_rgba(0, 0, 0, 0.6)
-            cr.stroke()
-            # Texture holds device pixels; pixel_size is logical, so GTK draws
-            # it 1:1 on a scale-`scale` monitor (crisp on HiDPI).
+            _stroke_tile_rim(cr, dev)
+            # Device pixels drawn at a logical pixel_size: 1:1 on HiDPI
             image = Gtk.Image.new_from_paintable(_texture_from_cairo(surf))
             image.set_pixel_size(icon_px)
             return image
@@ -1026,30 +1067,13 @@ class PopupWindow:
             return None
 
     def _glyph_colors(self) -> tuple[str, str]:
-        """Foreground + background hex for our custom mono glyphs, following
-        the popup's resolved light/dark theme. Dark-theme defaults: a light
-        glyph on the dark bar."""
-        fg, bg = "#fafafa", "#0e0e10"
-        try:
-            from ui import theme as _theme
-
-            mode = _theme._resolve_mode((get_settings_func() or {}).get("theme", "dark"))
-            if mode == "light":
-                fg, bg = "#1c1d20", "#ffffff"
-        except Exception:
-            pass
-        return fg, bg
+        """Foreground and background for the mono glyphs in the current theme."""
+        return _LIGHT_GLYPH_COLOURS if _theme_is_light() else _DARK_GLYPH_COLOURS
 
     def _glyph_image(self, icon_name: str, icon_px: int):
-        """Load one of our custom vinopop-*-symbolic glyphs, recolouring its
-        hardcoded palette to the current theme.
-
-        These SVGs hardcode #f0f0f0 strokes (tuned for the dark bar) and are
-        NOT in GTK's recolourable symbolic format, so GTK never recolours them
-        via the popup CSS `color` property. On a light popup they'd render
-        near-white-on-white (invisible) - the "faint glyph" bug. We recolour
-        them ourselves at load time instead. Returns None on any failure so the
-        caller can fall back to the plain icon-name path."""
+        """One of our vinopop-*-symbolic glyphs, recoloured for the theme;
+        None on any failure. They hardcode #f0f0f0 rather than use GTK's
+        symbolic format, so the popup CSS `color` can't recolour them."""
         try:
             from gi.repository import GdkPixbuf, Gio
 
@@ -1058,24 +1082,11 @@ class PopupWindow:
                 return None
             with open(path, "rb") as fh:
                 svg = fh.read()
-            if b"#f0f0f0" not in svg.lower():
-                return None  # not one of our hardcoded glyphs - leave to GTK
-            fg, bg = self._glyph_colors()
-            # Body strokes/fills -> foreground; the lone map-pin green accent
-            # -> foreground (mono glyph). Older user-supplied glyphs may still
-            # paint punch-out holes in #2b2b2b: those -> background so negative
-            # space matches the bar in both themes (bundled ones use evenodd).
-            for old, new in (
-                (b"#f0f0f0", fg),
-                (b"#F0F0F0", fg),
-                (b"#2b2b2b", bg),
-                (b"#2B2B2B", bg),
-                (b"#1d7a3a", fg),
-                (b"#1D7A3A", fg),
-            ):
-                svg = svg.replace(old, new.encode())
+            if _GLYPH_BODY not in svg.lower():
+                return None
+            svg = _recolour_glyph(svg, *self._glyph_colors())
             scale = self._device_scale()
-            dev = max(12, icon_px * scale)
+            dev = max(_MIN_ICON_PX, icon_px * scale)
             stream = Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(svg))
             pb = GdkPixbuf.Pixbuf.new_from_stream_at_scale(stream, dev, dev, True, None)
             if pb is None:
@@ -1087,18 +1098,10 @@ class PopupWindow:
             return None
 
     def _make_icon_image(self, icon_name: str) -> Gtk.Image:
-        """Render an icon scaled to ~72% of the configured button size, so it
-        has a comfortable halo of padding inside the button.
-
-        Colour logos (non-symbolic) are composited with a thin dark contrast
-        rim at device resolution so they stay crisp on HiDPI and separate
-        cleanly from the dark bar. Our custom vinopop-*-symbolic glyphs are
-        recoloured to the theme foreground at load time (GTK can't recolour
-        them via CSS). System symbolic icons stay on the icon-name path so the
-        popup's CSS can recolour them to follow the text."""
-        size = _resolve_button_size()
-        icon_px = max(12, int(size * 0.72))
-        # Swap to the colour tile or the mono glyph per the user's icon_style.
+        """The button's icon, in the user's icon_style: a colour logo with a
+        rim, one of our glyphs recoloured, or a system symbolic icon left to
+        the popup CSS to recolour."""
+        icon_px = max(_MIN_ICON_PX, int(_resolve_button_size() * _ICON_FRACTION_OF_BUTTON))
         try:
             from ui import icon_style
 
@@ -1127,10 +1130,13 @@ class PopupWindow:
         rect: tuple[int, int, int, int] | None = None,
         via_hotkey: bool = False,
     ) -> None:
+        """Offer the plugins for `text` near (x, y) or over `rect`. A
+        selection change while the pointer is on the popup is ignored: on
+        Wayland it is usually an app re-claiming PRIMARY on focus (pinned by
+        `tests/test_popup_show.py::test_a_selection_change_under_the_pointer_keeps_the_buttons`).
+        A plugin without a tooltip is named after itself (pinned by
+        `tests/test_popup_show.py::test_a_plugin_without_a_tooltip_is_named_after_itself`)."""
         if self.win.get_visible() and self._pointer_in_popup:
-            # Not a selection the user just made: on Wayland it is usually an
-            # app re-claiming PRIMARY on focus, and swapping the buttons under
-            # the pointer would run them on that text
             log.info("[popup] ignored a selection change while the pointer is on the popup")
             return
         self._current_text = text
@@ -1148,8 +1154,6 @@ class PopupWindow:
             print(f"[popup] no plugins for {content_type.value} (editable={editable})")
             return
 
-        # The tooltip is an icon-only button's name, so a plugin without one
-        # is named after itself
         specs = [(p.icon, p.tooltip or p.name, self._runs_plugin(p)) for p in plugins]
         self._present_buttons(specs, hidden_count, max_buttons)
         self._present_near(x, y, rect=rect, via_hotkey=via_hotkey)
@@ -1174,7 +1178,6 @@ class PopupWindow:
 
         def on_click(_btn):
             text = self._current_text
-            # Shift+click copies the result instead of pasting it back
             copy_instead = self._shift_held()
 
             def run():
@@ -1198,12 +1201,8 @@ class PopupWindow:
         cap: int,
         row: Gtk.Box | None = None,
     ) -> None:
-        """Append a +N chip at the end of the bar when plugins were
-        capped. Click takes the user to Plugin Manager → Order so the
-        hidden ones can be promoted (or the cap raised). Without this
-        the missing buttons are silent - users wonder why their enabled
-        AI service doesn't show up and never connect that to a global
-        cap they set in Settings."""
+        """A +N chip for the actions the cap hid; it opens Plugin Manager →
+        Order, where they can be moved up."""
         tooltip = (
             f"{hidden} more action{'s' if hidden != 1 else ''} hidden by the "
             f"popup limit ({cap}). Click to reorder in Plugin Manager."
@@ -1224,83 +1223,77 @@ class PopupWindow:
                 except Exception as exc:  # noqa: BLE001
                     print(f"[popup] open plugin order failed: {exc}")
 
-        btn = Gtk.Button(label=f"+{hidden}")
-        btn.add_css_class("flat")
-        btn.set_focus_on_click(False)
-        btn.set_tooltip_text(tooltip)
-        btn.add_css_class("vinopop-action")
+        btn = _new_action_button(tooltip)
+        btn.set_label(f"+{hidden}")
         btn.add_css_class("vinopop-overflow")
         btn.connect("clicked", _on_click)
-        target = row if row is not None else self._row1
-        target.append(btn)
-        if target is self._row2:
-            self._row2.set_visible(True)
+        self._append_to_row(btn, row)
 
-    # ---- overflow layout --------------------------------------------------
     def _overflow_mode(self) -> str:
-        """How to handle more actions than fit on one line:
-        'wrap'   -> spill onto a second row (default),
-        'expand' -> one row + a chevron that reveals the rest on click,
-        'cap'    -> one row only; the rest go behind a +N chip.
-        """
+        """The popup_overflow_mode setting, "wrap" when unknown (pinned by
+        `tests/test_popup_rules.py::test_a_known_overflow_mode_is_used`,
+        `tests/test_popup_rules.py::test_an_unknown_overflow_mode_wraps`)."""
         try:
             from core.settings import get_settings as _gs
 
-            m = (_gs().get("popup_overflow_mode") or "wrap").strip().lower()
+            m = (_gs().get("popup_overflow_mode") or _DEFAULT_OVERFLOW_MODE).strip().lower()
         except Exception:
-            m = "wrap"
-        return m if m in ("wrap", "expand", "cap") else "wrap"
+            m = _DEFAULT_OVERFLOW_MODE
+        return m if m in _OVERFLOW_MODES else _DEFAULT_OVERFLOW_MODE
 
     def _present_buttons(self, specs, hidden_count: int, max_btns: int) -> None:
-        """Lay out (icon, tooltip, handler) specs into the bar per the user's
-        overflow mode, adding the matching overflow affordance. `hidden_count`
-        is how many were already dropped by the max_popup_buttons cap."""
+        """Lay out (icon, tooltip, handler) specs per the overflow mode.
+        `hidden_count` is how many the max_popup_buttons cap already dropped."""
         self._text_labels = _text_labels_on()
-        n = len(specs)
         mode = self._overflow_mode()
         if mode == "cap":
-            shown = self._fit_row(specs)
-            for icon, tip, h in specs[:shown]:
-                self._add_button(icon, tip, h, row=self._row1)
-            extra = (n - shown) + hidden_count
-            if extra > 0:
-                self._add_overflow_chip(extra, max_btns, row=self._row1)
+            self._lay_out_one_row_and_chip(specs, hidden_count, max_btns)
         elif mode == "expand":
-            first = self._fit_row(specs)
-            for icon, tip, h in specs[:first]:
-                self._add_button(icon, tip, h, row=self._row1)
-            rest = specs[first:]
-            if rest or hidden_count > 0:
-                self._add_expand_chip(rest, hidden_count, max_btns)
-        else:  # 'wrap' - two rows
-            first = self._fit_row(specs)
-            shown = first + self._fit_row(specs[first:])
-            for i, (icon, tip, h) in enumerate(specs[:shown]):
-                self._add_button(icon, tip, h, row=self._row1 if i < first else self._row2)
-            extra = (n - shown) + hidden_count
-            if extra > 0:
-                self._add_overflow_chip(
-                    extra, max_btns, row=self._row2 if shown > first else self._row1
-                )
+            self._lay_out_one_row_and_chevron(specs, hidden_count, max_btns)
+        else:
+            self._lay_out_two_rows(specs, hidden_count, max_btns)
+
+    def _lay_out_one_row_and_chip(self, specs, hidden_count: int, max_btns: int) -> None:
+        shown = self._fit_row(specs)
+        for icon, tip, h in specs[:shown]:
+            self._add_button(icon, tip, h, row=self._row1)
+        extra = (len(specs) - shown) + hidden_count
+        if extra > 0:
+            self._add_overflow_chip(extra, max_btns, row=self._row1)
+
+    def _lay_out_one_row_and_chevron(self, specs, hidden_count: int, max_btns: int) -> None:
+        first = self._fit_row(specs)
+        for icon, tip, h in specs[:first]:
+            self._add_button(icon, tip, h, row=self._row1)
+        rest = specs[first:]
+        if rest or hidden_count > 0:
+            self._add_expand_chip(rest, hidden_count, max_btns)
+
+    def _lay_out_two_rows(self, specs, hidden_count: int, max_btns: int) -> None:
+        first = self._fit_row(specs)
+        shown = first + self._fit_row(specs[first:])
+        for i, (icon, tip, h) in enumerate(specs[:shown]):
+            self._add_button(icon, tip, h, row=self._row1 if i < first else self._row2)
+        extra = (len(specs) - shown) + hidden_count
+        if extra > 0:
+            self._add_overflow_chip(
+                extra, max_btns, row=self._row2 if shown > first else self._row1
+            )
 
     def _add_expand_chip(self, rest, hidden_count: int, max_btns: int) -> None:
-        """A chevron at the end of row 1; clicking it reveals row 2 with the
-        actions that didn't fit on the first line ('expand' overflow mode)."""
+        """A chevron at the end of row 1 that reveals row 2 with the rest."""
         count = len(rest) + hidden_count
-        btn = Gtk.Button()
-        btn.add_css_class("flat")
-        btn.set_focus_on_click(False)
-        btn.set_tooltip_text(f"Show {count} more action{'s' if count != 1 else ''}")
-        btn.add_css_class("vinopop-action")
+        btn = _new_action_button(f"Show {count} more action{'s' if count != 1 else ''}")
         btn.add_css_class("vinopop-overflow")
         img = Gtk.Image.new_from_icon_name("pan-down-symbolic")
-        img.set_pixel_size(max(12, int(_resolve_button_size() * 0.6)))
+        img.set_pixel_size(
+            max(_MIN_ICON_PX, int(_resolve_button_size() * _CHEVRON_FRACTION_OF_BUTTON))
+        )
         btn.set_child(img)
 
         def _expand(_b):
-            # Hold the bar's width: without the chevron row 1 is a button
-            # narrower, which would leave the pointer (still where the
-            # chevron was) outside the popup and start the leave-grace hide.
+            # Without the chevron row 1 is a button narrower, which would
+            # leave the pointer outside the popup and start the leave hide
             self._bar.set_size_request(self._bar.get_width(), -1)
             self._row1.remove(_b)
             shown2 = self._fit_row(rest)
@@ -1316,10 +1309,11 @@ class PopupWindow:
         self._row1.append(btn)
 
     def _refit(self) -> None:
-        """Re-measure after the bar grew (row 2 revealed), keep it on its
-        monitor and refresh _popup_rect. The X11 tick's click-outside and
-        safe-zone tests read that rect; left at the one-row height, a click
-        on row 2 counted as outside and hid the popup instead of running."""
+        """Re-measure after row 2 is revealed and keep the popup on its
+        monitor. _popup_rect must grow too, or a click on row 2 reads as
+        outside (pinned by
+        `tests/test_popup_ui.py::test_refit_after_expand_covers_row_two`,
+        `tests/test_popup_ui.py::test_refit_pulls_a_grown_bar_back_on_screen`)."""
         _, natural = self.win.get_preferred_size()
         w = max(natural.width, 1)
         h = max(natural.height, 1)
@@ -1342,15 +1336,9 @@ class PopupWindow:
         y: int,
         via_hotkey: bool = False,
     ) -> None:
-        """Show the popup with a hard-coded list of (icon, tooltip, callback)
-        actions instead of going through plugin_loader. Used for the
-        no-selection popup that surfaces paste-oriented entry points
-        when the hotkey fires without highlighted text.
-
-        Each callback takes no arguments - it should encapsulate whatever
-        the click needs to do (open a picker, paste, etc.). Callbacks run
-        on a worker thread so a slow handler can't freeze the GTK loop.
-        """
+        """Show (icon, tooltip, callback) actions instead of plugins: the
+        popup the hotkey opens with nothing selected. Callbacks take no
+        arguments and run on a worker thread."""
         self._current_text = ""
         self._anchor = (int(x), int(y))
         self._clear_buttons()
@@ -1389,16 +1377,17 @@ class PopupWindow:
     ) -> None:
         """Show the popup near screen point (x, y), or over `rect` (the
         selection's box from AT-SPI) when there is one, and arm the
-        tracking and auto-hide. tests/test_popup_show.py pins the placement."""
-        # Parked off-screen and realized so GTK can lay it out and report
-        # its real size. Nothing is mapped yet, so no frame is drawn there.
-        get_backend().move_popup_window(self.win, -10000, -10000)
-        self.win.realize()
-        _, natural = self.win.get_preferred_size()
-        width, height = max(natural.width, 1), max(natural.height, 1)
-
-        # X11 root coordinates are physical pixels; Wayland's are logical
-        # already, and dividing those by the scale halves the position
+        tracking and auto-hide. It is laid out off-screen first (pinned by
+        `tests/test_popup_show.py::test_the_window_is_laid_out_off_screen_before_it_is_placed`);
+        X11's physical coordinates are scaled to logical, Wayland's are
+        logical already (pinned by
+        `tests/test_popup_show.py::test_physical_pointer_coordinates_are_scaled_down`,
+        `tests/test_popup_show.py::test_on_wayland_the_popup_is_lifted_further_and_not_scaled`);
+        it drops below when there's no room above (pinned by
+        `tests/test_popup_show.py::test_without_room_above_the_popup_drops_below_the_pointer`)
+        and stays on the monitor (pinned by
+        `tests/test_popup_show.py::test_the_popup_is_kept_on_the_monitor`)."""
+        width, height = self._measure_off_screen()
         is_logical = get_backend().pointer_is_logical
         anchor_x, anchor_y = _rect_centre(rect) if rect is not None else (x, y)
         monitor = _monitor_for_point(self.win.get_display(), anchor_x, anchor_y, is_logical)
@@ -1420,12 +1409,7 @@ class PopupWindow:
         # set_visible(), not present(): present() also asks for focus.
         get_backend().move_popup_window(self.win, target_x, target_y)
         self.win.set_visible(True)
-        # The pointer is at the selection: a True left from the last show
-        # would suppress dismissal
-        self._pointer_in_popup = False
-
-        self._origin_logical = spot.origin
-        self._popup_rect = (target_x, target_y, width, height)
+        self._reset_hide_zones(spot.origin, (target_x, target_y, width, height))
         self._scale = scale
         self._seed_press_detectors()
         self._start_tracking()
@@ -1434,6 +1418,21 @@ class PopupWindow:
         self._kbd_stop()
         if via_hotkey:
             self._kbd_start()
+
+    def _measure_off_screen(self) -> tuple[int, int]:
+        """The popup's size, laid out while parked off-screen and unmapped,
+        so no frame is drawn there."""
+        get_backend().move_popup_window(self.win, -10000, -10000)
+        self.win.realize()
+        _, natural = self.win.get_preferred_size()
+        return max(natural.width, 1), max(natural.height, 1)
+
+    def _reset_hide_zones(self, origin: tuple[float, float], popup_rect: _LogicalRect) -> None:
+        """The pointer is at the selection, not on the popup, after a show
+        (pinned by `tests/test_popup_show.py::test_the_hide_zones_follow_the_placement`)."""
+        self._pointer_in_popup = False
+        self._origin_logical = origin
+        self._popup_rect = popup_rect
 
     def _seed_press_detectors(self) -> None:
         """_tick acts on a button or Esc going down. Seeded with what is
@@ -1457,8 +1456,6 @@ class PopupWindow:
         self._kbd_stop()
         self.hotkey_shown_at = None
         self.win.set_visible(False)
-
-    # Keyboard navigation (#44): docs/how-it-works.md, "The popup window"
 
     def _rows(self) -> list[list[Gtk.Widget]]:
         rows = []
@@ -1498,17 +1495,22 @@ class PopupWindow:
         return [button for row in self._rows() for button in row]
 
     def _kbd_select(self, index: int) -> None:
+        """Highlight button `index` and announce it: without focus a screen
+        reader can't follow the highlight (pinned by
+        `tests/test_popup_ui.py::test_the_highlight_is_announced`)."""
         buttons = self._buttons()
         if not buttons:
             return
         self._kbd_index = max(0, min(index, len(buttons) - 1))
         keyboard_nav.highlight_only(buttons, self._kbd_index)
-        # Without focus a screen reader can't follow the highlight
         selected = buttons[self._kbd_index]
         _announce(selected, selected.get_tooltip_text() or "")
 
     def _kbd_key(self, name: str, shift: bool = False) -> bool:
-        """Handle one navigation key; returns whether it was one."""
+        """Handle one navigation key; returns whether it was one. A key
+        restarts the auto-hide countdown, and activating ignores a Shift
+        left from an earlier mouse press (pinned by
+        `tests/test_popup_ui.py::test_keyboard_moves_the_highlight_and_enter_runs_it`)."""
         if name == "Escape":
             self.hide()
             return True
@@ -1516,20 +1518,16 @@ class PopupWindow:
         flat = [b for btns in rows for b in btns]
         if not flat or name not in _NAV_KEYS:
             return False
-        # Using the keyboard counts as being on the popup: restart the
-        # auto-hide countdown rather than let it run out mid-choice.
         self._arm_initial_hide()
         if name in _ACTIVATE_KEYS:
             global _kbd_activated_at
             _kbd_activated_at = time.monotonic()
             index = min(self._kbd_index, len(flat) - 1)
-            # Shift-click means "copy instead of paste"; don't let the
-            # state of an earlier mouse press carry over to this key.
             self._last_press_state = Gdk.ModifierType(0)
             flat[index].emit("clicked")
             if self._kbd_nav:
-                # Still up: the expand chevron revealed row 2. Highlight
-                # the button now in its place, the first one revealed.
+                # Still up: it was the expand chevron, so highlight the
+                # first button it revealed
                 self._kbd_select(index)
             return True
         self._kbd_select(_nav_target([len(b) for b in rows], self._kbd_index, name, shift))
@@ -1551,12 +1549,8 @@ class PopupWindow:
 
     def _on_initial_timeout(self) -> bool:
         self._initial_hide_id = None
-        # Not while the pointer is on the popup; _on_leave starts the next countdown
-        if self._pointer_in_popup:
-            return False
-        # Otherwise honour the contract: after N ms without pointer entry,
-        # give up.
-        self.hide()
+        if not self._pointer_in_popup:
+            self.hide()
         return False
 
     def _arm_hide_timeout(self, ms: int) -> None:
@@ -1577,9 +1571,7 @@ class PopupWindow:
 
     def _start_tracking(self) -> None:
         self._stop_tracking()
-        self._tracker_id = GLib.timeout_add(150, self._tick)
-        # Wayland has no Xlib button poll, so watch the mouse via /dev/input to
-        # dismiss the popup the moment the user clicks anywhere outside it.
+        self._tracker_id = GLib.timeout_add(_POLL_MS, self._tick)
         if self._xdpy is None:
             self._click_watcher = _ClickWatcher(self._on_global_click)
             self._click_watcher.start()
@@ -1594,16 +1586,10 @@ class PopupWindow:
             self._click_watcher = None
 
     def _on_global_click(self) -> bool:
-        """A mouse button was pressed somewhere (Wayland evdev watcher).
-        Dismiss the popup unless the click landed on it. Runs on the GLib
-        main loop.
-
-        We decide inside-vs-outside from the enter/leave flag, NOT from
-        pointer.get_position(): on Wayland that returns surface-local
-        coordinates that are stale/meaningless when the click lands on
-        another window, so a click well outside used to read as 'inside'
-        and fail to dismiss. The pointer must be over the popup to click
-        anything on it, so _pointer_in_popup is the reliable signal."""
+        """A mouse button was pressed somewhere (Wayland evdev watcher):
+        dismiss unless the pointer is on the popup. Decided by the
+        enter/leave flag: Wayland's pointer position is surface-local and
+        meaningless for a click on another window."""
         if not self.win.get_visible():
             return False
         if not self._pointer_in_popup:
@@ -1611,57 +1597,47 @@ class PopupWindow:
         return False
 
     def _tick(self) -> bool:
-        # Stop tracking once the window is hidden
+        """The tracking poll. Only X11 has a screen-space pointer for the
+        safe zone; on Wayland enter and leave keep the popup up."""
         if not self.win.get_visible():
             self._tracker_id = None
             return False
-
-        # GTK 4 can't query the global pointer; on X11 it comes from the
-        # Xlib poll below (physical root coords -> logical via the scale).
-        px = py = None
-
-        # Poll physical button state + Esc via Xlib (works even when GTK seat-grab
-        # is denied by ibus/cinnamon). Edge-detect 0→1 transitions.
-        if self._xdpy is not None:
-            try:
-                pressed, phys_x, phys_y, esc_pressed = _x11_input_state(
-                    self._xdpy, self._esc_keycode
-                )
-                click_lx = phys_x / self._scale
-                click_ly = phys_y / self._scale
-                px, py = click_lx, click_ly
-                if pressed and not self._prev_button_pressed:
-                    if not self._point_in_popup(click_lx, click_ly):
-                        self._prev_button_pressed = pressed
-                        self.hide()
-                        return False
-                self._prev_button_pressed = pressed
-
-                if self._kbd_nav:
-                    self._kbd_drain()
-                    if not self.win.get_visible():
-                        return False
-                if esc_pressed and not self._prev_esc_pressed:
-                    self._prev_esc_pressed = esc_pressed
-                    self.hide()
-                    return False
-                self._prev_esc_pressed = esc_pressed
-            except Exception as exc:  # noqa: BLE001
-                print(f"[popup] xlib query failed: {exc}")
-
-        # Wayland's pointer position is surface-local, so the safe zone
-        # can't be computed there; enter and leave keep the popup up instead
-        if self._xdpy is None or px is None:
+        if self._xdpy is None:
             return True
-        in_safe = self._in_safe_zone(px, py)
-        if in_safe:
-            # Reset/cancel any countdown - user is still on text or popup
+        pointer = None
+        try:
+            pointer = self._poll_x11_input()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[popup] xlib query failed: {exc}")
+        if not self.win.get_visible():
+            return False
+        if pointer is None:
+            return True
+        if self._in_safe_zone(*pointer):
             self._cancel_hide_timeout()
-        else:
-            # Arm leave-grace if not already counting down
-            if self._hide_timeout_id is None:
-                self._arm_hide_timeout(self._leave_grace_ms)
-        return True  # keep ticking
+        elif self._hide_timeout_id is None:
+            self._arm_hide_timeout(self._leave_grace_ms)
+        return True
+
+    def _poll_x11_input(self) -> tuple[float, float]:
+        """Hide on a new click outside the popup or a new Esc, and run the
+        grabbed navigation keys. Returns the pointer in logical pixels.
+        Xlib sees the buttons even when ibus or Cinnamon refuse GTK a seat
+        grab."""
+        pressed, phys_x, phys_y, esc_pressed = _x11_input_state(self._xdpy, self._esc_keycode)
+        pointer = (phys_x / self._scale, phys_y / self._scale)
+        was_pressed, self._prev_button_pressed = self._prev_button_pressed, pressed
+        if pressed and not was_pressed and not self._point_in_popup(*pointer):
+            self.hide()
+            return pointer
+        if self._kbd_nav:
+            self._kbd_drain()
+            if not self.win.get_visible():
+                return pointer
+        was_esc, self._prev_esc_pressed = self._prev_esc_pressed, esc_pressed
+        if esc_pressed and not was_esc:
+            self.hide()
+        return pointer
 
     def _point_in_popup(self, lx: float, ly: float) -> bool:
         x, y, w, h = self._popup_rect
@@ -1670,8 +1646,11 @@ class PopupWindow:
     def _in_safe_zone(self, px: int, py: int) -> bool:
         """Whether a pointer at (px, py) keeps the popup up: on or just
         around the popup, near the selection, or in the corridor between
-        the two (a fast diagonal reach leaves the circle before it arrives).
-        tests/test_popup_show.py pins each edge."""
+        the two (a fast diagonal reach leaves the circle before it arrives)
+        (pinned by
+        `tests/test_popup_show.py::test_the_pointer_may_be_twelve_pixels_outside_the_popup`,
+        `tests/test_popup_show.py::test_the_pointer_may_be_eighty_pixels_from_the_selection`,
+        `tests/test_popup_show.py::test_the_path_from_the_selection_to_the_popup_is_safe`)."""
         x, y, w, h = self._popup_rect
         near_popup = (
             x - _POPUP_MARGIN <= px <= x + w + _POPUP_MARGIN
@@ -1693,10 +1672,10 @@ class PopupWindow:
         return in_corridor_x and in_corridor_y
 
     def _shift_held(self) -> bool:
-        """True if Shift was held for the press that triggered the current
-        'clicked'. GTK 4 has no Gtk.get_current_event_state(); the capture-
-        phase gesture stores the press's modifier state, and on X11 the
-        live pointer mask is checked as well (covers synthetic clicks)."""
+        """Whether Shift was held for the press behind the current
+        "clicked": the capture-phase gesture's record (GTK 4 has no
+        get_current_event_state()), or on X11 the live pointer mask, which
+        covers synthetic clicks."""
         if self._last_press_state & Gdk.ModifierType.SHIFT_MASK:
             return True
         if self._xdpy is not None:
@@ -1707,13 +1686,12 @@ class PopupWindow:
         return False
 
     def _on_active_changed(self, win, _pspec) -> None:
-        # Hide when the popup loses focus (it normally never has it).
+        """Hide when the popup loses focus a window manager gave it anyway."""
         if not win.is_active() and getattr(self, "_was_active", False):
             self.hide()
         self._was_active = win.is_active()
 
     def _on_enter(self, _controller, _x, _y) -> None:
-        # On the popup, neither countdown may run
         self._pointer_in_popup = True
         self._cancel_initial_hide()
         self._cancel_hide_timeout()
@@ -1724,8 +1702,7 @@ class PopupWindow:
 
     def _on_leave(self, _controller) -> None:
         self._pointer_in_popup = False
-        # On X11 _tick's safe zone decides (the pointer may still be on the
-        # text). Wayland has no safe zone, so the leave countdown starts here.
+        # On X11 _tick's safe zone decides (the pointer may be on the text)
         if self._xdpy is None and self.win.get_visible():
             self._arm_hide_timeout(self._leave_grace_ms)
 
@@ -1739,10 +1716,5 @@ class PopupWindow:
 
     def _on_button_press(self, gesture, _n_press, x, y) -> None:
         self._last_press_state = gesture.get_current_event_state()
-        # Clicks on our own buttons go through normal child dispatch; a
-        # press reported outside the window's bounds dismisses.
-        win_w = self.win.get_width()
-        win_h = self.win.get_height()
-        # x/y are relative to the popup window's origin
-        if x < 0 or y < 0 or x > win_w or y > win_h:
+        if not (0 <= x <= self.win.get_width() and 0 <= y <= self.win.get_height()):
             self.hide()

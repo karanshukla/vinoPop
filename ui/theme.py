@@ -25,8 +25,6 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
-# Brand layer. Uses libadwaita's named colours (@window_bg_color, @card_bg_color,
-# @accent_bg_color, ...) so one stylesheet serves light and dark.
 _BRAND_CSS = """
 /* ============================================================
    vinoPop brand layer over libadwaita: the vino family palette
@@ -139,20 +137,20 @@ textview.lp-cmd-edit {
 }
 """
 
-# Dark-mode overrides appended after the brand layer.
 _BRAND_DARK_CSS = """
 @define-color accent_color #56cc78;
 """
 
 
-# Alpha for hint text drawn in a text view's own colour (the sample text in
-# Settings' text areas and the recipe wizard's template box). 0.55 keeps it
-# at 4.5:1 on Adwaita's light and dark views; tests/test_a11y.py checks it.
 PLACEHOLDER_ALPHA = 0.55
+"""Alpha for hint text in a text view's own colour (Settings' sample text,
+the recipe wizard's template box): 4.5:1 on Adwaita's light and dark views
+(pinned by `tests/test_a11y.py::test_text_view_hint_contrast`)."""
 
 
-# Dark -> light hex remap for the popup bar's CSS (ui/popup.py). The green
-# accent reads on either background, so only surfaces, text and borders swap.
+# The popup bar's CSS, dark to light (pinned by
+# `tests/test_a11y.py::test_popup_bar_contrast`). The green accent reads on
+# either background, so it stays.
 _LIGHT_REMAP = {
     "#0e0e10": "#ffffff",  # bar surface
     "#2a2c30": "#e2e3e6",  # bar border
@@ -164,19 +162,15 @@ _LIGHT_REMAP = {
 
 
 def _apply_remap(css: bytes, remap: dict[str, str]) -> bytes:
-    """Substitute one hex palette into the CSS in a single pass.
-    Sequential .replace() would let later replacements re-hit earlier
-    outputs (e.g. swapping #1c2231 to #ffffff, then #5a6378 to #7a8090
-    would corrupt the first output if it shared a substring). Build a
-    regex and replace by full match instead."""
+    """Swap the colours in `remap` in one pass, so a replacement is never
+    replaced again, and a longer colour wins over one it starts with (pinned
+    by `tests/test_popup_rules.py::test_a_remapped_colour_is_not_remapped_again`,
+    `tests/test_popup_rules.py::test_a_longer_colour_wins_over_its_prefix`)."""
     import re
 
     if not remap:
         return css
     text = css.decode("ascii")
-    # Order keys longest-first so #abcdef wins over #abcde when both
-    # appear in the map. Wrap each hex in word-boundary so partial
-    # hexes inside another hex never match.
     keys = sorted(remap.keys(), key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(k) for k in keys))
     out = pattern.sub(lambda m: remap[m.group(0)], text)
@@ -184,13 +178,10 @@ def _apply_remap(css: bytes, remap: dict[str, str]) -> bytes:
 
 
 def _system_prefers_dark() -> bool:
-    """Best-effort: does the user's system prefer dark? With the colour
-    scheme at DEFAULT, Adw.StyleManager.get_dark() follows the desktop's
-    preference (Settings portal on GNOME/KDE). Defaults to True when we have
-    nothing to go on - keeps the long-standing dark look."""
+    """Whether the desktop prefers dark, True when unknown. Only asked for
+    "system", while the scheme is DEFAULT: then Adw.StyleManager.get_dark()
+    is the desktop's own preference (the Settings portal)."""
     try:
-        # Only asked for "system", i.e. while the scheme is DEFAULT - then
-        # get_dark() is the desktop's own preference.
         return bool(Adw.StyleManager.get_default().get_dark())
     except Exception:
         return True
@@ -302,9 +293,7 @@ def _sync_icon_theme(effective: str, settings=None, backend_name: str | None = N
     """On KDE/Wayland, use the Adwaita icon theme in dark mode and the
     desktop's own (Breeze) otherwise. The app's icons are GNOME/Adwaita
     symbolic names; names either theme lacks are swapped by
-    icon_style.available(). Follows the effective mode both ways, so
-    the icon set no longer depends on which modes were picked before.
-    libadwaita ignores gtk-theme-name and owns light/dark itself, so that
+    icon_style.available(). libadwaita ignores gtk-theme-name and owns light/dark itself, so that
     isn't touched."""
     try:
         if backend_name is None:

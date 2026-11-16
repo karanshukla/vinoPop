@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""vinoPop tray icon - Qt QSystemTrayIcon (StatusNotifierItem + DBusMenu).
+"""vinoPop's tray child process: a QSystemTrayIcon, talking to the daemon
+over tray.py's socket protocol.
 
-Uses QSystemTrayIcon, NOT the KF6 KStatusNotifierItem (which had a Fedora 44
-D-Bus registration bug). Qt's tray registers the SNI *and* exports the context
-menu as a com.canonical.dbusmenu object that plasmashell renders itself - the
-only thing that actually shows a menu on KWin/Wayland (a parentless QMenu.popup
-never maps). Talks to the main vinoPop process over a small length-prefixed
-JSON socket, unchanged from the previous implementation.
+QSystemTrayIcon, not KF6's KStatusNotifierItem (broken D-Bus registration on
+Fedora 44): it registers the StatusNotifierItem and exports the menu over
+DBusMenu, which plasmashell draws itself. On KWin Wayland that is the only
+menu that shows; a parentless QMenu.popup never maps.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import socket
-import struct
 import sys
 from pathlib import Path
 
@@ -22,41 +20,37 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-# Run as a script, so the repo root (not this folder) has to be on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import vino_family  # noqa: E402
 from core.xdg_paths import CACHE_DIR as SOCKET_DIR  # noqa: E402
 from core.xdg_paths import CONFIG_DIR, HICOLOR_APPS
-from tray.tray import FrameReader  # the same wire protocol as the daemon side
+from tray.tray import SOCKET_NAME, FrameReader, _send_message
 
 ICON_DIR = str(Path(__file__).resolve().parent.parent / "icons")
-# How long after startup a missing tray host counts as missing: at login the
-# panel can come up after us.
+# At login the panel can start after us.
 _TRAY_HOST_GRACE_MS = 15000
+_TRAY_HOST_RETRY_MS = 1000
+_SOCKET_POLL_MS = 100
+_PARENT_POLL_MS = 2000
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
+
+ICON_STYLES = ("color", "light", "dark")
+DEFAULT_ICON_STYLE = "color"
+# Fixed glyph colours: light for dark panels, dark for light ones
+_MONO_COLORS = {"light": "#f4f5f6", "dark": "#2a2e32"}
+_ICON_SIZES = (16, 22, 24, 32, 48, 64)
+_SYMBOLIC_ICON = "vinopop-tray-symbolic"
+_APP_ICON = "vinopop"
 
 
 def _tray_icon_style() -> str:
-    """User's chosen tray-icon style: 'color' (panel-recoloured glyph, default),
-    'light' (light monochrome - for dark panels), or 'dark' (dark
-    monochrome - for light panels)."""
+    """The tray_icon_style setting, one of ICON_STYLES."""
     try:
         d = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        v = str(d.get("tray_icon_style", "color")).strip().lower()
-        return v if v in ("color", "light", "dark") else "color"
+        v = str(d.get("tray_icon_style", DEFAULT_ICON_STYLE)).strip().lower()
+        return v if v in ICON_STYLES else DEFAULT_ICON_STYLE
     except Exception:
-        return "color"
-
-
-# ─── Wire helpers ───────────────────────────────────────────────────
-
-
-def _send_message(sock: socket.socket, msg: dict) -> None:
-    raw = json.dumps(msg).encode("utf-8")
-    sock.sendall(struct.pack("!I", len(raw)) + raw)
-
-
-# ─── TrayQt ─────────────────────────────────────────────────────────
+        return DEFAULT_ICON_STYLE
 
 
 def _icon(what: str) -> QIcon:
@@ -76,9 +70,6 @@ class TrayQt:
         self._menu = QMenu()
         self._setup_menu()
 
-        # QSystemTrayIcon registers the SNI and exports `self._menu` as a
-        # DBusMenu. plasmashell renders that menu on its own surface (correctly
-        # positioned) when the user activates the item - no client-side popup.
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(self._load_icon())
         self._tray.setToolTip("vinoPop - clipboard popup assistant")
@@ -86,7 +77,6 @@ class TrayQt:
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
 
-        # Socket
         self._sock: socket.socket | None = None
         self._client: socket.socket | None = None
         self._reader = FrameReader()
@@ -95,70 +85,51 @@ class TrayQt:
 
         self._timer = QTimer()
         self._timer.timeout.connect(self._check_socket)
-        self._timer.start(100)
+        self._timer.start(_SOCKET_POLL_MS)
 
-        # Parent-death watchdog. PR_SET_PDEATHSIG (set by the launcher) is the
-        # primary guard, but it can miss if the tray gets reparented to a
-        # systemd subreaper rather than PID 1. So also poll our parent PID:
-        # the moment it stops being the daemon that spawned us, that daemon is
-        # gone and we must remove our tray icon instead of lingering forever.
         self._initial_ppid = os.getppid()
         self._ppid_timer = QTimer()
         self._ppid_timer.timeout.connect(self._check_parent_alive)
-        self._ppid_timer.start(2000)
+        self._ppid_timer.start(_PARENT_POLL_MS)
 
         avail = QSystemTrayIcon.isSystemTrayAvailable()
         print(f"[tray-qt] Started (QSystemTrayIcon, tray_available={avail})", flush=True)
-        # No tray host (e.g. GNOME without the AppIndicator extension) means
-        # no way into Settings. Check again once the session has had time to
-        # start its panel, then tell the daemon so it can say so.
         QTimer.singleShot(_TRAY_HOST_GRACE_MS, self._report_missing_host)
 
     def _report_missing_host(self) -> None:
+        """Tell the daemon there's no tray host (GNOME without AppIndicator),
+        once it's connected."""
         if QSystemTrayIcon.isSystemTrayAvailable():
             return
-        if self._client is None:  # the daemon isn't connected yet; ask again later
-            QTimer.singleShot(1000, self._report_missing_host)
+        if self._client is None:
+            QTimer.singleShot(_TRAY_HOST_RETRY_MS, self._report_missing_host)
             return
         print("[tray-qt] no system tray host: the icon won't show", flush=True)
         self._emit("no_tray_host", None)
 
-    # ─── icon ───
     def _load_icon(self) -> QIcon:
-        """Tray icon per the user's `tray_icon_style` setting.
-
-        Plasma only recolours parts marked ColorScheme-Text, and only when
-        it loads the icon by name; where that fails the user picks a fixed
-        mono colour:
-          color -> symbolic glyph Plasma recolours to the panel (default)
-          light -> light monochrome glyph; for DARK panels
-          dark  -> dark monochrome glyph; for LIGHT panels
-        """
+        """The icon for tray_icon_style. "color" loads by theme name: Plasma
+        recolours ColorScheme-Text parts only in an icon the SNI names. Where
+        that fails, the user picks a fixed "light" or "dark" glyph."""
         style = _tray_icon_style()
-        if style in ("light", "dark"):
-            color = "#f4f5f6" if style == "light" else "#2a2e32"
-            ic = self._render_symbolic(color)
+        if style in _MONO_COLORS:
+            ic = self._render_symbolic(_MONO_COLORS[style])
             if ic is not None and not ic.isNull():
                 return ic
-            # fall through to the coloured badge if rendering failed
-        # By theme name, so the SNI carries an IconName and Plasma recolours
-        # the ColorScheme-Text parts to the panel, like the other vino trays.
-        ic = QIcon.fromTheme("vinopop-tray-symbolic")
+        ic = QIcon.fromTheme(_SYMBOLIC_ICON)
         if not ic.isNull():
             return ic
-        for name in ("vinopop-tray-symbolic", "vinopop"):
+        for name in (_SYMBOLIC_ICON, _APP_ICON):
             p = Path(ICON_DIR) / f"{name}.svg"
             if p.is_file():
                 ic = QIcon(str(p))
                 if not ic.isNull():
                     return ic
-        return QIcon.fromTheme("vinopop") or QIcon.fromTheme("applications-internet")
+        return QIcon.fromTheme(_APP_ICON) or QIcon.fromTheme("applications-internet")
 
     def _render_symbolic(self, color: str) -> QIcon | None:
-        """Render the monochrome symbolic tray SVG (fill="currentColor") in
-        `color`, as a multi-size QIcon. Used for the light/dark styles so the
-        glyph is a fixed, panel-appropriate colour the user chose."""
-        p = Path(ICON_DIR) / "vinopop-tray-symbolic.svg"
+        """The symbolic SVG (fill="currentColor") drawn in `color` at each tray size."""
+        p = Path(ICON_DIR) / f"{_SYMBOLIC_ICON}.svg"
         if not p.is_file():
             return None
         try:
@@ -169,7 +140,7 @@ class TrayQt:
             svg = p.read_text(encoding="utf-8").replace("currentColor", color)
             renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
             icon = QIcon()
-            for size in (16, 22, 24, 32, 48, 64):
+            for size in _ICON_SIZES:
                 img = QImage(size, size, QImage.Format_ARGB32)
                 img.fill(Qt.transparent)
                 painter = QPainter(img)
@@ -186,7 +157,7 @@ class TrayQt:
 
         user_dir = HICOLOR_APPS
         user_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("vinopop-tray-symbolic", "vinopop"):
+        for name in (_SYMBOLIC_ICON, _APP_ICON):
             src = Path(ICON_DIR) / f"{name}.svg"
             dst = user_dir / f"{name}.svg"
             if src.is_file():
@@ -195,12 +166,10 @@ class TrayQt:
                 except OSError:
                     pass
 
-    # ─── activation ───
     def _on_activated(self, reason) -> None:
-        # Right-click already shows the DBusMenu (plasmashell renders it). On
-        # Wayland a left-click arrives over D-Bus with no input event on any of
-        # our surfaces, so a client-side QMenu.popup is refused ("Failed to
-        # create grabbing popup"); open Settings instead.
+        """Left or middle click: the menu on X11, Settings on Wayland, where
+        the click arrives over D-Bus without an input event and a client-side
+        QMenu.popup is refused. Right-click is plasmashell's DBusMenu."""
         R = QSystemTrayIcon.ActivationReason
         if reason not in (R.Trigger, R.MiddleClick):
             return
@@ -209,11 +178,9 @@ class TrayQt:
         else:
             self._menu.popup(QCursor.pos())
 
-    # ─── menu ───
     def _setup_menu(self) -> None:
-        # Icons per vino-ui's tray rules (core/vino_family.py): actions get
-        # one; the checkable item doesn't. The other vinoPilot apps are on
-        # the About dialog, not here.
+        """Actions get an icon (core/vino_family.py's tray rules); the
+        checkable item doesn't."""
         h = self._menu.addAction("vinoPop")
         h.setEnabled(False)
         self._menu.addSeparator()
@@ -241,10 +208,9 @@ class TrayQt:
             except OSError:
                 pass
 
-    # ─── socket IPC (unchanged protocol) ───
     def _setup_socket(self) -> None:
         SOCKET_DIR.mkdir(parents=True, exist_ok=True)
-        socket_path = str(SOCKET_DIR / "tray.sock")
+        socket_path = str(SOCKET_DIR / SOCKET_NAME)
         try:
             os.unlink(socket_path)
         except OSError:
@@ -257,9 +223,8 @@ class TrayQt:
         info_file.write_text(f"{socket_path}\n{os.getpid()}\n")
 
     def _check_parent_alive(self) -> None:
-        """Quit if the daemon that spawned us is gone. Detected by the parent
-        PID changing (reparented to init or a systemd subreaper). Removes our
-        tray icon so a crashed/killed daemon can't leave a ghost behind."""
+        """Quit once the parent PID changes. PR_SET_PDEATHSIG misses a
+        reparent to a systemd subreaper, and an orphan leaves a ghost icon."""
         try:
             if os.getppid() != self._initial_ppid:
                 print("[tray-qt] parent daemon gone -- exiting", flush=True)
@@ -281,7 +246,7 @@ class TrayQt:
                 self._reader = FrameReader()
             self._client.setblocking(False)
             messages = self._reader.read(self._client)
-        except OSError:  # includes ConnectionError: the daemon hung up; free the slot
+        except OSError:  # ConnectionError too: the daemon hung up
             self._disconnect_client()
             return
         for msg in messages:
@@ -300,13 +265,11 @@ class TrayQt:
         if cmd == "set_watcher_active":
             self._toggle_action.setChecked(bool(msg.get("value", True)))
         elif cmd == "reload_icon":
-            # Settings changed the tray_icon_style; re-render live.
             try:
                 self._tray.setIcon(self._load_icon())
             except Exception as exc:  # noqa: BLE001
                 print(f"[tray-qt] reload_icon failed: {exc}", flush=True)
         elif cmd == "set_visible":
-            # The daemon hides the icon after the user's idle minutes.
             self._tray.setVisible(bool(msg.get("value", True)))
         elif cmd == "quit":
             self._running = False

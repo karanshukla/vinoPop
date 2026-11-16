@@ -92,7 +92,6 @@ def _is_installed(entry_or_filename) -> bool:
     """Check whether a catalogue entry (dict) or filename (str) is installed."""
     if isinstance(entry_or_filename, dict):
         return (_target_dir(entry_or_filename) / entry_or_filename["file"]).is_file()
-    # Backwards-compat: string means a plugin .py file
     return (USER_PLUGIN_DIR / entry_or_filename).is_file()
 
 
@@ -121,7 +120,6 @@ class PluginManagerDialog:
         gtk4_app.init()
         self._on_changed = on_changed
         self._window: Adw.Window | None = None
-        # Shows a page by id; set by show() for as long as the window is up.
         self._select_tab: Callable[[str], None] | None = None
         self._catalog_group: Adw.PreferencesGroup | None = None
         self._catalog_groups: list[Adw.PreferencesGroup] = []
@@ -129,8 +127,7 @@ class PluginManagerDialog:
         self._installed_group: Adw.PreferencesGroup | None = None
         self._order_group: Adw.PreferencesGroup | None = None
         self._custom_group: Adw.PreferencesGroup | None = None
-        # Adw.PreferencesGroup has no public "list my rows" API, so every
-        # row we add to a refreshable group is tracked here for removal.
+        # Adw.PreferencesGroup can't list its rows, so the ones to clear are kept here
         self._group_rows: dict[Adw.PreferencesGroup, list[Gtk.Widget]] = {}
 
     def _add_row(self, group: Adw.PreferencesGroup, row: Gtk.Widget) -> None:
@@ -161,13 +158,9 @@ class PluginManagerDialog:
         # GTK 4 may keep the destroyed window alive while Python holds a
         # ref, so drop our references on close-request as well.
         win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
-        # Set before the pages are built: the recipe wizard uses it as its
-        # parent.
+        # Before the pages are built: the recipe wizard's parent
         self._window = win
 
-        # Catalogue: one PreferencesGroup per category so the user sees
-        # Productivity / Web / AI / Developer separately rather than one
-        # undifferentiated flat list. _catalog_group is the *first* group.
         catalog_page = Adw.PreferencesPage()
         self._catalog_groups = []
         for group in self._build_catalog_groups():
@@ -210,7 +203,7 @@ class PluginManagerDialog:
         self._select_tab(tab)
 
     def _on_destroy(self, win=None, *_):
-        # Ignore a late signal from a window we already replaced.
+        # A late signal from a window already replaced
         if win is not None and self._window is not None and win is not self._window:
             return
         self._window = None
@@ -223,10 +216,7 @@ class PluginManagerDialog:
         self._custom_group = None
         self._group_rows = {}
 
-    # ---- catalog tab ---------------------------------------------------------
-
-    # Display order for category sections. Categories present in the
-    # manifest but missing here are appended in first-seen order.
+    # Categories missing here follow in manifest order
     _CATEGORY_ORDER = [
         "Snippets & Clipboard",
         "Productivity",
@@ -254,14 +244,11 @@ class PluginManagerDialog:
             group.add(row)
             return [group]
 
-        # Bucket by category, preserving manifest order within each bucket.
         buckets: dict[str, list[dict]] = {}
         for entry in manifest:
             cat = entry.get("category") or "Other"
             buckets.setdefault(cat, []).append(entry)
 
-        # Stable, opinionated ordering: known categories first in the order
-        # defined above, then anything else by first appearance.
         seen = set()
         ordered_cats: list[str] = []
         for cat in self._CATEGORY_ORDER:
@@ -275,7 +262,7 @@ class PluginManagerDialog:
         groups: list[Adw.PreferencesGroup] = []
         for cat in ordered_cats:
             group = Adw.PreferencesGroup()
-            # Group title/description are markup too; escape the '&'.
+            # Title and description are markup
             group.set_title(GLib.markup_escape_text(cat))
             desc = self._CATEGORY_DESCRIPTIONS.get(cat)
             if desc:
@@ -286,9 +273,6 @@ class PluginManagerDialog:
         return groups
 
     def _build_catalog_group(self) -> Adw.PreferencesGroup:
-        # Kept for backwards-compat / single-group callers. Returns the
-        # first category group; in practice _build_catalog_groups() is
-        # what the page now uses.
         groups = self._build_catalog_groups()
         return groups[0] if groups else Adw.PreferencesGroup()
 
@@ -387,9 +371,7 @@ class PluginManagerDialog:
     ) -> None:
         if update_btn is not None:
             update_btn.set_visible(_status(entry) == "outdated")
-        # Plain buttons: a column of green or red buttons down the list
-        # shouts, and the HIG keeps suggested/destructive styling for the
-        # one action a view or dialog is about.
+        # Plain: the HIG keeps suggested/destructive styling for a view's one main action
         btn.set_label("Remove" if _is_installed(entry) else "Install")
 
     def _on_install_clicked(self, btn: Gtk.Button, entry: dict, update_btn: Gtk.Button) -> None:
@@ -409,12 +391,9 @@ class PluginManagerDialog:
             print(f"[plugin_manager] error: {exc}")
             return
         self._update_install_button(btn, entry, update_btn)
-        # Refresh installed-tab content if the window is still up
         self._refresh_installed_group()
         if self._on_changed:
             self._on_changed()
-
-    # ---- installed tab -------------------------------------------------------
 
     def _build_installed_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
@@ -440,11 +419,6 @@ class PluginManagerDialog:
 
         retired = _pl.retired_bundled()
 
-        # Map source-file -> list of plugin names that file registered.
-        # When a bundle exposes more than one action (editing_actions
-        # registers cut/paste/paste-and-enter/backspace/select-all), we
-        # render the file as an expander with one switch per sub-plugin
-        # so the user can keep what they want and silence the rest.
         try:
             by_source = _pl.plugins_by_source()
             all_plugins = {p.name: p for p in _pl.all_plugins()}
@@ -463,9 +437,7 @@ class PluginManagerDialog:
         for path in files:
             entry = manifest_by_file.get(path.name)
             sub_names = sorted(by_source.get(path.name, []))
-            # Two layouts: single-action bundles render as ActionRow with
-            # a Remove button on the right; multi-action bundles render
-            # as ExpanderRow with sub-rows per sub-plugin, plus Remove.
+            # A file that registers several actions gets a switch per action
             if len(sub_names) > 1:
                 row = _plain(Adw.ExpanderRow())
                 row.set_enable_expansion(True)
@@ -525,8 +497,6 @@ class PluginManagerDialog:
                 disabled.append(sub_name)
         settings_obj.set("disabled_plugins", disabled)
         settings_obj.save()
-        # Trigger the on_changed callback so the daemon reloads plugins
-        # and the filter takes effect immediately.
         if self._on_changed:
             try:
                 self._on_changed()
@@ -536,8 +506,6 @@ class PluginManagerDialog:
     def _refresh_installed_group(self) -> None:
         if self._installed_group is None:
             return
-        # GTK 4 drops the widget once its last ref (the group) lets go,
-        # so remove() is enough - no separate destroy() needed.
         self._clear_group(self._installed_group)
         self._fill_installed_group(self._installed_group)
 
@@ -547,13 +515,10 @@ class PluginManagerDialog:
         except OSError as exc:
             print(f"[plugin_manager] could not remove {path}: {exc}")
             return
-        # Refresh both tabs (install button on catalog tab changes too)
         self._refresh_installed_group()
         self._rebuild_catalog_buttons()
         if self._on_changed:
             self._on_changed()
-
-    # ---- custom (recipes) tab ------------------------------------------------
 
     def _build_custom_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
@@ -568,8 +533,6 @@ class PluginManagerDialog:
     def _fill_custom_group(self, group: Adw.PreferencesGroup) -> None:
         from plugin_system import recipe_loader
 
-        # Translate the internal action-type slug into something a person
-        # who didn't write the JSON would recognise.
         atype_labels = {
             "open_url": "Opens a web page",
             "run_command": "Runs a command",
@@ -585,9 +548,6 @@ class PluginManagerDialog:
             row.set_title(title)
             row.set_subtitle(subtitle)
 
-            # On/off toggle. Lets the user disable a custom button without
-            # deleting it. Default-True for recipes that don't carry the
-            # 'enabled' key yet.
             enabled_switch = Gtk.Switch()
             enabled_switch.set_valign(Gtk.Align.CENTER)
             enabled_switch.set_tooltip_text("Show this button in the popup")
@@ -613,7 +573,6 @@ class PluginManagerDialog:
         self._fill_custom_group_with_header(self._custom_group)
 
     def _fill_custom_group_with_header(self, group: Adw.PreferencesGroup) -> None:
-        # "+ New action" row at the top (re-added on refresh)
         new_row = _plain(Adw.ActionRow())
         new_row.set_title("New action…")
         new_row.set_subtitle("Open URL · Run command · Notify · Transform clipboard")
@@ -663,13 +622,9 @@ class PluginManagerDialog:
         from plugin_system import recipe_loader
 
         recipe_loader.set_recipe_enabled(path, switch.get_active())
-        # Don't repaint the whole group -- that would rebuild every row
-        # and lose the switch animation feedback. Just trigger the
-        # plugin-reload callback so the popup reflects the change.
+        # No group rebuild: it would cut the switch's animation short
         if self._on_changed:
             self._on_changed()
-
-    # ---- order tab -----------------------------------------------------------
 
     def _build_order_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
@@ -699,7 +654,6 @@ class PluginManagerDialog:
             self._add_row(group, row)
             return
 
-        # Compute effective order: user list first, then unlisted by priority
         order = list((settings.get("plugin_order") if settings else None) or [])
         order_idx = {n: i for i, n in enumerate(order)}
         sorted_plugins = sorted(
@@ -760,7 +714,6 @@ class PluginManagerDialog:
         page = getattr(self, "_catalog_page", None)
         if page is None:
             return
-        # Wipe every existing category group, then append fresh ones.
         old_groups = list(getattr(self, "_catalog_groups", []) or [])
         for g in old_groups:
             page.remove(g)

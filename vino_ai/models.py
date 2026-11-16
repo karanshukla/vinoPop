@@ -15,6 +15,7 @@ model's revision therefore re-downloads it for everyone.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -28,14 +29,11 @@ from core.xdg_paths import DATA_DIR
 
 from . import integrity
 
-# The xet transfer backend can hang for good on a multi-GB model with no
-# error. Plain HTTPS resumes, and the timeout turns a stall into an
-# exception that the retry loop in ensure_llm picks up. Must be set before
-# huggingface_hub is imported.
+# Read when huggingface_hub is imported. The xet backend can hang for good,
+# silently, on a multi-GB model; plain HTTPS resumes, and the timeout turns a
+# stall into an exception ensure_llm retries.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
-# The download itself sends nothing extra, but keep any library that calls
-# huggingface_hub.send_telemetry quiet too.
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
 log = logging.getLogger("vinopop")
@@ -45,13 +43,16 @@ MODELS_DIR = DATA_DIR / "models"
 
 @dataclass(frozen=True)
 class LlmModel:
+    """A downloadable model. `size` is the rough download size shown before
+    the first download. `revision` is a pinned commit, so a changed or
+    compromised upstream repo can't swap the files (pinned by
+    `tests/test_vino_ai.py::test_models_are_pinned_to_a_full_commit_sha_not_a_branch`);
+    after bumping it, run scripts/update_digests.py."""
+
     key: str
     repo_id: str
     label: str
-    size: str  # rough download size, shown before the first download
-    # Pinned commit, so a changed or compromised upstream repo can't swap
-    # the files under us. Bump deliberately (Hugging Face "sha"), then run
-    # scripts/update_digests.py.
+    size: str
     revision: str
 
 
@@ -60,8 +61,8 @@ LLM_MODELS = {
     for m in (
         LlmModel(
             "gemma-4-e2b",
-            # Re-quantized to channel-wise INT4: the official group-128
-            # export never finishes compiling on the NPU.
+            # Channel-wise INT4: the official group-128 export never
+            # finishes compiling on the NPU.
             "arankays/gemma-4-E2B-it-int4-cw-ov",
             "Gemma 4 E2B (fast, low RAM)",
             "4 GB",
@@ -110,10 +111,6 @@ def _has_ir(path: Path) -> bool:
     return (path / "openvino_tokenizer.xml").is_file()
 
 
-# Written into a model folder once snapshot_download has returned and the
-# files matched their digests: the commit it was downloaded at, then an
-# empty .complete. A folder without both, or at another commit, is not
-# downloaded, and is replaced by a fresh download.
 REVISION_MARKER = ".vinopop-revision"
 COMPLETE_MARKER = ".complete"
 
@@ -130,6 +127,11 @@ def _marked(path: Path, model: LlmModel) -> bool:
 
 
 def _mark(path: Path, model: LlmModel) -> None:
+    """Mark a verified download: its commit, then an empty .complete. A folder
+    without both, or at another commit, is downloaded again (pinned by
+    `tests/test_model_integrity.py::test_missing_complete_marker_re_downloads`,
+    `tests/test_model_integrity.py::test_revision_mismatch_re_downloads`,
+    `tests/test_model_integrity.py::test_folder_without_markers_is_not_downloaded`)."""
     (path / REVISION_MARKER).write_text(model.revision + "\n", encoding="utf-8")
     (path / COMPLETE_MARKER).touch()
 
@@ -141,8 +143,9 @@ def is_downloaded(model: LlmModel) -> bool:
 
 
 def _staging_dir(model: LlmModel) -> Path:
-    # Per revision, so an interrupted download resumes, and a pin bump in
-    # between doesn't resume into the wrong commit.
+    """Per revision, so an interrupted download resumes but never into
+    another commit (pinned by
+    `tests/test_model_integrity.py::test_stale_staging_for_another_revision_is_removed`)."""
     return MODELS_DIR / f".{model_dir(model).name}.{model.revision[:12]}.partial"
 
 
@@ -167,7 +170,8 @@ def _swap_in(model: LlmModel, staging: Path) -> None:
     """Put a verified staging folder in place of the model folder and delete
     the old one. The old folder is moved aside first, so an interrupted
     swap leaves either the old folder or a marked staging folder, which
-    the next ensure_llm finishes swapping."""
+    the next ensure_llm finishes swapping (pinned by
+    `tests/test_model_integrity.py::test_interrupted_swap_is_finished_without_downloading`)."""
     path, old = model_dir(model), _old_dir(model)
     if old.exists():
         shutil.rmtree(old)
@@ -179,7 +183,9 @@ def _swap_in(model: LlmModel, staging: Path) -> None:
 
 def _adopt_unmarked(model: LlmModel) -> bool:
     """Mark a folder from before the markers existed, if every file matches
-    its pinned digest, so an upgrade doesn't fetch the same 4 GB again."""
+    its pinned digest, so an upgrade doesn't fetch the same 4 GB again (pinned by
+    `tests/test_model_integrity.py::test_verified_folder_from_before_markers_is_adopted`,
+    `tests/test_model_integrity.py::test_unmarked_folder_that_differs_is_downloaded_again`)."""
     path = model_dir(model)
     if downloaded_revision(path) is not None or not _has_ir(path):
         return False
@@ -195,7 +201,8 @@ def _adopt_unmarked(model: LlmModel) -> bool:
 
 def _check_download(model: LlmModel, staging: Path) -> None:
     """Raise unless the finished download is whole and matches its digests.
-    Files that differ are deleted, so the next attempt fetches just them."""
+    Files that differ are deleted, so the next attempt fetches just them
+    (pinned by `tests/test_model_integrity.py::test_hash_mismatch_drops_only_the_bad_file`)."""
     if not _has_ir(staging):
         raise RuntimeError(f"{model.repo_id} downloaded but has no OpenVINO IR")
     _emit(f"Checking the {model.label} files…")
@@ -226,6 +233,16 @@ def _emit(msg: str) -> None:
             log.exception("[vino_ai] download listener failed")
 
 
+_PROGRESS_EVERY_S = 1.0
+
+
+def _counts_written_bytes(bar) -> bool:
+    """snapshot_download reports the same bytes twice, as transferred and as
+    written; only the written ones count (pinned by
+    `tests/test_model_integrity.py::test_progress_counts_written_bytes_once`)."""
+    return bar.unit == "B" and not str(bar.desc).startswith("Downloading bytes")
+
+
 def _progress_class(label: str):
     """A tqdm subclass that folds every per-file byte bar into one
     "label: 42% (1.3 of 3.1 GB)" status line."""
@@ -238,15 +255,13 @@ def _progress_class(label: str):
         def __init__(self, *a, **kw):
             kw["disable"] = False
             super().__init__(*a, **kw)
-            # snapshot_download counts the same bytes twice, once as
-            # transferred and once as written; keep the written ones
-            if self.unit == "B" and not str(self.desc).startswith("Downloading bytes"):
+            if _counts_written_bytes(self):
                 bars.add(self)
 
         def update(self, n=1):
             out = super().update(n)
             now = time.monotonic()
-            if self in bars and now - state["last"] >= 1.0:
+            if self in bars and now - state["last"] >= _PROGRESS_EVERY_S:
                 state["last"] = now
                 total = sum(b.total or 0 for b in bars)
                 done = sum(b.n for b in bars)
@@ -281,12 +296,13 @@ def ensure_llm(
                 return path
             if _adopt_unmarked(model):
                 _clear_leftovers(model)
-                # a re-download an earlier run started for this folder
-                shutil.rmtree(_staging_dir(model), ignore_errors=True)
+                abandoned_redownload = _staging_dir(model)
+                shutil.rmtree(abandoned_redownload, ignore_errors=True)
                 return path
             _clear_leftovers(model)
             staging = _staging_dir(model)
-            if _marked(staging, model):  # a swap interrupted last time
+            swap_was_interrupted = _marked(staging, model)
+            if swap_was_interrupted:
                 _swap_in(model, staging)
                 return path
             from huggingface_hub import snapshot_download
@@ -321,10 +337,14 @@ def ensure_llm(
 
 @dataclass(frozen=True)
 class OnDisk:
+    """A folder in MODELS_DIR: `label` is the model's label, or the folder
+    name for one not in LLM_MODELS. `complete` is False for a partial
+    download or a swapped-out folder."""
+
     path: Path
-    label: str  # the model's label, or the folder name for one we don't list
-    size: int  # bytes
-    complete: bool  # False for a partial download or a swapped-out folder
+    label: str
+    size: int
+    complete: bool
 
 
 def dir_size(path: Path) -> int:
@@ -385,10 +405,8 @@ def delete_downloads() -> int:
             log.info("[vino_ai] deleting %s", item.path)
             shutil.rmtree(item.path, ignore_errors=True)
         if MODELS_DIR.is_dir():
-            try:
-                MODELS_DIR.rmdir()  # only when nothing else is in there
-            except OSError:
-                pass
+            with contextlib.suppress(OSError):
+                MODELS_DIR.rmdir()
         return freed
     finally:
         _download_lock.release()

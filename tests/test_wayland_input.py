@@ -348,8 +348,6 @@ CTRL, SHIFT, KEYPAD = 0x04000000, 0x02000000, 0x20000000
         ("KP_Add", KEYPAD | 0x2B),
         ("ctrl+kp_1", CTRL | KEYPAD | ord("1")),
         ("super+kp_enter", 0x10000000 | KEYPAD | 0x01000005),
-        ("ctrl+shift+exclam", CTRL | 0x21),  # KWin consumes the Shift that made '!'
-        ("ctrl+shift+y", CTRL | SHIFT | ord("Y")),  # but keeps it for letters
         ("ctrl+shift+f5", CTRL | SHIFT | 0x01000034),
         ("ctrl+question", CTRL | ord("?")),
         ("xf86audioplay", 0x01000080),
@@ -357,6 +355,14 @@ CTRL, SHIFT, KEYPAD = 0x04000000, 0x02000000, 0x20000000
 )
 def test_qt_keycode_keypad_and_shifted(combo, expected):
     assert kde_hotkey._qt_keycode(combo) == expected
+
+
+def test_qt_keycode_drops_the_shift_that_made_a_symbol():
+    assert kde_hotkey._qt_keycode("ctrl+shift+exclam") == CTRL | ord("!")
+
+
+def test_qt_keycode_keeps_shift_on_a_letter():
+    assert kde_hotkey._qt_keycode("ctrl+shift+y") == CTRL | SHIFT | ord("Y")
 
 
 def test_action_ids_are_stable_per_role():

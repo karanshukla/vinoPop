@@ -32,8 +32,8 @@ from .idle import IDLE_UNLOAD_MINUTES
 log = logging.getLogger("vinopop")
 
 ORDER = ("NPU", "GPU", "CPU")
-# Speech is synthesized a sentence or so at a time, so length costs nothing
-# up front; this only stops a select-all from talking for an hour.
+# Speech streams a sentence at a time, so this cap only stops a select-all
+# from talking for an hour.
 MAX_CHARS = 20000
 
 _lock = threading.Lock()  # guards _synth, _speech, _idle_timer
@@ -122,7 +122,9 @@ def speak(text: str) -> Any:
     """Start reading `text` aloud and return the playing vino_speak Speech
     (wait() it to see errors). Stops whatever was playing first. Blocks for
     the first load, which compiles the model (~1 s from the driver cache,
-    ~45 s on the NPU after a driver update)."""
+    ~45 s on the NPU after a driver update) (pinned by
+    `tests/test_tts.py::test_text_is_tidied_and_capped`,
+    `tests/test_tts.py::test_a_new_read_cuts_off_the_one_still_playing`)."""
     global _synth, _speech, _last_used
     text = " ".join(text.split())[:MAX_CHARS]
     if not text:
@@ -133,7 +135,7 @@ def speak(text: str) -> Any:
             _synth = _load()
         from vino_speak import Speech
 
-        # Synthesizer.speak() with our choice of player
+        # Synthesizer.speak(), but with player()'s pick
         _speech = Speech(_synth.stream(text), player())
         _last_used = time.monotonic()
         speech = _speech
@@ -187,6 +189,8 @@ def _schedule_unload() -> None:
 
 
 def _unload_or_wait() -> None:
-    # Still talking when the timer fires (a long passage): look again later
+    """Unload, or re-arm while a long passage is still playing (pinned by
+    `tests/test_tts.py::test_the_idle_timer_rearms_while_still_talking`,
+    `tests/test_tts.py::test_the_idle_timer_does_not_rearm_once_unloaded`)."""
     if not unload_if_idle() and _synth is not None:
         _schedule_unload()

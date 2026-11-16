@@ -12,8 +12,7 @@ import pytest
 
 from vino_ai import tts
 
-# The real one, uncached; the fixture stubs tts.player
-_pick_player = tts.player.__wrapped__
+_uncached_unstubbed_player = tts.player.__wrapped__
 
 
 class _Speech:
@@ -23,7 +22,7 @@ class _Speech:
         self.finished = False
 
     @property
-    def done(self):  # a property in vino_speak.Speech
+    def done(self):
         return self.stopped or self.finished
 
     def stop(self):
@@ -45,7 +44,7 @@ class _Synth:
         self.spoken: list[_Speech] = []
 
     def stream(self, text):
-        return text  # what the fake Speech "plays"
+        return text
 
 
 @pytest.fixture(autouse=True)
@@ -65,11 +64,15 @@ def fake_vinospeak(monkeypatch):
 
 
 def test_loads_once_on_the_npu_and_reuses_it():
-    first = tts.speak("Hello there.")
-    second = tts.speak("Again.")
+    tts.speak("Hello there.")
+    tts.speak("Again.")
     assert _Synth.made == ["NPU"]
     assert tts.device() == "NPU"
-    # A new read cuts off the one still playing
+
+
+def test_a_new_read_cuts_off_the_one_still_playing():
+    first = tts.speak("Hello there.")
+    second = tts.speak("Again.")
     assert first.stopped and not second.stopped
 
 
@@ -106,20 +109,56 @@ def test_stop_says_whether_anything_was_playing():
     assert not tts.stop()
 
 
-def test_idle_unload_waits_for_the_speech_to_end(monkeypatch):
-    now = [1000.0]  # whole seconds, so the 300 s boundary is exact
+@pytest.fixture
+def long_passage(monkeypatch):
+    """A passage that has played past the 5 min idle timeout, on a clock in
+    whole seconds (`now[0]`) so the boundary is exact."""
+    now = [1000.0]
     monkeypatch.setattr(tts.time, "monotonic", lambda: now[0])
     speech = tts.speak("A long passage.")
     now[0] += 301
-    assert not tts.unload_if_idle()  # still talking
+    return speech, now
+
+
+def test_idle_unload_waits_for_the_speech_to_end(long_passage):
+    assert not tts.unload_if_idle()
+    assert tts.loaded()
+
+
+def test_the_idle_clock_starts_when_the_speech_ends(long_passage):
+    speech, now = long_passage
     speech.finished = True
     assert not tts.unload_if_idle()
     assert tts._last_used == now[0]
+
+
+def test_idle_unload_one_timeout_after_the_speech_ended(long_passage):
+    speech, now = long_passage
+    speech.finished = True
+    tts.unload_if_idle()
     now[0] += 299
     assert not tts.unload_if_idle()
     now[0] += 1
     assert tts.unload_if_idle()
     assert not tts.loaded()
+
+
+def test_the_idle_timer_rearms_while_still_talking(monkeypatch, long_passage):
+    rearmed = []
+    monkeypatch.setattr(tts, "_schedule_unload", lambda: rearmed.append(1))
+    tts._unload_or_wait()
+    assert rearmed == [1]
+
+
+def test_the_idle_timer_does_not_rearm_once_unloaded(monkeypatch, long_passage):
+    speech, now = long_passage
+    speech.finished = True
+    tts.unload_if_idle()
+    now[0] += 300
+    rearmed = []
+    monkeypatch.setattr(tts, "_schedule_unload", lambda: rearmed.append(1))
+    tts._unload_or_wait()
+    assert rearmed == [] and not tts.loaded()
 
 
 def test_idle_unload_off(monkeypatch):
@@ -134,7 +173,7 @@ def test_an_old_pw_play_is_skipped(monkeypatch):
     playback.PLAYERS = ("pw-play", "paplay", "aplay")
     monkeypatch.setitem(sys.modules, "vino_speak.playback", playback)
     monkeypatch.setattr(tts.shutil, "which", lambda name: f"/usr/bin/{name}")
-    pick = _pick_player
+    pick = _uncached_unstubbed_player
     helps = {"new": "  --raw  raw mode\n", "old": "  --format  Sample format\n"}
     for version, expected in (("new", "/usr/bin/pw-play"), ("old", "/usr/bin/paplay")):
         monkeypatch.setattr(
@@ -149,9 +188,6 @@ def test_unavailable_without_vinospeak(monkeypatch):
     monkeypatch.setattr(tts.importlib.util, "find_spec", lambda _name: None)
     ok, reason = tts.available()
     assert not ok and "requirements-ai.txt" in reason
-
-
-# ---- the plugin ---------------------------------------------------------------
 
 
 @pytest.fixture
@@ -182,8 +218,12 @@ def test_plugin_reads_and_says_it_is_loading(plugin):
     speak, notes = plugin
     speak._read("Hello there.")
     assert tts._speech.text == "Hello there."
-    # First use: the compile can take a while, so say something's happening
     assert notes == [("Read aloud", "Loading the voice…")]
+
+
+def test_plugin_says_nothing_once_the_voice_is_loaded(plugin):
+    speak, notes = plugin
+    speak._read("Hello there.")
     tts._speech.finished = True
     notes.clear()
     speak._read("Hello again.")
@@ -193,10 +233,9 @@ def test_plugin_reads_and_says_it_is_loading(plugin):
 def test_a_second_click_stops_it(plugin, monkeypatch):
     speak, _ = plugin
     playing = tts.speak("Hello there.")
-    # wait() returns at once in the fake, so the read stays "playing"
     speak._read("Something else.")
     assert playing.stopped
-    assert tts._speech is None  # stopped, not replaced
+    assert tts._speech is None
 
 
 def test_plugin_explains_a_missing_install(plugin, monkeypatch):
@@ -214,9 +253,8 @@ def test_plugin_reports_a_failed_load(plugin):
     assert notes[-1][1].startswith("Couldn't read it aloud")
 
 
-def test_one_load_at_a_time(plugin):
+def test_a_click_while_the_voice_loads_is_dropped(plugin):
     speak, _ = plugin
-    # A click while another is still loading the voice is dropped
     speak._busy.acquire()
     try:
         speak._read("Hello.")

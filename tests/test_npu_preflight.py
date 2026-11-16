@@ -44,10 +44,9 @@ def make_tree(
         _write(slot / "class", "0x120000\n")
         (root / "sys/bus/pci/drivers/intel_vpu").mkdir(parents=True)
         (slot / "driver").symlink_to(root / "sys/bus/pci/drivers/intel_vpu")
-    # An unrelated Intel device that must not count as an NPU.
-    other = root / "sys/bus/pci/devices/0000:00:02.0"
-    _write(other / "vendor", "0x8086\n")
-    _write(other / "class", "0x030000\n")
+    intel_gpu = root / "sys/bus/pci/devices/0000:00:02.0"
+    _write(intel_gpu / "vendor", "0x8086\n")
+    _write(intel_gpu / "class", "0x030000\n")
     if accel:
         _write(root / "dev/accel/accel0", "")
     _write(root / "proc/modules", "intel_vpu 1 0 - Live 0x0\n" if module else "i915 1 0\n")
@@ -89,6 +88,11 @@ def test_no_pci_device(tmp_path):
     assert npu_preflight.npu_missing_help(root, NO_ENV) == []
 
 
+def test_an_intel_gpu_is_not_an_npu(tmp_path):
+    npus = npu_preflight.intel_npus(make_tree(tmp_path))
+    assert len(npus) == 1 and "0000:00:0b.0" in npus[0]
+
+
 def test_unreadable_sysfs_is_no_npu(tmp_path):
     assert npu_preflight.intel_npus(tmp_path / "nothing") == []
 
@@ -121,10 +125,12 @@ def test_accel_not_read_write(tmp_path):
 
 
 def test_no_level_zero(tmp_path):
-    notes = notes_for(make_tree(tmp_path, driver=None))
-    l0 = notes["level-zero NPU backend"]
+    l0 = notes_for(make_tree(tmp_path, driver=None))["level-zero NPU backend"]
     assert l0.ok is False and l0.fix == "sudo dnf install -y intel-npu-driver"
-    assert "NPU compiler" not in notes  # nothing to read the routes from
+
+
+def test_no_level_zero_means_no_driver_to_read_compiler_routes_from(tmp_path):
+    assert "NPU compiler" not in notes_for(make_tree(tmp_path, driver=None))
 
 
 def test_no_level_zero_fix_follows_the_distro(tmp_path):
@@ -132,13 +138,15 @@ def test_no_level_zero_fix_follows_the_distro(tmp_path):
     assert npu_preflight.NPU_RELEASES_URL in notes["level-zero NPU backend"].fix
 
 
-def test_no_level_zero_fix_on_opensuse_is_the_package(tmp_path, monkeypatch):
-    fix = notes_for(make_tree(tmp_path / "a", driver=None, distro="opensuse-tumbleweed"))[
+def test_no_level_zero_fix_on_opensuse_is_the_package(tmp_path):
+    fix = notes_for(make_tree(tmp_path, driver=None, distro="opensuse-tumbleweed"))[
         "level-zero NPU backend"
     ].fix
     assert fix == "sudo zypper install libze_intel_npu1 level-zero"
-    # Aeon, Kalpa, MicroOS: read-only /usr with transactional-update.
-    root = make_tree(tmp_path / "b", driver=None, distro="opensuse-aeon")
+
+
+def test_no_level_zero_fix_on_transactional_opensuse(tmp_path, monkeypatch):
+    root = make_tree(tmp_path, driver=None, distro="opensuse-aeon")
     _write(root / "usr/sbin/transactional-update", "")
     monkeypatch.setattr(core_distro, "_usr_read_only", lambda _root: True)
     fix = notes_for(root)["level-zero NPU backend"].fix
@@ -153,8 +161,6 @@ def test_compiler_missing(tmp_path):
 
 
 def test_fedora_1_32_rpm_without_its_compiler(tmp_path):
-    # Fedora's intel-npu-driver 1.32 ships without libnpu_driver_compiler.so:
-    # the NPU enumerates and every compile fails.
     root = make_tree(tmp_path, driver=DRIVER_1_32, compiler=False)
     comp = notes_for(root)["NPU compiler"]
     assert comp.ok is False and npu_preflight.LEGACY_COMPILER_LIB in comp.detail
@@ -179,13 +185,15 @@ def test_level_zero_symlink_points_at_the_older_build(tmp_path):
     assert note.ok is False and note.fix.startswith("sudo ln -sf libze_intel_npu.so.1.35.0 ")
 
 
-def test_fixes_on_fedora_atomic(tmp_path):
-    # Bazzite, Silverblue, Kinoite: dnf can't install and /usr/lib64 is read-only.
-    root = make_tree(tmp_path / "a", driver=None, distro="bazzite")
+def test_driver_fix_on_fedora_atomic_is_rpm_ostree(tmp_path):
+    root = make_tree(tmp_path, driver=None, distro="bazzite")
     _write(root / "run/ostree-booted", "")
     fix = notes_for(root)["level-zero NPU backend"].fix
     assert fix == "rpm-ostree install intel-npu-driver, then reboot"
-    root = make_tree(tmp_path / "b", compiler=False, distro="bazzite")
+
+
+def test_compiler_fix_on_fedora_atomic_avoids_the_read_only_usr(tmp_path):
+    root = make_tree(tmp_path, compiler=False, distro="bazzite")
     _write(root / "run/ostree-booted", "")
     note = notes_for(root)["NPU compiler"]
     assert note.fix == npu_preflight.COMPILER_FIX_OSTREE
@@ -206,10 +214,10 @@ def test_distro_family(tmp_path):
     _write(tmp_path / "etc/os-release", "ID=kubuntu\nID_LIKE=ubuntu debian\n")
     assert npu_preflight.distro_family(tmp_path) == "debian"
     assert npu_preflight.distro_family(tmp_path / "none") == ""
+
+
+def test_install_command_for_an_unknown_distro():
     assert npu_preflight.install_command("wtype", "") == "install wtype with your package manager"
-
-
-# ---- doctor rows -------------------------------------------------------------
 
 
 def _npu_rows(monkeypatch, root, found):
@@ -222,7 +230,7 @@ def test_doctor_npu_not_enumerated_points_at_the_cause(monkeypatch, tmp_path):
     rows = _npu_rows(monkeypatch, root, ("CPU",))
     assert rows["npu"].status == doctor.WARN
     assert rows["npu"].fix == npu_preflight.COMPILER_FIX
-    assert rows["NPU compiler"].status == doctor.WARN  # falls back, so never FAIL
+    assert rows["NPU compiler"].status == doctor.WARN
 
 
 def test_doctor_npu_enumerated_still_checks_the_compiler(monkeypatch, tmp_path):
@@ -286,9 +294,13 @@ def test_doctor_json_has_group_and_fix(doctor_home):
     groups = {c["group"] for c in checks}
     assert {"system", "npu", "input"} <= groups
     assert any(c["name"] == "npu" for c in checks)
-    # Read-only: nothing under HOME, so no ~/intel and no settings.json.
+
+
+def test_doctor_writes_nothing_under_home(doctor_home):
+    home, run = doctor_home
+    run("--json")
     # Intel's NPU driver makes its own cache on load, at $HOME/.cache
-    # whatever XDG_CACHE_HOME says, so that one is allowed.
+    # whatever XDG_CACHE_HOME says.
     npu_cache = home / ".cache" / "ze_intel_npu_cache"
     written = [
         p
@@ -313,15 +325,17 @@ def test_doctor_text_prints_fixes(doctor_home, monkeypatch, capsys):
     assert out.count("fix:") == 1
 
 
-def test_every_warn_or_fail_row_in_this_module_has_a_fix(monkeypatch, tmp_path):
-    # Each failing branch of the preflight, through the doctor.
-    for kw in (
-        {"accel": False, "module": False},
-        {"driver": None},
-        {"compiler": False},
-        {"driver": DRIVER_1_32, "compiler": False},
-    ):
-        root = make_tree(tmp_path / str(len(list(tmp_path.iterdir()))), **kw)
-        for row in _npu_rows(monkeypatch, root, ("CPU",)).values():
-            if row.status in (doctor.WARN, doctor.FAIL):
-                assert row.fix, (kw, row)
+_FAILING_PREFLIGHT_TREES = (
+    {"accel": False, "module": False},
+    {"driver": None},
+    {"compiler": False},
+    {"driver": DRIVER_1_32, "compiler": False},
+)
+
+
+@pytest.mark.parametrize("tree", _FAILING_PREFLIGHT_TREES)
+def test_every_warn_or_fail_row_in_this_module_has_a_fix(monkeypatch, tmp_path, tree):
+    root = make_tree(tmp_path, **tree)
+    for row in _npu_rows(monkeypatch, root, ("CPU",)).values():
+        if row.status in (doctor.WARN, doctor.FAIL):
+            assert row.fix, row
