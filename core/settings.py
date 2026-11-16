@@ -14,12 +14,12 @@ from __future__ import annotations
 import copy
 import json
 import math
-import os
 import shutil
 from pathlib import Path
 from typing import Any
 
-from core.xdg_paths import CONFIG_DIR, make_private, open_private, private_dir
+from core.json_file import write_json
+from core.xdg_paths import CONFIG_DIR, make_private, private_dir
 
 CONFIG_PATH = CONFIG_DIR / "settings.json"
 
@@ -226,18 +226,7 @@ class Settings:
         if not _current(merged.get(VERSION_KEY)):
             merged[VERSION_KEY] = SETTINGS_VERSION
         self._migrated = False
-        # Atomic write: write to tmp, fsync, then rename. Avoids losing
-        # all settings if the process dies (OOM, power) mid-write.
-        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open_private(tmp) as f:
-            json.dump(merged, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp, self.path)
+        write_json(self.path, merged, private=True)
 
     def reset_to_defaults(self) -> None:
         """Put every preference back to its default and save. Keys in

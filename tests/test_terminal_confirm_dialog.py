@@ -171,3 +171,43 @@ def test_ctrl_enter_runs_several_lines(dialog, spawned):
     d = dialog("echo a\necho b")
     assert d.press(d.gtk.Gdk.KEY_Return, d.gtk.Gdk.ModifierType.CONTROL_MASK)
     assert spawned == [["xterm", "-e", actions._wrap_for_terminal("echo a\necho b", False)]]
+
+
+def test_plain_enter_does_not_run_while_editing(dialog, spawned):
+    d = dialog("echo hi")
+    d.click("Edit")
+    assert not d.press(d.gtk.Gdk.KEY_Return)
+    assert spawned == []
+
+
+def test_ctrl_enter_runs_while_editing(dialog, spawned):
+    d = dialog("echo hi")
+    d.click("Edit")
+    assert d.press(d.gtk.Gdk.KEY_KP_Enter, d.gtk.Gdk.ModifierType.CONTROL_MASK)
+    assert len(spawned) == 1
+
+
+def test_ctrl_enter_in_the_command_field_runs_before_it_becomes_a_newline(dialog, spawned):
+    d = dialog("echo hi")
+    d.click("Edit")
+    Gtk, Gdk = d.gtk.Gtk, d.gtk.Gdk
+    capture = [
+        c
+        for c in d.text.observe_controllers()
+        if isinstance(c, Gtk.EventControllerKey)
+        and c.get_propagation_phase() == Gtk.PropagationPhase.CAPTURE
+    ]
+    assert len(capture) == 1
+    assert not capture[0].emit("key-pressed", Gdk.KEY_Return, 0, Gdk.ModifierType(0))
+    assert capture[0].emit("key-pressed", Gdk.KEY_Return, 0, Gdk.ModifierType.CONTROL_MASK)
+    assert len(spawned) == 1
+
+
+def test_a_one_line_command_opens_with_run_focused(dialog):
+    d = dialog("echo hi")
+    assert d.win.get_focus() is d.buttons["Run"]
+
+
+def test_several_lines_open_with_cancel_focused(dialog):
+    d = dialog("echo a\necho b")
+    assert d.win.get_focus() is d.buttons["Cancel"]

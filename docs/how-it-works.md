@@ -143,6 +143,68 @@ Only keys you set are written to the file, so a default changed in a later relea
 - `tray_icon_style` is a manual choice because plasmashell won't recolour a custom symbolic icon reliably: `light` is for dark panels, `dark` for light ones.
 - `editable_atspi_listener_enabled` tells "cursor in the chat input" from "cursor in the chat history" in Electron apps. It left the Settings window on 2026-05-29: modifier + double-click covers the main case, and AT-SPI was correlated with a Cinnamon panel segfault on 2026-05-25 (xapp-sn-watcher threw `ATK_IS_STATE_SET` assertions and cinnamon dereferenced a freed GObject). It stays as a hidden key.
 
+## The KDE Wayland backend
+
+`platform_backend/wayland_kde.py`, first proven on Fedora 44 KDE Plasma (KWin 6.6.5).
+
+- **Selection.** `wl-paste --primary --watch echo` writes a newline on every change of the primary selection. One drag sends a burst of them as the selection grows, so the watcher waits until they have been quiet for the debounce (200 ms at least) and then reads the selection once. Reading on every ping made the popup chase the mouse for a second or two. The first settled value is whatever was selected before the watcher started and shows nothing. `wl-paste` exits when the compositor restarts, so it is restarted with a backoff of up to 30 s, and it is told to die with the daemon: before that, every restart left one behind, each pulling every new selection out of the source app.
+- **Where the popup goes.** KWin has no API for the selection's rectangle, so the anchor is the pointer. It is read at each ping of the burst and not again after the quiet: the last ping is the drag's release at the end of the text, and by the time the burst has settled the mouse is already moving toward the popup.
+- **Pointer and active window.** `workspace.cursorPos` and the active window come from KWin scripts, asked through one long-lived `_kwin_query` process. A process per query cost about 61 ms, 55 of it Python starting. The selection watcher, the double-click thread and the hotkey often ask for the pointer at the same moment, so callers that arrive during a query share its answer and a good answer is reused for 100 ms. A query that gets no answer returns (0, 0), which puts the popup in the top-left corner, and the helper is replaced, since a late answer would be read as the reply to the next question. The active-window lookup starts when a selection starts, so it overlaps the settle wait.
+- **Modifier + double-click.** XRecord only sees XWayland windows on KWin, so buttons and modifier keys are read from `/dev/input` through the shared evdev hub, which covers every toolkit, keyd's virtual keyboard and hotplugged devices. It follows the X11 watcher: 300 ms, 8 px, and the popup 20 ms after the click so the app sees the click first. evdev buttons carry no coordinates, so the pointer is asked from KWin, and only while the modifier is held: a plain click costs no round-trip. The 300 ms are measured on the events' kernel timestamps, so the pointer query (about 100 ms) doesn't count against them. Modifiers go through libxkbcommon with the user's layout, so a swapped Ctrl and Alt is respected; without the library the raw keycodes are used.
+- **The popup** is a layer-shell surface on the overlay layer with keyboard mode `NONE`. With `ON_DEMAND` it takes focus when mapped, loses it straight away, and the popup's focus-loss handler hides it before it is seen. Esc therefore doesn't dismiss it on Wayland. Layer-shell margins are relative to the surface's own output, so the surface is pinned to the output under the point and that output's origin subtracted; otherwise a popup on a monitor at x=1920 lands 1920 px too far right.
+- **Opening a URL.** Focus-stealing prevention leaves the browser behind the current window when it is launched from an unfocused popup, so half a second later a KWin script raises the default browser's window.
+- **The hotkey** goes through KGlobalAccel (`kde_hotkey.py`). If registering fails the app runs on without it.
+- **The OCR hotkey** starts one capture at a time. KWin passes key autorepeat through to KGlobalAccel, and the first capture spends seconds importing the OCR stack, so a held chord used to stack three overlays. The capture runs on a worker thread so the main loop stays free while the region is dragged.
+
+`tests/test_wayland_watcher.py` and `tests/test_placement.py` pin the burst, the anchor, the pointer cache, the double-click window and the margins. None of it has a compositor under it in the tests.
+
+## Telling a command from prose
+
+`core/classifier.py` decides whether a selection gets Run in terminal. Every non-blank line votes: command, prose, or neither (comments, `fi` and `done`, backslash continuations, heredoc bodies, bare assignments). The selection is a command when at least one line is and commands aren't outnumbered by prose, so a comment above a command doesn't hide it and one line starting "at the end" doesn't turn a paragraph into a script. A shebang or a `$ ` prompt line settles it.
+
+- **Ambiguous first words.** `make`, `file`, `python`, `go` and the like are also everyday words. They count only with evidence in the same segment: a flag, a path, `=`, a glob, a redirect, a known subcommand or a known command after them. Subcommands are kept to verbs prose rarely puts there, so there is no `go run` ("go run errands").
+- **An unknown tool** counts only as `tool --flag`. An unknown word before a path is as often prose ("in /etc you'll find").
+- **A single pipe** counts only when its left side is a command. As a whole-text hint it flagged every title with a separator ("Channel Name | Category") and hid the AI buttons. Flags, paths and redirects are per-segment evidence for the same reason: searched for anywhere, they flagged "Settings > Privacy" and "Set `foo` to true".
+- **`&&`, `||`, `$(`, `${` and a heredoc** are enough anywhere in a selection under 4,000 characters (500 at first, raised so pasted scripts classify). Prose almost never has them, and a Run button on technical writing that quotes shell is fine. The length is checked first so no regex runs over a huge selection.
+- **Hyphenated tools** (`xdg-settings`, `systemd-run`) that are normally run with a bare argument are listed by name. A hyphenated first word alone needs a flag or a path.
+- **The regexes are linear.** The old email pattern, `[^@\s]+\.[^@\s]+`, could split `b.b.b...` in more than one way and took 0.6 s on 8k characters and 7 s on 32k (minified CSS with one `@`), on the GTK thread. The old hyphenated-name hint, `[a-z]+(?:-[a-z][\w-]*)+`, was exponential on `x-a-a-a-...!`.
+
+`tests/test_classifier.py` holds the commands and the prose that must stay on their side, and the timing limits.
+
+## Recipe commands
+
+A recipe's `run_command` template is never rendered into shell source with the user's text in it (`plugin_system/recipe_loader.py`). The values go in as arguments, a prelude copies them into variables so a function or `set --` in the template can't shadow them, and each placeholder becomes a reference to one:
+
+```
+notify-send {text}  ->  bash -c 'vinopop_1=$1; notify-send "${vinopop_1}"' vinopop "<selection>"
+```
+
+bash expands the reference once and never parses the result as code, so no quoting in the template, missing or wrong, lets the selection, the clipboard or an `{ask:}` answer run as a command. `{text_shell}` maps to the same reference, for recipes written when quoting was the author's job; in a notification or on the clipboard it is still the `shlex`-quoted text.
+
+- **Where a reference is refused.** Bash evaluates arithmetic operands as expressions, and an expression like `a[$(cmd)]` runs `cmd`. That happens in `$(( ))`, `(( ))`, `[[ -eq ]]`, `let`, `declare -i` and array subscripts, quoted or not, so a placeholder there is an error and the button explains itself when clicked. A quoted heredoc expands nothing, so a placeholder there is refused too.
+- **Snippet placeholders** (`{date:+7d}`, `{clipboard}`, `{ask:Label}`) are expanded one token at a time. The selected text never goes through the snippet engine: a selection holding `{shell:...}` must not run, and one that merely contains `{date}` stays as it is.
+- **A chain** runs its steps in order. A transform renders its template against the current value and passes the result on as `{text}`. The first other step (copy, paste, notify, open_url, run_command) uses the value and ends the chain; a chain of only transforms copies its result.
+- **Copying** goes through the backend (`wl-copy` on KDE Wayland, `xclip` elsewhere). Plain `xclip` only reaches the X11 clipboard and misses native Wayland apps.
+- **A misspelt content type** is an error. It used to be dropped, and a list of only unrecognised names then meant "every content type".
+- **Default recipes** are copied into an empty recipes folder once. A marker file keeps a default the user deleted from coming back.
+
+`tests/test_recipes.py` runs the hostile templates and selections through a real bash; `tests/test_recipe_rules.py` pins the chain and the seeding.
+
+## Editable detection
+
+Cut, Paste and the other editing buttons are hidden when the selection is in something read-only (`triggers/editable_detect.py`). The answers are tried in this order:
+
+1. **The last focus event**, for 30 s. With `editable_atspi_listener_enabled` on, an AT-SPI listener records whether each widget that gains focus is editable. It is the only per-widget signal Chromium and Electron apps give: their accessibility tree shows the top-level frame without a focused descendant, but the event still fires when the user clicks an input and not the page. After 30 s the user may have switched apps without an event, so the answer is no longer trusted.
+2. **A walk of the accessibility tree**, with the same setting, bounded to 150 ms and ten levels so it can't hold up the popup. It looks only inside the window marked active, then for the focused widget in it. The first version took the first focused widget in any app, and on Cinnamon the shell's own desktop window is permanently focused, so every app read as "cinnamon, not editable". An active window with no focused widget (Electron again) gives no answer: the frame itself isn't editable even when the input inside it is.
+3. **The window class**, against a list of viewers (PDF and image viewers, media players, file managers, ebook readers) plus the user's own. Only the class is matched, never the title: "eog" would match a window titled "Geography notes". The class comes from the backend, `xprop` on X11 and KWin on KDE Wayland, so native Wayland windows are covered.
+4. **Editable**, when nothing answered. A button that does nothing is better than a missing one the user wanted.
+
+The same walk gives the popup the selected text's rectangle to anchor to. Kate and KWrite report text extents with zero height, so a zero height becomes 24 px; a zero width, or coordinates no screen has, means no anchor and the pointer is used.
+
+AT-SPI is not loaded at all unless the user's own bus socket exists and no `at-spi-bus-launcher` is running as another user. One left behind by a `sudo` session can take the query, and the process then dies in glib (`dbind-ERROR`, a SIGTRAP Python can't catch). The setting is off by default for the reason given under [the defaults](#why-the-defaults-are-what-they-are).
+
+`tests/test_editable_detect.py` runs the order and the walk against a fake desktop. Nothing here has run against a real accessibility bus in the tests.
+
 ## Keystrokes on X11
 
 Paste, Cut, typing and window activation go through python-xlib and the X server's XTEST extension, in place of the `xdotool` and `xprop` processes vinoPop used to spawn. Like `xdotool`, the events reach X11 clients only (XWayland ones on a Wayland desktop).
@@ -152,6 +214,18 @@ Paste, Cut, typing and window activation go through python-xlib and the X server
 - **Each missing keysym gets its own spare keycode**, unlike `xdotool`. Rebinding one keycode per character raced the client, which under load read a character against the next one's binding: 3 of 6 runs came out mangled on Plasma XWayland with all cores busy (2026-10-20).
 
 `tests/test_x11_keys.py` pins all three.
+
+## Hotkeys on X11
+
+Each hotkey has its own thread and X connection (`triggers/hotkey.py`).
+
+- **The key is grabbed four times**, once per combination of Caps Lock and Num Lock, because X treats those as modifiers and a grab matches the modifier state exactly. A refused variant is logged; only when all four are refused is the user told the combination is taken.
+- **The thread sleeps in `select()` for up to a second**, which is how long stopping it can take. It was 0.2 s, which woke every hotkey thread five times a second for nothing.
+- **A `MappingNotify` re-resolves the key.** The grab is on a keycode, and the keysym can move to another one when the layout changes; the grab then silently stops matching until it is made again on the new keycode. IBus and kbdd, which swap layouts per application, send these in floods, and that was the cause of "the first press of the hotkey is dropped" on Norwegian setups.
+- **A held key fires once.** Autorepeat arrives as a release and a press with the same server time. With the toggle (#44) a repeat would close the popup the first press opened.
+- **`hotkey_use_polling`** skips the grab: the keymap is sampled every 50 ms and the hotkey fires on the key going down with exactly its modifiers held (`query_pointer().mask` is the only way X gives the current modifier state). Forty failed samples in a row, about 2 s, mean the connection is gone and the thread stops.
+
+`tests/test_hotkey_listen.py` runs the thread's loop against a fake display and pins the grab, the conflict notice, the remap and the repeat.
 
 ## Popup placement on X11
 
@@ -206,6 +280,18 @@ The picker takes focus, so pasting has to give it back to the window it was open
 - It is an `Adw.Window` so its prompts open as sheets inside it. It stays resizable even when undecorated, because a non-resizable `AdwWindow` floats its alert dialogs as separate windows.
 - On X11 it has no decoration and opens at the pointer; the title row is the drag handle. On KDE Wayland a client can't place its own toplevel, so the picker keeps its decoration and the compositor places it.
 - It closes when it loses focus, but only if focus is still elsewhere 120 ms later: IBus and Cinnamon take focus for a frame and hand it back. A prompt or a drag in progress suspends this.
+
+## The Run in terminal dialog
+
+`core/actions.py` shows the command before it runs: Cancel, Edit and Run over a read-only preview. GTK 4 has no blocking `dialog.run()`, so it is an `Adw.Window` and the launch happens when it is answered. `Adw.Window` draws no title bar, so a header bar keeps it movable and closable.
+
+- The command sits in a monospace text view, not a label: a label reads `&`, `<` and `>` as Pango markup.
+- Read-only it has no frame and looks like a label (`.lp-cmd-preview`). Edit gives it the input-field look (`.lp-cmd-edit`), selects everything and disables the button.
+- A one-line command opens with Run focused, so Enter runs it as shown. More than one line opens with Cancel focused and plain Enter does nothing: the user has to read every line and click Run or press Ctrl+Enter. While editing, plain Enter is a newline.
+- Ctrl+Enter is caught on the text view in the capture phase. Keys go to the focused widget first, and the text view's own handler would take Enter as a newline before the window saw it.
+- Closing the window from the title bar is Cancel, and only the first answer counts.
+
+`tests/test_terminal_confirm_dialog.py` builds the dialog and pins each of these.
 
 ## Threads and X11
 

@@ -5,10 +5,12 @@ import pytest
 from core.classifier import (
     _AMBIGUOUS_COMMANDS,
     _COMMAND_HINTS,
+    _COMMAND_HINTS_MAX_LEN,
     _COMMAND_TOKENS,
     _EMAIL_RE,
     ContentType,
     classify,
+    is_runnable_path,
     strip_shell_prompts,
 )
 
@@ -194,3 +196,54 @@ def test_strip_shell_prompts(text, expected):
 def test_ambiguous_commands_are_known_commands():
     # a typo here would silently make a word neither ambiguous nor a command
     assert _AMBIGUOUS_COMMANDS <= _COMMAND_TOKENS
+
+
+@pytest.mark.parametrize("text", ["go run errands", "go get lunch"])
+def test_go_run_and_go_get_are_not_subcommands(text):
+    assert classify(text) is ContentType.PLAIN_TEXT
+    assert classify("go build ./...") is ContentType.COMMAND
+
+
+def test_a_shell_operator_in_prose_is_enough_up_to_the_length_cap():
+    def prose(length):
+        tail = " && fox"
+        return "x" * (length - len(tail)) + tail
+
+    assert classify(prose(_COMMAND_HINTS_MAX_LEN - 1)) is ContentType.COMMAND
+    assert classify(prose(_COMMAND_HINTS_MAX_LEN)) is ContentType.PLAIN_TEXT
+
+
+def test_markdown_emphasis_is_not_a_glob():
+    assert classify("make *sure* you save") is ContentType.PLAIN_TEXT
+    assert classify("cat *.txt") is ContentType.COMMAND
+
+
+def test_an_unknown_tool_counts_with_a_flag_but_not_with_a_path():
+    assert classify("obscuretool --foo") is ContentType.COMMAND
+    assert classify("obscuretool /etc/foo") is ContentType.PLAIN_TEXT
+
+
+def test_a_naked_url_needs_a_likely_tld():
+    assert classify("github.com/torvalds/linux") is ContentType.URL
+    assert classify("foo.bar") is ContentType.PLAIN_TEXT
+
+
+def test_invisible_characters_from_a_rich_text_copy_are_ignored():
+    assert classify("\u200bhttps://example.com\ufeff") is ContentType.URL
+
+
+@pytest.mark.parametrize(
+    ("path", "runnable"),
+    [
+        ("./build.sh", True),
+        ("/opt/x.py", True),
+        ("./configure", True),
+        ("~/bin/foo", True),
+        ("~/notes/foo", False),
+        ("/usr/bin/env", False),
+        ("build.sh", False),
+        ("./a\n./b", False),
+    ],
+)
+def test_runnable_paths(path, runnable):
+    assert is_runnable_path(path) is runnable

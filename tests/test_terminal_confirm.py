@@ -55,3 +55,13 @@ def test_run_in_terminal_without_confirm_runs_the_collapsed_command(monkeypatch)
     monkeypatch.setattr(actions, "_spawn_terminal", lambda argv, _log: spawned.append(argv))
     actions.run_in_terminal("echo a\n\n\n\necho b")
     assert spawned == [["xterm", "-e", actions._wrap_for_terminal("echo a\n\necho b")]]
+
+
+def test_plain_enter_confirms_only_a_read_only_single_line():
+    assert actions._enter_confirms(ctrl=False, editing=False, multiline=False)
+    assert not actions._enter_confirms(ctrl=False, editing=True, multiline=False)
+    assert not actions._enter_confirms(ctrl=False, editing=False, multiline=True)
+
+
+def test_ctrl_enter_always_confirms():
+    assert actions._enter_confirms(ctrl=True, editing=True, multiline=True)

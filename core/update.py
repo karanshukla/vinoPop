@@ -16,6 +16,8 @@ import subprocess  # nosec B404
 import urllib.request
 from pathlib import Path
 
+from core.version_numbers import leading_numbers
+
 REPO = "karanshukla/vinoPop"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_URL = f"https://github.com/{REPO}/releases"
@@ -26,11 +28,9 @@ _TAG = re.compile(r"^v[0-9][0-9A-Za-z.\-]{0,31}$")
 def version_parts(version: str) -> tuple[int, ...] | None:
     """``v1.3.0`` and ``1.3.0`` are (1, 3, 0). Anything else (``0.0.0-dirty``,
     a ``git describe`` past a tag) is None and is never offered an update."""
-    text = version[1:] if version.startswith("v") else version
-    parts = text.split(".")
-    if not all(p.isdigit() for p in parts):
-        return None
-    return tuple(int(p) for p in parts)
+    text = version.removeprefix("v")
+    numbers = leading_numbers(text)
+    return numbers if len(numbers) == text.count(".") + 1 else None
 
 
 def is_newer(current: str, latest: str) -> bool:

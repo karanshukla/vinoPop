@@ -6,8 +6,7 @@ import re
 import unicodedata
 from enum import Enum
 
-# Invisible / formatting characters that often sneak in from rich-text copies
-# (object replacement, zero-width spaces, BOM, soft hyphen, etc.)
+# What a rich-text copy leaves behind: object replacement, zero-width spaces, BOM, soft hyphen
 _INVISIBLE_CHARS = "\ufffc\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e"
 
 
@@ -20,12 +19,11 @@ class ContentType(Enum):
 
 
 _URL_RE = re.compile(r"^(https?|ftp|file)://\S+$", re.IGNORECASE)
-# Protocol-less URL: www.foo.com[/...] or foo.com[/...] with a TLD-looking tail
 _NAKED_URL_RE = re.compile(
     r"^(www\.)?[\w-]+(\.[\w-]+)+(/\S*)?$",
     re.IGNORECASE,
 )
-# Common TLDs to reduce false positives like "foo.bar" (which could be code)
+# A naked URL needs one of these, or "foo.bar" (code, as often) would be a link
 _LIKELY_TLDS = {
     "com",
     "no",
@@ -73,14 +71,12 @@ _LIKELY_TLDS = {
     "shop",
     "blog",
 }
-# Dots are excluded from each domain label so the regex can't split
-# 'b.b.b...' in more than one way: the old [^@\s]+\.[^@\s]+ took
-# 0.6 s on 8k chars and 7 s on 32k (minified CSS with one '@' in it).
+# No dots inside a domain label: test_email_regex_is_linear
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
 _EMAIL_MAX_LEN = 320  # RFC 3696 / 5321 upper bound for an address
 _PATH_RE = re.compile(r"^(/|~/|\./)[^\s]*$")
 
-# Tokens that strongly suggest a shell command on the first word
+# First words that read as a shell command
 _COMMAND_TOKENS = {
     # package managers
     "sudo",
@@ -451,8 +447,7 @@ _COMMAND_TOKENS = {
     "rbenv",
     "fnm",
     "volta",
-    # KDE / Plasma / Qt desktop tools (the user runs Plasma 6, so these
-    # show up constantly in restart/config snippets)
+    # KDE / Plasma / Qt desktop tools
     "kquitapp6",
     "kquitapp5",
     "kquitapp",
@@ -516,9 +511,7 @@ _COMMAND_TOKENS = {
     "spectacle",
     "okular",
     "dolphin",
-    # hyphenated system tools that used to ride on the hyphenated-name
-    # hint; that hint now needs a flag or path (see _HYPHEN_NAME_RE), so
-    # the common bare-argument ones are listed here instead
+    # hyphenated tools usually run with a bare argument, which _HYPHEN_NAME_RE alone won't accept
     "gnome-terminal",
     "gnome-extensions",
     "gtk-update-icon-cache",
@@ -538,12 +531,8 @@ _COMMAND_TOKENS = {
     "rpm-ostree",
 }
 
-# Command names that are also everyday words (or names people write
-# about in prose: "python is great", "make sure", "file a bug", "at the
-# end"). As the first word of a line they only count with extra
-# evidence in the same segment: a flag, a path, '=', a glob, a
-# redirect, a known subcommand, or a known command right after them.
-# Everything else in _COMMAND_TOKENS counts on its own.
+# Command names that are also everyday words ("make sure", "file a bug").
+# They count only with evidence in the same segment: _has_evidence.
 _AMBIGUOUS_COMMANDS = frozenset(
     {
         # package managers / build
@@ -585,9 +574,8 @@ def _words(text: str) -> frozenset[str]:
     return frozenset(text.split())
 
 
-# Second words that make an ambiguous command unambiguous ("make
-# install", "cargo build", "apt update"). Kept to verbs prose rarely
-# puts there: no "go run" ("go run errands") or "go get".
+# Second words that settle an ambiguous command ("make install"), kept to
+# verbs prose rarely puts there: test_go_run_and_go_get_are_not_subcommands
 _SUBCOMMANDS: dict[str, frozenset[str]] = {
     "apt": _words(
         "install update upgrade remove purge autoremove search show list full-upgrade policy"
@@ -616,29 +604,19 @@ _HOST_ARG_COMMANDS = frozenset({"curl", "http", "ping", "dig", "host", "mosh"})
 # ... or a number ("kill 1234", "sleep 5")
 _COUNT_ARG_COMMANDS = frozenset({"kill", "sleep"})
 
-# Strong shell-only syntax. Anywhere in the selection, any one of these
-# is enough. Weaker hints (flags, paths, redirects) are per-line
-# evidence in _segment_is_command instead: a whole-text search for them
-# flagged prose like "Settings > Privacy", "Set `foo` to true" and
-# "pass --verbose" as commands.
+# Shell-only syntax: any one of these, anywhere, makes the selection a command.
+# Flags, paths, redirects and single pipes are judged per segment instead.
 _COMMAND_HINTS = re.compile(
     r"&&|\|\||"  # logical and/or - shell-only operators
     r"\$\(|\$\{|"  # command substitution / parameter expansion
     r"<<-?\s*['\"]?[A-Za-z_]\w*"  # heredoc
 )
-# Bare single ' | ' (pipe with whitespace on either side) WAS a hint but
-# produced too many false positives - any human-readable title with a
-# separator pipe (YouTube "Channel Name | Category", song titles,
-# breadcrumbs) would suppress the Send-to-AI buttons. Real pipes are
-# caught per segment in _line_is_command, and a pipe only counts when
-# the left side is a command, so `cat foo | grep bar` still classifies
-# and "the results | more info below" doesn't.
+_COMMAND_HINTS_MAX_LEN = 4000  # no regex over a longer selection
 
-# Shell statement separators, captured so _line_is_command knows which
-# one came before each segment.
+# Captured, so _line_is_command knows which separator came before each segment
 _SHELL_SEP_RE = re.compile(r"(&&|\|\||;|\|)")
 
-# Per-token evidence. Each is matched against one whitespace-split word.
+# Evidence, each matched against one whitespace-split word
 _FLAG_RE = re.compile(r"^--?[A-Za-z0-9][\w-]*(?:=\S*)?$")
 _PATH_ARG_RE = re.compile(
     r"^(?:"
@@ -661,9 +639,7 @@ _ASSIGN_RE = re.compile(r"^[A-Za-z_][\w-]*=")
 _REDIRECT_RE = re.compile(r"^(?:\d?>>?|&>|<)(.*)$")
 _HOST_RE = re.compile(r"^(?:\w+://\S+|[\w-]+(?:\.[\w-]+)+(?::\d+)?)$")
 _COUNT_RE = re.compile(r"^(?:%?\d+[smhd]?)$")
-# Unknown lowercase command-ish word: 'obscuretool --flag' still counts.
-# Linear: no nested quantifiers (the old hyphenated-name hint,
-# [a-z]+(?:-[a-z][\w-]*)+, was exponential on 'x-a-a-a-...!').
+# An unknown tool's name. No nested quantifiers: test_classify_is_fast_on_adversarial_input
 _BARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_.+]*$")
 _HYPHEN_NAME_RE = re.compile(r"^[a-z][a-z0-9]*-[a-z][\w-]*$")
 _EXEC_PATH_RE = re.compile(r"^(?:\.{1,2}/|~/)\S|^/\S*/s?bin/\S")
@@ -729,8 +705,7 @@ def _segment_is_command(segment: str, *, prompted: bool, piped_into_command: boo
     if head in _AMBIGUOUS_COMMANDS or _HYPHEN_NAME_RE.match(head):
         return prompted or piped_into_command or _has_evidence(head, args)
     if _BARE_NAME_RE.match(head):
-        # unknown tool: only 'tool --flag' shape, since an unknown first
-        # word followed by a path is as often prose ("in /etc you'll...")
+        # An unknown word before a path is as often prose ("in /etc you'll find")
         return bool(args) and bool(_FLAG_RE.match(args[0]))
     return False
 
@@ -868,8 +843,8 @@ def strip_shell_prompts(text: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    """Strip whitespace + invisible/formatting characters that pollute regex matches."""
-    # Drop format-category chars (Cf) which includes BOM, ZWJ/ZWNJ, RLM/LRM, etc.
+    """`text` without surrounding whitespace, Unicode format characters (Cf:
+    BOM, ZWJ, direction marks) or _INVISIBLE_CHARS."""
     cleaned = "".join(
         c for c in text if unicodedata.category(c) != "Cf" and c not in _INVISIBLE_CHARS
     )
@@ -887,9 +862,7 @@ def classify(text: str) -> ContentType:
 
     if _URL_RE.match(stripped):
         return ContentType.URL
-    # Naked URL like "www.example.com" or "github.com/torvalds/linux"
     if _NAKED_URL_RE.match(stripped) and "@" not in stripped:
-        # Sanity-check the last token before any slash has a plausible TLD
         host = stripped.split("/", 1)[0]
         tld = host.rsplit(".", 1)[-1].lower()
         if tld in _LIKELY_TLDS:
@@ -899,25 +872,14 @@ def classify(text: str) -> ContentType:
     if "\n" not in stripped and _PATH_RE.match(stripped):
         return ContentType.PATH
 
-    # Multi-line aware: every line votes, so a leading comment / blank /
-    # shell-prompt prefix doesn't hide the command underneath and one
-    # command-looking line doesn't turn a paragraph into a command.
     if _looks_like_command(stripped):
         return ContentType.COMMAND
-    # Cap raised to 4000 chars (was 500) so pasted scripts with shell
-    # operators still classify as COMMAND. Pure prose almost never has
-    # '&&', '$(' or a heredoc; technical writing quoting shell is fine
-    # to surface a Run button for. Length first: no regex on huge text.
-    if len(stripped) < 4000 and _COMMAND_HINTS.search(stripped):
+    if len(stripped) < _COMMAND_HINTS_MAX_LEN and _COMMAND_HINTS.search(stripped):
         return ContentType.COMMAND
 
     return ContentType.PLAIN_TEXT
 
 
-# Extensions that strongly imply "this path is a script you might want
-# to execute". Used by main.py / plugin_loader to also offer the
-# "Run in terminal" button on PATH-classified selections like
-# './build.sh' alongside the default 'Open path'.
 _RUNNABLE_PATH_EXTS = (
     ".sh",
     ".bash",
@@ -939,9 +901,8 @@ _RUNNABLE_PATH_EXTS = (
 
 
 def is_runnable_path(text: str) -> bool:
-    """True when a PATH-typed selection points at something the user
-    probably wants the option to execute (script extensions, or any
-    './foo' / '~/bin/foo' style)."""
+    """Whether a path selection also gets Run in terminal beside Open path:
+    a script's extension, or './foo' and '~/bin/foo' without one."""
     s = _normalize(text)
     if not s or "\n" in s:
         return False
@@ -950,5 +911,4 @@ def is_runnable_path(text: str) -> bool:
     low = s.lower()
     if low.endswith(_RUNNABLE_PATH_EXTS):
         return True
-    # ./foo or ~/bin/foo - likely an executable even without an extension
     return bool(s.startswith(("./", "~/bin/")))

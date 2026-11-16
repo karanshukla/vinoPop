@@ -16,6 +16,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from core.json_file import write_json
 from core.xdg_paths import STATE_DIR
 
 from . import telemetry
@@ -87,9 +88,14 @@ def _write(data: dict[str, dict], path: Path | None) -> None:
     path = path or PATH
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        write_json(
+            path,
+            data,
+            temp_suffix=f".{os.getpid()}.tmp",
+            ascii_only=True,
+            final_newline=False,
+            fsync=False,
+        )
     except OSError as exc:
         log.warning("[vino_ai] couldn't save device failures: %s", exc)
 

@@ -24,7 +24,6 @@ quoting is automatic: `notify-send {text}` is safe for any selection.
 from __future__ import annotations
 
 import json
-import os
 import random as _random
 import re
 import shlex
@@ -36,6 +35,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from core.classifier import ContentType
+from core.json_file import write_json
 from core.xdg_paths import CONFIG_DIR
 from plugin_system.plugin_base import Plugin
 
@@ -61,21 +61,14 @@ VALID_ACTION_TYPES = (
     "run_command",
     "notify",
     "copy_transformed",
-    # Chain runs N sub-actions in sequence, piping the rendered output
-    # of each transform step into the next as the {text} variable.
-    # Terminal step actions (copy, paste, open_url, notify, run_command)
-    # consume the current value and stop the chain.
     "chain",
 )
 
 
 def _mock_case(text: str) -> str:
-    """Random upper/lower per character - the "mocking SpongeBob" meme
-    format. Seeded with the text itself so the same input always gives
-    the same result (so previews and clipboard contents are stable;
-    re-clicking won't produce a different jumble each time)."""
-    # Text styling, not security, so a seeded PRNG is what we want.
-    rng = _random.Random(text)  # nosec B311
+    """rAnDoM cAsE per character, seeded with the text so a preview and the
+    click after it give the same jumble."""
+    rng = _random.Random(text)  # nosec B311 - text styling
     return "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in text)
 
 
@@ -159,22 +152,16 @@ def _text_values(text: str) -> dict[str, str]:
     return {
         "text": text,
         "text_url": urllib.parse.quote(text, safe=""),
-        # Only for non-shell templates (a notification, the clipboard). A
-        # command gets the selection as an argument instead, quoted
-        # automatically: see _command_parts.
+        # For a notification or the clipboard; a command gets an argument (_command_parts)
         "text_shell": shlex.quote(text),
         "text_upper": text.upper(),
         "text_lower": text.lower(),
         "text_strip": text.strip(),
-        "text_mock": _mock_case(text),  # jEg eR sJeFeN - for mocking quotes
-        # Workflow-chain transforms - safe to use anywhere a template
-        # is rendered, since each renders the current value.
+        "text_mock": _mock_case(text),
         "text_json": _try_json_format(text),
         "text_json_min": _try_json_minify(text),
         "text_b64": _b64.b64encode(text.encode("utf-8")).decode("ascii"),
         "text_url_decode": urllib.parse.unquote(text),
-        # text_b64_decode is bytes-correct only if input was valid b64;
-        # falls back to the input if not, mirroring the json helpers.
         "text_b64_decode": _safe_b64_decode(text),
     }
 
@@ -251,9 +238,7 @@ def _render(template: str, text: str) -> str:
                 value = _FORMATTER.convert_field(value, field.conv)
                 out.append(_FORMATTER.format_field(value, field.spec))
             elif field.kind == "snippet":
-                # One token at a time, so the selected text never goes through
-                # the snippet engine: a selection holding {shell:...} must not
-                # run, and one that merely contains {date} stays as it is.
+                # test_selection_is_never_run_through_the_snippet_engine
                 if field.token not in expanded:
                     expanded[field.token] = _apply_snippet_placeholders(field.token)
                 out.append(expanded[field.token])
@@ -284,23 +269,11 @@ def _text_variables() -> list[str]:
 
 # ---- commands ----------------------------------------------------------------
 #
-# A run_command template is never rendered into shell source with the user's
-# text in it. The values go in as arguments, a prelude copies them into
-# variables (so a function or `set --` in the template can't shadow them), and
-# each placeholder becomes a reference to one:
-#
-#   notify-send {text}  ->  bash -c 'vinopop_1=$1; notify-send "${vinopop_1}"'
-#                                   vinopop "<selection>"
-#
-# bash expands the reference once and never parses the result as code, so no quoting
-# in the template, missing or wrong, lets selected text, the clipboard or an
-# {ask:} answer run as a command. {text_shell} maps to the same reference, for
-# recipes written when quoting was the author's job.
+# The user's text is never rendered into shell source: it goes in as an
+# argument and each placeholder becomes a reference to it.
+# docs/how-it-works.md, "Recipe commands".
 
-# Where a value reference can't go. Bash evaluates arithmetic operands as
-# expressions, and an expression like a[$(cmd)] runs cmd: that happens in
-# $(( )), (( )), [[ -eq ]], let, declare -i and array subscripts, quoted or
-# not. A quoted heredoc expands nothing.
+# Where a value reference can't go: bash runs code found in an arithmetic operand
 _COMMAND_CONTEXT_PROBLEMS = {
     "arith": "can't be used inside $(( )), (( )) or $[ ]: arithmetic runs code found in the value",
     "dbl": "can't be used inside [[ ]]: -eq and friends run code found in the value; use [ ]",
@@ -606,9 +579,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
         def handler(text: str) -> None:
             out = _render(template, text)
-            # Backend-aware: wl-copy on Wayland, xclip on X11. Plain xclip
-            # only reaches the X11/XWayland clipboard and silently misses
-            # native-Wayland apps.
             from platform_backend import get_backend
 
             get_backend().set_clipboard(out)
@@ -617,12 +587,8 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
         return handler
 
     if atype == "chain":
-        # Workflow: pipe the selection through a list of transforms,
-        # then run the last step as a terminator (copy / paste / notify /
-        # open_url / run_command). Each transform step renders its
-        # template against the *current* value (initially the selection,
-        # afterwards the previous transform's output) and re-binds the
-        # result as {text} for the next step.
+        # Transforms pass their output on as {text}; the first other step ends
+        # the chain (tests/test_recipe_rules.py)
         steps = action.get("steps") or []
         if not steps:
 
@@ -652,10 +618,8 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                         len(current),
                     )
                     continue
-                # Terminal steps: consume `current`, then stop.
                 if stype == "run_command":
-                    # The value goes in as an argument, never as shell source.
-                    # safety_errors() already refused a step without a template.
+                    # safety_errors() already refused a step without a template
                     try:
                         argv = _command_argv(stemplate, current)
                         subprocess.Popen(argv, start_new_session=True)
@@ -669,9 +633,6 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     get_backend().set_clipboard(current)
                     notify(title or "Copied", current[:200], icon, 2500)
                 elif stype == "paste":
-                    # Put text on clipboard, then send Ctrl+V to whichever
-                    # window currently holds focus. Same pattern the
-                    # editing_actions plugin uses.
                     from core import actions
 
                     actions.replace_selection(current)
@@ -684,10 +645,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
                     actions.open_web_url(url)
                 else:
                     log.warning("[chain] unknown step type %r in %s", stype, recipe.get("name"))
-                # Any terminal step ends the chain.
                 return
-            # If we fell off the loop with only transforms, push the
-            # final value onto the clipboard as a sensible default.
             from platform_backend import get_backend
 
             get_backend().set_clipboard(current)
@@ -695,7 +653,7 @@ def _build_handler(recipe: dict) -> Callable[[str], None]:
 
         return handler
 
-    # Unknown type - visible no-op so the popup button still appears
+    # Unknown type: the button still appears and logs when clicked
     def handler(text: str) -> None:
         print(f"[recipe] unknown action type for {recipe.get('name')!r}: {atype!r}")
 
@@ -746,8 +704,7 @@ def validate(recipe: dict) -> list[str]:
     atype = action.get("type")
     if not isinstance(atype, str) or atype not in VALID_ACTION_TYPES:
         errors.append(f"action.type must be one of {VALID_ACTION_TYPES}")
-    # Chain actions use `steps` instead of `template`; every other
-    # action type still needs a top-level template to render.
+    # A chain has `steps` in place of a top-level template
     if atype == "chain":
         steps = action.get("steps")
         if not isinstance(steps, list) or not steps:
@@ -788,8 +745,7 @@ def validate(recipe: dict) -> list[str]:
             problem = _template_problem(action["template"])
             if problem:
                 errors.append(f"action.template: {problem}")
-    # An unrecognised name used to be dropped, and an all-unrecognised list
-    # then meant "every content type": a typo made the button universal.
+    # test_a_misspelt_content_type_is_an_error_not_every_content_type
     names = recipe.get("content_types") or []
     if not isinstance(names, list):
         errors.append("'content_types' must be a list")
@@ -809,16 +765,11 @@ _SEED_MARKER = RECIPES_DIR.parent / ".default-recipes-seeded"
 
 
 def _seed_default_recipes() -> None:
-    """First-run only: if the user has no recipes yet, copy a small curated
-    set from the repo's plugins_repo/recipes/ so a fresh install shows
-    useful buttons (Wikipedia, YouTube) right away. Touches a marker so
-    this never runs twice - users who later delete a default recipe
-    don't get it re-installed."""
+    """Copy the default recipes into an empty recipes folder, once: a
+    default the user deletes later stays deleted."""
     if _SEED_MARKER.is_file():
         return
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
-    # If the user has already curated this dir, respect it - don't seed
-    # on top of an existing setup.
     has_existing = any(RECIPES_DIR.glob("*.json"))
     if has_existing:
         _SEED_MARKER.touch()
@@ -865,9 +816,6 @@ def load_recipes(register) -> int:
         if errors:
             print(f"[recipe] {path.name} has errors: {', '.join(errors)}")
             continue
-        # Recipes can be turned off without deleting: 'enabled': false in
-        # the JSON skips registration. Missing key defaults to True for
-        # backwards compatibility with older recipes.
         if not recipe.get("enabled", True):
             continue
         try:
@@ -907,7 +855,7 @@ def list_recipes() -> list[tuple[Path, dict]]:
 
 
 def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
-    """Persist a recipe as <name>.json (or to the supplied path). Atomic write."""
+    """Persist a recipe as <name>.json (or to the supplied path)."""
     RECIPES_DIR.mkdir(parents=True, exist_ok=True)
     if target_path is None:
         name = str(recipe.get("name") or "")
@@ -920,16 +868,7 @@ def save_recipe(recipe: dict, target_path: Path | None = None) -> Path:
             unique, n = f"{name}-{n}", n + 1
         recipe = {**recipe, "name": unique}
         target_path = RECIPES_DIR / f"{unique}.json"
-    tmp = target_path.with_suffix(target_path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(recipe, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-        f.flush()
-        try:
-            os.fsync(f.fileno())
-        except OSError:
-            pass
-    os.replace(tmp, target_path)
+    write_json(target_path, recipe)
     return target_path
 
 

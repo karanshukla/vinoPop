@@ -125,9 +125,7 @@ if TYPE_CHECKING:
 LOCK_FILE = CACHE_DIR / "vinopop.lock"
 FIRST_RUN_MARKER = CONFIG_DIR / ".first-run-done"
 
-# Held for the lifetime of the process; the kernel releases the flock when
-# the fd is closed (i.e. when we exit, even ungracefully). Storing it at
-# module scope ensures it's not garbage-collected mid-run.
+# Kept open for the life of the process: the kernel drops the flock with the fd
 _lock_fd: int | None = None
 
 
@@ -316,10 +314,8 @@ class App:
 
     # ---- popup invocation ----------------------------------------------------
     #
-    # Everything that can block - xclip, the KWin pointer and active-window
-    # helpers (up to 3 s each), Xlib, AT-SPI - runs on a worker
-    # thread under _popup_prep. Only the final show goes back to the GTK
-    # thread, so a slow KWin round-trip can't freeze the UI.
+    # Whatever can block (xclip, KWin's helpers at up to 3 s each, Xlib, AT-SPI)
+    # runs on a worker under _popup_prep; only the show is on the GTK thread.
 
     def _off_main(self, fn: Callable[..., None], *args: object, drop_if_busy: bool = False) -> None:
         """Run fn(*args) on a worker thread, one popup lookup at a time.
@@ -406,8 +402,7 @@ class App:
         self._off_main(self._gather_hotkey_popup, via_hotkey, drop_if_busy=True)
 
     def _gather_hotkey_popup(self, via_hotkey: bool = False) -> None:
-        # Timed and logged, so a "had to press it three times" report shows
-        # whether the trigger arrived and what the selection read returned.
+        # Timed and logged: a "had to press it three times" report needs both
         t0 = time.monotonic()
         source = self.settings.get("hotkey_source") or "primary"
         text = _read_selection(source)
@@ -452,11 +447,7 @@ class App:
             return _fire
 
         def _paste_then_enter() -> None:
-            # Borrow the editing_actions submit-key heuristic so this
-            # entry follows the same rule as the regular Paste & Enter
-            # plugin: plain Return for terminals / search bars / chat
-            # web; Ctrl+Return for Slack / Discord / Teams / Element /
-            # Thunderbird where Return inserts a newline.
+            # The Paste & Enter plugin's rule for which key submits in this app
             try:
                 import importlib
 
@@ -469,8 +460,7 @@ class App:
             except Exception:
                 submit_key = "Return"
             get_backend().paste()
-            # Brief settle so Electron / React inputs commit the paste's
-            # text state before the submit key is interpreted.
+            # Electron and React inputs need a moment to commit the paste
             time.sleep(0.08)
             get_backend().send_key(submit_key)
 
@@ -662,9 +652,7 @@ class App:
 
     def _on_ocr_hotkey(self) -> None:
         self._note_use()
-        # One capture at a time: KWin passes key autorepeat through to
-        # KGlobalAccel and the first capture spends seconds importing the
-        # OCR stack, so a held chord used to stack three overlays.
+        # test_ocr_hotkey_drops_triggers_while_a_capture_runs
         if not _ocr_busy.acquire(blocking=False):
             log.info("[ocr] capture already running - ignoring trigger")
             return
@@ -679,8 +667,6 @@ class App:
             finally:
                 _ocr_busy.release()
 
-        # Capture runs on a worker thread - the daemon's main loop must
-        # stay responsive while the user is dragging the region.
         try:
             threading.Thread(target=_capture, daemon=True, name="ocr-capture").start()
         except Exception:
@@ -779,9 +765,7 @@ class App:
             self._bound_clipboard_hotkey = ""
             if new_clip:
                 self._start_clipboard_hotkey()
-        # Rebind the OCR hotkey when it was edited or cleared, and bind it
-        # if it just became usable (the user installed the OCR dependencies
-        # via the Settings Install button), so neither needs a restart.
+        # Also bound when it has just become usable (OCR installed from Settings)
         new_ocr = (self.settings.get("ocr_hotkey") or "").strip()
         if (
             new_ocr != self._bound_ocr_hotkey
@@ -922,8 +906,6 @@ class App:
         FIRST_RUN_MARKER.parent.mkdir(parents=True, exist_ok=True)
         FIRST_RUN_MARKER.touch()
 
-        # Welcome dialog (one-time): explains usage. Falls back to
-        # notify-send if GTK can't construct the dialog for some reason.
         def _open_welcome():
             try:
                 from ui.onboarding import show_onboarding
@@ -1026,9 +1008,6 @@ def main(argv: list[str] | None = None) -> int:
     entry_point = os.path.abspath(sys.argv[0])
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.reset_first_run:
-        # Wipe every first-run marker so the welcome flow AND the
-        # plugin/recipe seeders fire again. Useful for testing the
-        # curated default bundle from a clean state.
         for marker in (
             FIRST_RUN_MARKER,
             CONFIG_DIR / ".default-plugins-seeded",

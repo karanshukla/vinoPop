@@ -420,205 +420,207 @@ def _confirm_heading(cmd: str) -> str:
     return "Run this command?" if n <= 1 else f"Run these {n} lines?"
 
 
-def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
-    """GTK confirmation dialog. Default state is read-only preview --
-    Cancel / Edit / Run. Clicking Edit unlocks the command field for
-    in-place tweaking. Returns False so GLib.idle_add doesn't re-fire.
+_EXPLAIN_ONE_LINE = "Press <b>Run</b> to launch it as-is, <b>Edit</b> to tweak it first."
+_EXPLAIN_SEVERAL_LINES = (
+    "Check every line, then press <b>Run</b> (or Ctrl+Enter). <b>Edit</b> to tweak it first."
+)
+_EXPLAIN_EDITING = "<b>Editing</b> -- Ctrl+Enter to run, Esc to cancel."
 
-    GTK 4 has no blocking dialog.run(), so the dialog is a small modal-less
-    Adw.Window and the launch happens in its response callback."""
+
+def _enter_confirms(ctrl: bool, editing: bool, multiline: bool) -> bool:
+    return ctrl or not (editing or multiline)
+
+
+def _launch_in_terminal(cmd: str, binary: str, prefix: list[str]) -> None:
     import logging
 
-    import gi
-
-    gi.require_version("Gtk", "4.0")
-    gi.require_version("Gdk", "4.0")
-    gi.require_version("Adw", "1")
-    from gi.repository import Adw, Gdk, Gtk
-
     log = logging.getLogger("vinopop")
+    try:
+        _spawn_terminal([*prefix, _wrap_for_terminal(cmd)], log)
+        log.info("[terminal] launched (%s), %d chars", binary, len(cmd))
+        log.debug("[terminal] command: %s", cmd[:120])
+    except OSError:
+        pass  # already logged inside _spawn_terminal
 
-    dlg = Adw.Window(title="Run in terminal")
-    dlg.set_default_size(580, 260)
-    dlg.set_icon_name("vinopop")
 
-    box = Gtk.Box(
-        orientation=Gtk.Orientation.VERTICAL,
-        spacing=10,
-        margin_top=14,
-        margin_bottom=12,
-        margin_start=18,
-        margin_end=18,
-    )
+class _ConfirmRunDialog:
+    """Cancel / Edit / Run over a read-only preview of the command; the
+    launch happens in the answer, since GTK 4 has no blocking dialog.
+    docs/how-it-works.md, "The Run in terminal dialog"."""
 
-    # More than one line means plain Enter must not run it: the user has
-    # to read the whole thing and click Run (or press Ctrl+Enter).
-    multiline = _count_command_lines(cmd) > 1
+    def __init__(self, cmd: str, binary: str, prefix: list[str]):
+        import gi
 
-    head = Gtk.Label(xalign=0)
-    head.set_markup(f"<span size='large' weight='bold'>{_confirm_heading(cmd)}</span>")
-    box.append(head)
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gdk", "4.0")
+        gi.require_version("Adw", "1")
+        from gi.repository import Adw, Gdk, Gtk
 
-    explain = Gtk.Label(xalign=0)
-    explain.add_css_class("dim-label")
-    if multiline:
-        explain.set_markup(
-            "<span size='small'>"
-            "Check every line, then press <b>Run</b> (or Ctrl+Enter). "
-            "<b>Edit</b> to tweak it first."
-            "</span>"
+        self._Adw, self._Gdk, self._Gtk = Adw, Gdk, Gtk
+        self._binary = binary
+        self._prefix = prefix
+        self._multiline = _count_command_lines(cmd) > 1
+        self._answered = False
+
+        self.window = Adw.Window(title="Run in terminal")
+        self.window.set_default_size(580, 260)
+        self.window.set_icon_name("vinopop")
+
+        box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=10,
+            margin_top=14,
+            margin_bottom=12,
+            margin_start=18,
+            margin_end=18,
         )
-    else:
-        explain.set_markup(
-            "<span size='small'>"
-            "Press <b>Run</b> to launch it as-is, <b>Edit</b> to tweak it first."
-            "</span>"
-        )
-    explain.set_wrap(True)
-    box.append(explain)
+        box.append(self._build_heading(cmd))
+        box.append(self._build_explanation())
+        self._scroll, self._text_view = self._build_command_view(cmd)
+        box.append(self._scroll)
+        box.append(self._build_buttons())
+        self._connect_keys()
 
-    # Command preview/editor. Monospace TextView holds any character
-    # (including '&', '<', '>', shell metacharacters) without the
-    # Pango-markup ambiguity that the old MessageDialog had.
-    #
-    # Two visual states, toggled by the Edit button:
-    #   .lp-cmd-preview -> read-only, flat on the dialog background,
-    #                      looks like a label (the "old preview" look)
-    #   .lp-cmd-edit    -> editable, picks up the input-field styling
-    #                      (border + slightly lighter bg + caret)
-    scroll = Gtk.ScrolledWindow()
-    scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-    scroll.set_min_content_height(96)
-    scroll.set_vexpand(True)
-    # No frame in the read-only state -- the framed look gives the
-    # white-box look the user disliked. Re-enabled on entering edit mode.
-    scroll.set_has_frame(False)
-    text_view = Gtk.TextView()
-    text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-    text_view.set_monospace(True)
-    text_view.set_editable(False)
-    text_view.set_cursor_visible(False)
-    text_view.add_css_class("lp-cmd-preview")
-    text_view.update_property([Gtk.AccessibleProperty.LABEL], ["Command"])
-    text_buf = text_view.get_buffer()
-    text_buf.set_text(cmd)
-    scroll.set_child(text_view)
-    box.append(scroll)
+        toolbar = Adw.ToolbarView()
+        toolbar.add_top_bar(Adw.HeaderBar())
+        toolbar.set_content(box)
+        self.window.set_content(toolbar)
 
-    done = [False]
+    def present(self) -> None:
+        self.window.present()
+        (self._cancel if self._multiline else self._run).grab_focus()
 
-    def _respond(ok: bool) -> None:
-        if done[0]:
-            return
-        done[0] = True
-        if ok:
-            start, end = text_buf.get_start_iter(), text_buf.get_end_iter()
-            edited = text_buf.get_text(start, end, True).strip()
-            if not edited:
-                log.info("[terminal] OK pressed but command was empty -- skipping")
-            else:
-                wrapped = _wrap_for_terminal(edited)
-                try:
-                    _spawn_terminal([*prefix, wrapped], log)
-                    log.info("[terminal] launched (%s), %d chars", binary, len(edited))
-                    log.debug("[terminal] command: %s", edited[:120])
-                except OSError:
-                    pass  # already logged inside _spawn_terminal
-        else:
-            log.info("[terminal] cancelled")
-        dlg.close()
+    def _build_heading(self, cmd: str):
+        head = self._Gtk.Label(xalign=0)
+        head.set_markup(f"<span size='large' weight='bold'>{_confirm_heading(cmd)}</span>")
+        return head
 
-    # Button row: Cancel · Edit · Run
-    btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4)
-    btn_box.set_halign(Gtk.Align.END)
+    def _build_explanation(self):
+        explain = self._Gtk.Label(xalign=0)
+        explain.add_css_class("dim-label")
+        explain.set_wrap(True)
+        self._explain = explain
+        self._set_explanation(_EXPLAIN_SEVERAL_LINES if self._multiline else _EXPLAIN_ONE_LINE)
+        return explain
 
-    cancel = Gtk.Button(label="Cancel")
-    cancel.connect("clicked", lambda *_: _respond(False))
-    btn_box.append(cancel)
+    def _set_explanation(self, markup: str) -> None:
+        self._explain.set_markup(f"<span size='small'>{markup}</span>")
 
-    edit_btn = Gtk.Button(label="Edit")
-    edit_btn.set_tooltip_text("Unlock the command for editing")
+    def _build_command_view(self, cmd: str):
+        Gtk = self._Gtk
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(96)
+        scroll.set_vexpand(True)
+        scroll.set_has_frame(False)
+        text_view = Gtk.TextView()
+        text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        text_view.set_monospace(True)
+        text_view.set_editable(False)
+        text_view.set_cursor_visible(False)
+        text_view.add_css_class("lp-cmd-preview")
+        text_view.update_property([Gtk.AccessibleProperty.LABEL], ["Command"])
+        text_view.get_buffer().set_text(cmd)
+        scroll.set_child(text_view)
+        return scroll, text_view
 
-    def _enter_edit_mode(*_):
-        text_view.set_editable(True)
-        text_view.set_cursor_visible(True)
-        # Swap visual state: drop the flat preview look, pick up the
-        # input-field look (border + slight bg + caret).
-        text_view.remove_css_class("lp-cmd-preview")
-        text_view.add_css_class("lp-cmd-edit")
-        scroll.set_has_frame(True)
-        text_view.grab_focus()
-        # Select all so the user can just start typing to replace, or
-        # press End/Arrow to position the caret to tweak.
-        text_buf.select_range(text_buf.get_start_iter(), text_buf.get_end_iter())
-        # The button has done its job - disable so it visually confirms
-        # "you're in edit mode now".
-        edit_btn.set_sensitive(False)
-        edit_btn.set_label("Editing…")
-        explain.set_markup(
-            "<span size='small'><b>Editing</b> -- Ctrl+Enter to run, Esc to cancel.</span>"
-        )
+    def _build_buttons(self):
+        Gtk = self._Gtk
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, margin_top=4)
+        row.set_halign(Gtk.Align.END)
 
-    edit_btn.connect("clicked", _enter_edit_mode)
-    btn_box.append(edit_btn)
+        self._cancel = Gtk.Button(label="Cancel")
+        self._cancel.connect("clicked", lambda *_: self._answer(False))
+        row.append(self._cancel)
 
-    run_btn = Gtk.Button(label="Run")
-    run_btn.add_css_class("suggested-action")
-    run_btn.connect("clicked", lambda *_: _respond(True))
-    btn_box.append(run_btn)
+        self._edit = Gtk.Button(label="Edit")
+        self._edit.set_tooltip_text("Unlock the command for editing")
+        self._edit.connect("clicked", lambda *_: self._start_editing())
+        row.append(self._edit)
 
-    box.append(btn_box)
+        self._run = Gtk.Button(label="Run")
+        self._run.add_css_class("suggested-action")
+        self._run.connect("clicked", lambda *_: self._answer(True))
+        row.append(self._run)
+        return row
 
-    # Keyboard shortcuts. Two separate controllers because key events are
-    # dispatched to the focused widget -- if GtkTextView's default handler
-    # consumes Enter (to insert a newline), the window-level handler never
-    # sees it. So Ctrl+Enter is intercepted ON the TextView in the capture
-    # phase, before its default handler runs.
-    def _on_textview_key(_c, keyval, _code, state):
-        is_enter = keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
-        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-        if is_enter and ctrl:
-            _respond(True)
-            return True  # consume, don't insert a newline
-        return False  # let TextView handle plain Enter etc. normally
+    def _connect_keys(self) -> None:
+        Gtk = self._Gtk
+        # Capture phase: the text view's own handler would take Ctrl+Enter as a newline.
+        text_keys = Gtk.EventControllerKey()
+        text_keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        text_keys.connect("key-pressed", self._on_text_view_key)
+        self._text_view.add_controller(text_keys)
 
-    tv_keys = Gtk.EventControllerKey()
-    tv_keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-    tv_keys.connect("key-pressed", _on_textview_key)
-    text_view.add_controller(tv_keys)
+        window_keys = Gtk.EventControllerKey()
+        window_keys.connect("key-pressed", self._on_window_key)
+        self.window.add_controller(window_keys)
+        self.window.connect("close-request", self._on_close_request)
 
-    def _on_dialog_key(_c, keyval, _code, state):
-        is_enter = keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
-        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
-        if keyval == Gdk.KEY_Escape:
-            _respond(False)
-            return True
-        if is_enter and (ctrl or not (text_view.get_editable() or multiline)):
-            _respond(True)
+    def _is_enter(self, keyval: int) -> bool:
+        return keyval in (self._Gdk.KEY_Return, self._Gdk.KEY_KP_Enter)
+
+    def _ctrl_held(self, state) -> bool:
+        return bool(state & self._Gdk.ModifierType.CONTROL_MASK)
+
+    def _on_text_view_key(self, _controller, keyval, _code, state) -> bool:
+        if self._is_enter(keyval) and self._ctrl_held(state):
+            self._answer(True)
             return True
         return False
 
-    dlg_keys = Gtk.EventControllerKey()
-    dlg_keys.connect("key-pressed", _on_dialog_key)
-    dlg.add_controller(dlg_keys)
-    # Window-manager close (title-bar X) counts as Cancel.
-    dlg.connect("close-request", lambda *_: (_respond(False), False)[1])
+    def _on_window_key(self, _controller, keyval, _code, state) -> bool:
+        if keyval == self._Gdk.KEY_Escape:
+            self._answer(False)
+            return True
+        if self._is_enter(keyval) and _enter_confirms(
+            self._ctrl_held(state), self._text_view.get_editable(), self._multiline
+        ):
+            self._answer(True)
+            return True
+        return False
 
-    # Adw.Window draws no title bar of its own; a header bar keeps the
-    # dialog movable/closable like the GTK 3 Gtk.Dialog was.
-    toolbar = Adw.ToolbarView()
-    toolbar.add_top_bar(Adw.HeaderBar())
-    toolbar.set_content(box)
-    dlg.set_content(toolbar)
-    dlg.present()
-    # Focus the Run button by default so plain Enter confirms the as-is
-    # command (the common path). Edit button is one Tab away. A multi-line
-    # command focuses Cancel instead, so a stray Enter does nothing harmful.
-    if multiline:
-        cancel.grab_focus()
-    else:
-        run_btn.grab_focus()
-    return False
+    def _on_close_request(self, *_args) -> bool:
+        self._answer(False)
+        return False
+
+    def _start_editing(self) -> None:
+        text_view = self._text_view
+        text_view.set_editable(True)
+        text_view.set_cursor_visible(True)
+        text_view.remove_css_class("lp-cmd-preview")
+        text_view.add_css_class("lp-cmd-edit")
+        self._scroll.set_has_frame(True)
+        text_view.grab_focus()
+        buf = text_view.get_buffer()
+        buf.select_range(buf.get_start_iter(), buf.get_end_iter())
+        self._edit.set_sensitive(False)
+        self._edit.set_label("Editing…")
+        self._set_explanation(_EXPLAIN_EDITING)
+
+    def _command_text(self) -> str:
+        buf = self._text_view.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), True).strip()
+
+    def _answer(self, run: bool) -> None:
+        if self._answered:
+            return
+        self._answered = True
+        import logging
+
+        log = logging.getLogger("vinopop")
+        if not run:
+            log.info("[terminal] cancelled")
+        elif edited := self._command_text():
+            _launch_in_terminal(edited, self._binary, self._prefix)
+        else:
+            log.info("[terminal] OK pressed but command was empty -- skipping")
+        self.window.close()
+
+
+def _confirm_run_then_launch(cmd: str, binary: str, prefix: list[str]) -> bool:
+    _ConfirmRunDialog(cmd, binary, prefix).present()
+    return False  # GLib.idle_add must not call it again
 
 
 def run_in_terminal(text: str) -> None:
@@ -642,16 +644,7 @@ def run_in_terminal(text: str) -> None:
         GLib.idle_add(_confirm_run_then_launch, cmd, binary, prefix)
         return
 
-    import logging
-
-    log = logging.getLogger("vinopop")
-    wrapped = _wrap_for_terminal(cmd)
-    try:
-        _spawn_terminal([*prefix, wrapped], log)
-        log.info("[terminal] launched (%s), %d chars", binary, len(cmd))
-        log.debug("[terminal] command: %s", cmd[:120])
-    except OSError:
-        pass  # already logged
+    _launch_in_terminal(cmd, binary, prefix)
 
 
 # A file with one of these extensions is a program or launcher to whatever

@@ -315,3 +315,153 @@ def test_kwin_answer_cannot_break_framing():
 
     title = "evil\rpage\ntitle\u2028x\x85y\tz"
     assert _one_line(title) == "evil page title x y z"
+
+
+# ---- the PRIMARY ping stream: one popup per settled burst ------------------------
+
+
+class _Pointer:
+    """A backend whose pointer moves one step each time it is asked."""
+
+    def __init__(self, text="hello"):
+        self.asked = 0
+        self.text = text
+        self.prefetched = 0
+
+    def pointer_position(self):
+        self.asked += 1
+        return (self.asked * 10, self.asked)
+
+    def read_selection(self, source):
+        return self.text if source == "primary" else "something else"
+
+    def prefetch_active_window(self):
+        self.prefetched += 1
+
+
+class _Settled:
+    selected = True
+
+    def start(self):
+        pass
+
+    def selected_since(self, t):
+        return self.selected
+
+    def settle_s(self, burst_t0, settle):
+        return settle
+
+
+def _consume(pings, backend, debounce_ms=150):
+    """Feed `pings` (True ping, False quiet, None stream end) to the watcher."""
+    shown, waits = [], []
+    w = WaylandSelectionWatcher(
+        backend, lambda *a: shown.append(a), debounce_ms=debounce_ms, gestures=_Settled()
+    )
+    stream = iter(pings)
+
+    def ping(fd, timeout):
+        waits.append(timeout)
+        return next(stream, None)
+
+    w._ping = ping
+    w._consume_primary(0)
+    return shown, waits
+
+
+_ALREADY_SELECTED = [True, False]  # what wl-paste reports when it starts
+
+
+def test_what_was_selected_before_the_watcher_started_does_not_pop_up():
+    shown, _ = _consume(_ALREADY_SELECTED, _Pointer())
+    assert shown == []
+
+
+def test_a_burst_of_changes_pops_up_once_when_it_goes_quiet():
+    shown, _ = _consume([*_ALREADY_SELECTED, True, True, True, False], _Pointer())
+    assert len(shown) == 1
+    assert shown[0][0] == "hello"
+
+
+def test_the_popup_is_anchored_where_the_pointer_was_at_the_last_change():
+    backend = _Pointer()
+    shown, _ = _consume([*_ALREADY_SELECTED, True, True, True, False], backend)
+    # asked once for the start-up burst, then once per change, and not again after the quiet
+    assert backend.asked == 4
+    assert shown == [("hello", 40, 4)]
+
+
+def test_the_quiet_that_ends_a_burst_is_the_debounce_but_at_least_200_ms():
+    _, waits = _consume([True, False], _Pointer(), debounce_ms=50)
+    assert waits[:2] == [0.5, 0.2]
+    _, waits = _consume([True, False], _Pointer(), debounce_ms=400)
+    assert waits[:2] == [0.5, 0.4]
+
+
+def test_the_active_window_lookup_starts_with_the_burst_but_not_the_start_up_one():
+    backend = _Pointer()
+    _consume([*_ALREADY_SELECTED, True, False], backend)
+    assert backend.prefetched == 1
+
+
+def test_an_empty_selection_does_not_pop_up():
+    shown, _ = _consume([*_ALREADY_SELECTED, True, False], _Pointer(text="  \n"))
+    assert shown == []
+
+
+def test_a_stream_that_ends_mid_burst_pops_up_nothing():
+    shown, _ = _consume([*_ALREADY_SELECTED, True, None], _Pointer())
+    assert shown == []
+
+
+def test_a_click_without_the_modifier_never_asks_kwin_for_the_pointer(monkeypatch):
+    monkeypatch.setattr(wayland_kde, "_XkbModifierState", _NoXkb)
+
+    class Backend:
+        def pointer_position(self):
+            raise AssertionError("a plain click must not cost a KWin round-trip")
+
+    hub = _Hub()
+    w = wayland_kde.WaylandDoubleClickWatcher(Backend(), lambda x, y: None, hub=hub)
+    w.start()
+    hub.subs[1](ev.InputEvent(ev.BTN_LEFT, 1, frozenset({ev.POINTER}), 10.0))
+
+
+def test_a_slow_pointer_query_does_not_eat_into_the_double_click_window(monkeypatch):
+    fired = []
+    monkeypatch.setattr(wayland_kde, "_XkbModifierState", _NoXkb)
+    monkeypatch.setattr(wayland_kde.GLib, "timeout_add", lambda ms, fn, *a: fired.append(a))
+
+    class Backend:
+        def pointer_position(self):
+            time.sleep(0.2)
+            return (5, 5)
+
+    hub = _Hub()
+    w = wayland_kde.WaylandDoubleClickWatcher(Backend(), lambda x, y: None, hub=hub)
+    w.start()
+    send = hub.subs[1]
+    send(ev.InputEvent(ev.KEY_LEFTCTRL, 1, frozenset({ev.KEYBOARD}), 10.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 1, frozenset({ev.POINTER}), 10.10))
+    send(ev.InputEvent(ev.BTN_LEFT, 1, frozenset({ev.POINTER}), 10.39))
+    assert fired == [(5, 5)]
+
+
+@pytest.mark.parametrize(("gap_s", "fires"), [(0.29, True), (0.31, False)])
+def test_two_clicks_are_a_double_click_within_300_ms(monkeypatch, gap_s, fires):
+    fired = []
+    monkeypatch.setattr(wayland_kde, "_XkbModifierState", _NoXkb)
+    monkeypatch.setattr(wayland_kde.GLib, "timeout_add", lambda ms, fn, *a: fired.append(a))
+
+    class Backend:
+        def pointer_position(self):
+            return (5, 5)
+
+    hub = _Hub()
+    w = wayland_kde.WaylandDoubleClickWatcher(Backend(), lambda x, y: None, hub=hub)
+    w.start()
+    send = hub.subs[1]
+    send(ev.InputEvent(ev.KEY_LEFTCTRL, 1, frozenset({ev.KEYBOARD}), 10.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 1, frozenset({ev.POINTER}), 20.0))
+    send(ev.InputEvent(ev.BTN_LEFT, 1, frozenset({ev.POINTER}), 20.0 + gap_s))
+    assert bool(fired) is fires
