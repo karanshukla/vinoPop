@@ -44,9 +44,6 @@ def test_base64_predicate():
     assert not base64_codec._looks_like_base64("not base64 at all!")
 
 
-# ---- loading user plugins (#33) ----------------------------------------------
-
-
 @pytest.fixture
 def user_plugins(tmp_path, monkeypatch):
     """An empty user plugin dir that load_all() reads instead of the real one."""
@@ -87,7 +84,7 @@ def test_a_plugin_calling_sys_exit_does_not_stop_the_daemon(user_plugins, bad):
 
     (user_plugins / "a_bad.py").write_text(bad)
     (user_plugins / "b_good.py").write_text(_GOOD)
-    plugin_loader.load_all()  # used to raise SystemExit out of App.__init__
+    plugin_loader.load_all()
     names = {p.name for p in plugin_loader.all_plugins()}
     assert "good" in names
     assert "vinopop_user_a_bad" not in sys.modules
@@ -109,9 +106,6 @@ def test_a_register_that_raises_leaves_no_buttons_behind(user_plugins):
     assert "good" in names
     assert plugin_loader.source_for("half") is None
     assert plugin_loader.source_for("good") == "whole.py"
-
-
-# ---- Plugin Manager custom tab (#33) -------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -145,9 +139,6 @@ def test_custom_tab_flags_a_recipe_vinopop_stopped_bundling():
     assert "No longer bundled" in subtitle
 
 
-# ---- bundled versions (#33) -------------------------------------------------------
-
-
 def _manifest():
     import json
 
@@ -165,8 +156,8 @@ def test_every_catalogue_entry_and_its_file_carry_the_same_version():
 
 
 def test_every_bundled_plugin_and_recipe_is_in_the_catalogue():
-    # A file missing from the manifest can't be installed from Plugin Manager.
-    # Recipes that only tests use live in tests/fixtures/recipes/ instead.
+    """Plugin Manager installs only what the manifest lists. Recipes only
+    tests use live in tests/fixtures/recipes/."""
     listed = {("recipes/" if e.get("kind") == "recipe" else "") + e["file"] for e in _manifest()}
     shipped = {p.name for p in PLUGINS.glob("*.py")}
     shipped |= {f"recipes/{p.name}" for p in (PLUGINS / "recipes").glob("*.json")}
@@ -183,50 +174,101 @@ def test_retired_files_are_not_in_the_catalogue():
     assert not [name for name in retired if (PLUGINS / name).exists()]
 
 
-def test_an_older_install_is_offered_the_update(tmp_path):
-    from plugin_system import plugin_loader
-
+@pytest.fixture
+def bundled(tmp_path):
+    """A bundled plugin at version 2 and the path its installed copy goes to."""
     src = tmp_path / "repo.py"
     src.write_text("# vinopop-plugin-version: 2\nfixed = True\n")
-    dst = tmp_path / "installed.py"
+    return src, tmp_path / "installed.py"
+
+
+def test_a_copy_not_installed_is_missing(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
     assert plugin_loader.bundled_status(src, dst, 2) == "missing"
-    # A copy from before files had versions
+
+
+def test_a_copy_without_a_version_line_is_outdated(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
     dst.write_text("fixed = False\n")
     assert plugin_loader.bundled_status(src, dst, 2) == "outdated"
+
+
+def test_a_copy_at_an_older_version_is_outdated(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
     dst.write_text("# vinopop-plugin-version: 1\nfixed = False\n")
     assert plugin_loader.bundled_status(src, dst, 2) == "outdated"
+
+
+def test_an_updated_copy_is_current(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
+    dst.write_text("# vinopop-plugin-version: 1\nfixed = False\n")
     plugin_loader.update_bundled(src, dst)
     assert plugin_loader.bundled_status(src, dst, 2) == "current"
-    # The same code without the header line is already up to date
+
+
+def test_the_same_code_without_the_version_line_is_current(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
     dst.write_text("fixed = True\n")
     assert plugin_loader.bundled_status(src, dst, 2) == "current"
-    # Edited by hand at the current version: left alone
+
+
+def test_a_copy_edited_at_the_current_version_is_changed(bundled):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled
     dst.write_text("# vinopop-plugin-version: 2\nfixed = 'mine'\n")
     assert plugin_loader.bundled_status(src, dst, 2) == "changed"
 
 
-def test_updating_a_recipe_keeps_its_on_off_switch(tmp_path, monkeypatch):
+@pytest.fixture
+def bundled_recipe(tmp_path, monkeypatch):
+    """A bundled recipe at version 2 and an older installed copy, turned off."""
     import json
 
-    from plugin_system import plugin_loader, recipe_loader
+    from plugin_system import recipe_loader
 
     monkeypatch.setattr(recipe_loader, "RECIPES_DIR", tmp_path)
     src = tmp_path / "repo.json"
     src.write_text(json.dumps({"name": "s", "version": 2, "action": {"template": "new"}}))
     dst = tmp_path / "s.json"
     dst.write_text(json.dumps({"name": "s", "enabled": False, "action": {"template": "old"}}))
+    return src, dst
+
+
+def test_updating_a_recipe_keeps_its_on_off_switch(bundled_recipe):
+    import json
+
+    from plugin_system import plugin_loader
+
+    src, dst = bundled_recipe
     assert plugin_loader.bundled_status(src, dst, 2) == "outdated"
     plugin_loader.update_bundled(src, dst)
     data = json.loads(dst.read_text())
     assert data["enabled"] is False
     assert data["action"]["template"] == "new"
-    # Turning a current recipe off doesn't make it look out of date
+
+
+def test_a_turned_off_recipe_is_still_current(bundled_recipe):
+    from plugin_system import plugin_loader
+
+    src, dst = bundled_recipe
+    plugin_loader.update_bundled(src, dst)
     assert plugin_loader.bundled_status(src, dst, 2) == "current"
 
 
 def test_an_old_espeak_speak_py_is_offered_read_aloud(tmp_path):
-    # The spd-say speak.py was retired; its name came back for vinoSpeak
-    # (#45), so an old copy (no version line) shows as outdated, not retired
+    """speak.py was retired and its name reused for vinoSpeak, so an old
+    copy (no version line) is outdated, not retired."""
     from plugin_system import plugin_loader
 
     old = tmp_path / "speak.py"

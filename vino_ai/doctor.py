@@ -63,7 +63,14 @@ def _version(module: str) -> str | None:
     return str(getattr(mod, "__version__", "installed"))
 
 
+# Newer than the rest of the AI stack: an install from before it isn't broken.
+_OPTIONAL_PACKAGES = frozenset({"vino_speak"})
+
+
 def _packages() -> list[Result]:
+    """A missing optional package is a warn, any other a FAIL (pinned by
+    `tests/test_ai_doctor.py::test_a_missing_optional_package_is_a_warn`,
+    `tests/test_ai_doctor.py::test_a_missing_core_package_is_a_fail`)."""
     results = []
     for module, label, needed_for in (
         ("openvino", "openvino", "every AI action"),
@@ -73,9 +80,7 @@ def _packages() -> list[Result]:
         ("vino_speak", "vinospeak", "read aloud"),
     ):
         version = _version(module)
-        if version is None and module == "vino_speak":
-            # One optional button, newer than the rest of the stack: an
-            # install from before it isn't broken
+        if version is None and module in _OPTIONAL_PACKAGES:
             results.append(
                 Result(
                     WARN,
@@ -112,6 +117,10 @@ def _consent_file(home: Path | None = None) -> str:
 
 
 def _telemetry() -> list[Result]:
+    """The telemetry block, and the user's opt-out for OpenVINO's own tools.
+    vinoPop blocks the module either way, so a missing opt-out is info, not a
+    warn (pinned by `tests/test_ai_doctor.py::test_an_opt_out_is_ok`,
+    `tests/test_ai_doctor.py::test_no_opt_out_is_info_not_a_warn`)."""
     from . import telemetry
 
     if importlib.util.find_spec("openvino") is None:
@@ -133,7 +142,6 @@ def _telemetry() -> list[Result]:
     if state == "opted out":
         results.append(Result(OK, "telemetry opt-out", detail))
     else:
-        # vinoPop blocks the module either way, so this is info, not a warn.
         if state == "absent":
             detail += ", and they take no file as consent"
         results.append(
@@ -187,13 +195,17 @@ _NOTE_STATUS = {True: OK, None: UNKNOWN, False: WARN}
 
 def _npu(root: Path = npu_preflight.ROOT, env: dict[str, str] | None = None) -> list[Result]:
     """Whether OpenVINO lists the NPU, and the preflight that says why not.
-    Problems are warns, not FAILs: the LLM falls back to the GPU or CPU."""
+    Problems are warns, not FAILs: the LLM falls back to the GPU or CPU. No
+    NPU on the PCI bus is one info row (pinned by
+    `tests/test_npu_preflight.py::test_doctor_npu_not_enumerated_points_at_the_cause`,
+    `tests/test_npu_preflight.py::test_doctor_no_npu_is_one_info_row`)."""
     try:
         found = _ov_devices()
     except Exception:  # noqa: BLE001 - _devices reports it
         found = None
     preflight = npu_preflight.npu_preflight(root)
-    has_npu = preflight[0].ok is True  # the PCI device
+    pci_device = preflight[0]
+    has_npu = pci_device.ok is True
     notes = preflight + (npu_preflight.npu_userspace(root, env) if has_npu else [])
     problems = [n for n in notes if n.ok is False]
 
@@ -202,7 +214,6 @@ def _npu(root: Path = npu_preflight.ROOT, env: dict[str, str] | None = None) -> 
     elif any(d.startswith("NPU") for d in found):
         results = [Result(OK, "npu", "enumerated by OpenVINO")]
     elif not has_npu:
-        # The preflight's only note says the same thing.
         return [Result(UNKNOWN, "npu", "none on the PCI bus; the LLM uses the GPU or CPU")]
     else:
         fix = (
@@ -217,6 +228,8 @@ def _npu(root: Path = npu_preflight.ROOT, env: dict[str, str] | None = None) -> 
 
 
 def _ovfetch() -> list[Result]:
+    """ovfetch's notes on this OpenVINO. Its bounds are pessimistic on
+    purpose, so nothing it says is a FAIL."""
     from . import ovfetch
 
     if not ovfetch.installed():
@@ -237,7 +250,6 @@ def _ovfetch() -> list[Result]:
                 f"run `ovfetch detect` to see why, or update it from {ovfetch.INSTALL_HINT}",
             )
         ]
-    # Its bounds are pessimistic on purpose, so nothing it says is a FAIL.
     return [
         Result(
             OK if n.ok else (UNKNOWN if n.ok is None else WARN),
@@ -364,9 +376,6 @@ def _failures() -> list[Result]:
     return results
 
 
-# ---- input -------------------------------------------------------------------
-
-
 def _which(tool: str) -> str:
     return shutil.which(tool) or ""
 
@@ -467,8 +476,7 @@ def _x11_input(family: str) -> list[Result]:
 
 def _input() -> list[Result]:
     """Key injection for the backend vinoPop would pick, and the tools behind it."""
-    # import_module keeps mypy from following platform_backend into the
-    # untyped GTK/X11 modules it can reach.
+    # import_module keeps mypy out of the untyped GTK/X11 modules platform_backend reaches.
     if importlib.import_module("platform_backend").detect() == "wayland_kde":
         return _wayland_input()
     return _x11_input(npu_preflight.distro_family())
@@ -555,8 +563,8 @@ def collect() -> list[Result]:
 
 
 def main(as_json: bool = False) -> int:
-    # A diagnostic must not create files (or print "[settings] wrote defaults"
-    # into --json output on a fresh machine).
+    """Print the checks; 1 when any FAILed. Writes no files, so no settings
+    defaults either (pinned by `tests/test_npu_preflight.py::test_doctor_writes_nothing_under_home`)."""
     try:
         from core import settings
 

@@ -8,6 +8,7 @@ from core.classifier import (
     _COMMAND_HINTS_MAX_LEN,
     _COMMAND_TOKENS,
     _EMAIL_RE,
+    _RFC_5321_MAX_ADDRESS_LEN,
     ContentType,
     classify,
     is_runnable_path,
@@ -81,9 +82,11 @@ COMMANDS = [
     "cat <<EOF > ~/.config/x.conf\nfoo=bar\nbaz=qux\nEOF",
     "if [ -f ~/.bashrc ]; then\n  source ~/.bashrc\nfi",
     "echo 'export FOO=1' >> ~/.bashrc\nsource ~/.bashrc",
-    # copied terminal session, output lines included
-    "$ ls -la\ntotal 8\ndrwxr-xr-x  2 dev dev 4096 Oct 17 10:00 .\n"
-    "-rw-r--r--  1 dev dev   12 Oct 17 10:00 notes.txt",
+    pytest.param(
+        "$ ls -la\ntotal 8\ndrwxr-xr-x  2 dev dev 4096 Oct 17 10:00 .\n"
+        "-rw-r--r--  1 dev dev   12 Oct 17 10:00 notes.txt",
+        id="terminal-session-with-output",
+    ),
 ]
 
 
@@ -93,7 +96,6 @@ def test_real_commands_stay_commands(text):
 
 
 PROSE = [
-    # the #29 repros
     "go home",
     "file a bug please",
     "id like to go",
@@ -103,7 +105,6 @@ PROSE = [
     "at the end of it the old cluster was finally gone,\n"
     "which meant the on-call rota could go back to normal.\n"
     "file handling is still slow though.",
-    # same class
     "Settings > Privacy > Camera",
     "Set `terminal_keep_open` to false in settings.",
     "self-hosted apps are great",
@@ -137,7 +138,6 @@ def _elapsed_ms(fn, *args):
 
 
 def test_email_regex_is_linear():
-    # used to backtrack across every dot: 32k chars took ~7 s on the GTK thread
     adversarial = "a@" + "b." * 16000 + "@"
     assert _elapsed_ms(_EMAIL_RE.match, adversarial) < 50
     assert _elapsed_ms(classify, adversarial) < 50
@@ -146,16 +146,25 @@ def test_email_regex_is_linear():
 def test_email_still_matches_real_addresses():
     assert classify("first.last+tag@mail.example.co.uk") is ContentType.EMAIL
     assert classify("a@b..c") is not ContentType.EMAIL
-    assert classify("x" * 320 + "@example.com") is not ContentType.EMAIL
+
+
+def test_an_address_at_the_rfc_5321_limit_is_an_email():
+    local = "x" * (_RFC_5321_MAX_ADDRESS_LEN - len("@example.com"))
+    assert classify(local + "@example.com") is ContentType.EMAIL
+
+
+def test_an_address_over_the_rfc_5321_limit_is_not():
+    local = "x" * (_RFC_5321_MAX_ADDRESS_LEN - len("@example.com") + 1)
+    assert classify(local + "@example.com") is not ContentType.EMAIL
 
 
 @pytest.mark.parametrize(
     "adversarial",
     [
-        "x-" + "a-" * 16000 + "!",  # old hyphenated-name hint was exponential
-        "x\n" + "\n" * 32000 + "X",  # and quadratic on blank-line runs
-        "-" + "a-" * 16000 + "!",
-        ".a{b:c}" * 4000 + "@media x{}",  # minified CSS with one '@'
+        pytest.param("x-" + "a-" * 16000 + "!", id="hyphenated-name"),
+        pytest.param("x\n" + "\n" * 32000 + "X", id="blank-line-run"),
+        pytest.param("-" + "a-" * 16000 + "!", id="flag-like"),
+        pytest.param(".a{b:c}" * 4000 + "@media x{}", id="minified-css-with-one-at"),
     ],
 )
 def test_classify_is_fast_on_adversarial_input(adversarial):
@@ -173,28 +182,41 @@ def test_command_hints_regex_is_fast():
         ("% ls -la", "ls -la"),
         ("# sudo dnf update", "sudo dnf update"),
         ("> sudo dnf update", "sudo dnf update"),
-        # session paste: output lines go, continuations stay
-        ("$ ls -la\ntotal 8\n$ cd /tmp", "ls -la\ncd /tmp"),
-        (
-            "$ sudo dnf install \\\n    foo bar\nLast metadata expiration",
-            "sudo dnf install \\\n    foo bar",
-        ),
-        ("$ for x in a b; do\n> echo $x\n> done\na\nb", "for x in a b; do\necho $x\ndone"),
-        # scripts without prompts are left alone, comments included
-        ("# Install foo\nsudo apt install foo", "# Install foo\nsudo apt install foo"),
-        (
-            "# make sure foo is installed\nmake install",
-            "# make sure foo is installed\nmake install",
-        ),
-        ("echo hi # comment", "echo hi # comment"),
     ],
 )
 def test_strip_shell_prompts(text, expected):
     assert strip_shell_prompts(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("$ ls -la\ntotal 8\n$ cd /tmp", "ls -la\ncd /tmp"),
+        (
+            "$ sudo dnf install \\\n    foo bar\nLast metadata expiration",
+            "sudo dnf install \\\n    foo bar",
+        ),
+        ("$ for x in a b; do\n> echo $x\n> done\na\nb", "for x in a b; do\necho $x\ndone"),
+    ],
+)
+def test_a_session_paste_drops_output_lines_but_keeps_continuations(text, expected):
+    assert strip_shell_prompts(text) == expected
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "# Install foo\nsudo apt install foo",
+        "# make sure foo is installed\nmake install",
+        "echo hi # comment",
+    ],
+)
+def test_a_script_without_prompts_keeps_its_comments(script):
+    assert strip_shell_prompts(script) == script
+
+
 def test_ambiguous_commands_are_known_commands():
-    # a typo here would silently make a word neither ambiguous nor a command
+    """A typo in _AMBIGUOUS_COMMANDS would make a word neither ambiguous nor a command."""
     assert _AMBIGUOUS_COMMANDS <= _COMMAND_TOKENS
 
 
@@ -211,6 +233,31 @@ def test_a_shell_operator_in_prose_is_enough_up_to_the_length_cap():
 
     assert classify(prose(_COMMAND_HINTS_MAX_LEN - 1)) is ContentType.COMMAND
     assert classify(prose(_COMMAND_HINTS_MAX_LEN)) is ContentType.PLAIN_TEXT
+
+
+def test_ping_counts_with_a_host():
+    assert classify("ping example.com") is ContentType.COMMAND
+
+
+def test_ping_without_a_host_is_prose():
+    assert classify("ping me") is ContentType.PLAIN_TEXT
+
+
+def test_kill_counts_with_a_pid():
+    assert classify("kill 1234") is ContentType.COMMAND
+
+
+def test_kill_without_a_number_is_prose():
+    assert classify("kill time") is ContentType.PLAIN_TEXT
+
+
+def test_a_listed_hyphenated_tool_counts_with_a_bare_argument():
+    assert classify("ssh-keygen mykey") is ContentType.COMMAND
+
+
+def test_an_unlisted_hyphenated_word_needs_evidence():
+    assert classify("self-hosted apps") is ContentType.PLAIN_TEXT
+    assert classify("self-hosted --flag") is ContentType.COMMAND
 
 
 def test_markdown_emphasis_is_not_a_glob():

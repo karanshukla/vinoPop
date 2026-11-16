@@ -1,9 +1,5 @@
-"""Global X11 hotkey registration.
-
-Parses a hotkey string like "ctrl+alt+space" and grabs it on the X11
-root window. When pressed anywhere, fires a callback on the GTK main
-thread (via GLib.idle_add). Threaded so the GTK main loop is untouched.
-"""
+"""A global X11 hotkey: "ctrl+alt+space" grabbed on the root window from
+its own thread, firing a callback on the GTK main thread."""
 
 from __future__ import annotations
 
@@ -14,7 +10,6 @@ from collections.abc import Callable, Iterable
 from gi.repository import GLib
 from Xlib import XK, X, display, error
 
-# Standard modifier names mapped to X11 modifier masks
 _MOD_NAMES = {
     "shift": X.ShiftMask,
     "ctrl": X.ControlMask,
@@ -29,7 +24,7 @@ _MOD_NAMES = {
     "mod3": X.Mod3Mask,
 }
 
-# Friendly key aliases → XK_* strings (XStringToKeysym format)
+# Our key names -> XStringToKeysym names
 _KEY_ALIASES = {
     "space": "space",
     "spacebar": "space",
@@ -47,8 +42,7 @@ _KEY_ALIASES = {
     "pagedown": "Page_Down",
     "page_up": "Page_Up",
     "page_down": "Page_Down",
-    # Shift+Tab reports this keysym; the grab wants plain Tab (shift is a modifier)
-    "iso_left_tab": "Tab",
+    "iso_left_tab": "Tab",  # Shift+Tab; the Shift is already a modifier
     "up": "Up",
     "down": "Down",
     "left": "Left",
@@ -56,10 +50,16 @@ _KEY_ALIASES = {
 }
 
 
-# Lock modifiers (Caps, Num) are left out: they must not stop a hotkey firing.
+# Without Caps and Num Lock (pinned by
+# `tests/test_hotkey_listen.py::test_caps_lock_and_num_lock_do_not_stop_it_firing`,
+# `tests/test_hotkey_listen.py::test_a_press_with_an_extra_modifier_is_ignored`).
 _MODIFIER_MASK = X.ShiftMask | X.ControlMask | X.Mod1Mask | X.Mod3Mask | X.Mod4Mask
+_LOCK_VARIANTS = (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask)
 
 _STOP_CHECK_S = 1.0
+_POLL_INTERVAL_S = 0.05
+# Consecutive poll errors (~2 s) that mean the X connection is gone
+_MAX_POLL_FAILURES = 40
 
 
 def _parse(hotkey: str) -> tuple[int, str]:
@@ -73,37 +73,25 @@ def _parse(hotkey: str) -> tuple[int, str]:
         if token not in _MOD_NAMES:
             raise ValueError(f"unknown modifier {token!r} in {hotkey!r}")
         mods |= _MOD_NAMES[token]
-    # Map alias; otherwise return the token itself - the resolver will try
-    # several capitalizations against XK.string_to_keysym.
     if key_token in _KEY_ALIASES:
         key_name = _KEY_ALIASES[key_token]
     elif len(key_token) > 1 and key_token.startswith("f") and key_token[1:].isdigit():
-        key_name = key_token.upper()  # F1..F12
+        key_name = key_token.upper()
     else:
         key_name = key_token
     return mods, key_name
 
 
 def _resolve_keysym(name: str) -> int:
-    """Try multiple capitalizations against XK.string_to_keysym."""
-    # X11 keysym names are case-sensitive and inconsistent: 'Return', 'space',
-    # 'BackSpace', 'greater', 'Up'. Try the most likely variants in order.
-    candidates = [
-        name,  # as-given (e.g. 'greater', 'F5')
-        name.lower(),  # 'greater'
-        name[:1].upper() + name[1:],  # 'Greater' (works for Return etc.)
-        name.upper(),  # 'GREATER' (rare)
-    ]
-    seen: set[str] = set()
-    for cand in candidates:
-        if cand in seen:
-            continue
-        seen.add(cand)
+    """The keysym for a key name in any case ('return', 'page_up',
+    'xf86audioplay'), 0 if none (pinned by
+    `tests/test_hotkey.py::test_recorded_key_names_resolve`,
+    `tests/test_hotkey.py::test_unknown_key_names_still_fail_cleanly`).
+    X keysym names mix cases ('Return', 'space', 'BackSpace')."""
+    for cand in dict.fromkeys((name, name.lower(), name[:1].upper() + name[1:], name.upper())):
         ks = XK.string_to_keysym(cand)
         if ks:
             return ks
-    # Names recorded in Settings are lower-cased ("page_up", "kp_add",
-    # "xf86audioplay"), so match case-insensitively against python-xlib's table.
     real = _keysym_names().get(name.lower())
     return XK.string_to_keysym(real) if real else 0
 
@@ -121,7 +109,7 @@ def _keysym_names() -> dict[str, str]:
             except Exception:  # noqa: BLE001 - a missing group only narrows the table
                 pass
         _KEYSYM_NAMES = {n[3:].lower(): n[3:] for n in dir(XK) if n.startswith("XK_")}
-        # python-xlib spells media keys "XF86_AudioPlay"; GDK reports "XF86AudioPlay"
+        # python-xlib spells "XF86_AudioPlay" what GDK calls "XF86AudioPlay".
         for real in list(_KEYSYM_NAMES.values()):
             if real.startswith("XF86_"):
                 _KEYSYM_NAMES.setdefault(real.replace("_", "").lower(), real)
@@ -129,15 +117,17 @@ def _keysym_names() -> dict[str, str]:
 
 
 def _lock_variants(dpy: display.Display) -> Iterable[int]:
-    """Generate all mod-mask variants that should be ignored by the grab."""
-    # We always combine with each combo of LockMask (caps) and Mod2Mask (numlock)
-    ignored = [0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask]
-    return ignored
+    """Each Caps/Num Lock mask to grab alongside the hotkey's own (pinned by
+    `tests/test_hotkey_listen.py::test_grabs_the_key_with_every_lock_modifier_variant`)."""
+    return list(_LOCK_VARIANTS)
 
 
 def _is_autorepeat(press_time: int, last_release_time: int | None) -> bool:
-    """X11 autorepeat on a held key arrives as KeyRelease + KeyPress pairs
-    carrying the same server timestamp; a real second press can't."""
+    """X11 autorepeat arrives as KeyRelease + KeyPress with the same server
+    time; a real second press can't (pinned by
+    `tests/test_hotkey.py::test_x11_autorepeat_is_not_a_new_press`,
+    `tests/test_hotkey_listen.py::test_a_held_key_fires_once`,
+    `tests/test_hotkey_listen.py::test_a_second_press_after_a_release_fires_again`)."""
     return last_release_time is not None and press_time == last_release_time
 
 
@@ -164,10 +154,8 @@ class Hotkey:
         self._thread.start()
 
     def stop(self, wait: bool = True, timeout: float = 1.5) -> None:
-        """Stop the hotkey thread. When `wait` (default), block until the
-        thread exits and the X11 grab is released - required by live-rebind
-        in main.py so the old thread's ungrab doesn't race the new thread's
-        grab on the same key and silently steal it."""
+        """Stop the thread. `wait` blocks until the grab is released, so on a
+        rebind the old ungrab can't race the new grab of the same key."""
         self._stop.set()
         if wait and self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout)
@@ -178,9 +166,7 @@ class Hotkey:
         except Exception as exc:  # noqa: BLE001
             print(f"[hotkey] cannot open display: {exc}")
             return
-        # Every exit path (bad hotkey string, unknown key, grab conflict,
-        # stop) releases the grabs and closes the connection: a leaked one
-        # per failed rebind adds up, and the X server caps its clients.
+        # The X server caps its clients: never leak a connection on exit.
         try:
             self._listen(self._dpy)
         finally:
@@ -247,7 +233,6 @@ class Hotkey:
 
     def _grab(self, dpy: display.Display, keycode: int, mask: int) -> bool:
         """False when another client already owns the combination."""
-        # CatchError is per request, so a fresh one each time
         catcher = error.CatchError(error.BadAccess)
         self._root.grab_key(keycode, mask, 1, X.GrabModeAsync, X.GrabModeAsync, onerror=catcher)
         dpy.sync()
@@ -296,7 +281,6 @@ class Hotkey:
             elif event.type == X.KeyRelease and event.detail == keycode:
                 last_release = event.time
             elif event.type == X.KeyPress and event.detail == keycode:
-                # test_a_held_key_fires_once
                 if not _is_autorepeat(event.time, last_release):
                     self._on_press(event.state)
 
@@ -340,37 +324,26 @@ class Hotkey:
             )
 
     def _poll_loop(self) -> None:
-        """Sample the keyboard 20×/sec and fire on rising-edge of the
-        hotkey combo. Bypasses XGrabKey entirely - used when another
-        client (Cinnamon's Super-overview detector etc.) keeps eating
-        the first press of our combo.
-
-        Mod-state read from query_pointer().mask (X's only way to get
-        current modifier state at runtime). Key state read from
-        query_keymap() - a 32-byte bitmap with one bit per keycode.
-        """
+        """Fire when the key goes down with the modifiers held, sampling
+        without XGrabKey, for when another client (Cinnamon's Super
+        detector) eats the grabbed press. A key already held at start
+        doesn't count. query_pointer().mask is X's only live modifier state."""
         import time as _time
+
+        from platform_backend.x11 import _key_is_down
 
         keycode = self._keycode
         mods = self._mods
-        byte_idx = keycode // 8
-        bit_idx = keycode % 8
-        bit_val = 1 << bit_idx
         prev_pressed = False
         failures = 0
-        # Seed prev_pressed from current state so a held key at startup
-        # isn't treated as a rising edge.
         try:
-            keymap = self._dpy.query_keymap()
-            prev_pressed = bool(keymap[byte_idx] & bit_val)
+            prev_pressed = _key_is_down(self._dpy.query_keymap(), keycode)
         except Exception:
             pass
         while not self._stop.is_set():
             try:
-                keymap = self._dpy.query_keymap()
-                pressed = bool(keymap[byte_idx] & bit_val)
+                pressed = _key_is_down(self._dpy.query_keymap(), keycode)
                 if pressed and not prev_pressed:
-                    # Rising edge - verify modifier state right now.
                     data = self._root.query_pointer()
                     effective = data.mask & _MODIFIER_MASK
                     if effective == mods:
@@ -383,10 +356,10 @@ class Hotkey:
             except Exception as exc:  # noqa: BLE001
                 failures += 1
                 print(f"[hotkey] poll error: {exc}")
-                if failures >= 40:  # ~2 s of nothing but errors: the X connection is gone
+                if failures >= _MAX_POLL_FAILURES:
                     print(f"[hotkey] '{self._hotkey_str}' polling stopped")
                     return
-            _time.sleep(0.05)
+            _time.sleep(_POLL_INTERVAL_S)
 
     def _safe_trigger(self) -> bool:
         try:

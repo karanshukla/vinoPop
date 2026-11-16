@@ -14,14 +14,13 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-# `--doctor` runs before GTK is imported so it also works over SSH or
-# with a broken display.
+# `--doctor` (over SSH, or with a broken display) and `--trigger` (a D-Bus
+# poke at the running daemon) exit before GTK is imported.
 if __name__ == "__main__" and "--doctor" in sys.argv[1:]:
     from vino_ai import doctor
 
     sys.exit(doctor.main(as_json="--json" in sys.argv[1:]))
 
-# `--trigger` only pokes the running daemon over D-Bus: no GTK, no lock.
 if __name__ == "__main__":
     from core import remote
 
@@ -39,9 +38,8 @@ def _notify(title: str, body: str) -> None:
 
 
 def _load_layer_shell() -> bool:
-    """Load gtk4-layer-shell BEFORE GTK/libwayland-client are loaded (its
-    Wayland hooks only work when it comes first in symbol lookup - the
-    upstream-documented ctypes trick for Python), then its typelib."""
+    """Load gtk4-layer-shell, then its typelib. Must run before GTK loads
+    libwayland-client: its hooks only work first in symbol lookup."""
     import ctypes
 
     try:
@@ -60,12 +58,16 @@ def _load_layer_shell() -> bool:
 
 
 def _choose_gdk_backend() -> str:
-    """Decide where GDK runs, before GTK initialises. GTK 4 dropped
-    Gtk.Window.move(), so the popup can only be placed via gtk4-layer-shell
-    or as an X11 override-redirect window. Native Wayland is only used with
-    the KDE backend (platform_backend.detect()); every other Wayland desktop,
-    or KDE without layer-shell, runs the whole process on XWayland.
-    Returns a line for the log."""
+    """Pick GDK's backend before GTK initialises and return a line for the
+    log. GTK 4 can place a window only through gtk4-layer-shell or as an X11
+    override-redirect window, so anything but KDE with layer-shell runs on
+    XWayland (pinned by
+    `tests/test_core_gdk_backend.py::test_a_preset_gdk_backend_is_left_alone`,
+    `tests/test_core_gdk_backend.py::test_an_x11_session_stays_on_x11`,
+    `tests/test_core_gdk_backend.py::test_a_non_kde_wayland_desktop_runs_on_xwayland`,
+    `tests/test_core_gdk_backend.py::test_kde_without_layer_shell_runs_on_xwayland`,
+    `tests/test_core_gdk_backend.py::test_kde_with_layer_shell_runs_native_wayland`,
+    `tests/test_core_gdk_backend.py::test_without_xwayland_the_backend_is_not_forced`)."""
     if os.environ.get("GDK_BACKEND"):
         return f"GDK_BACKEND={os.environ['GDK_BACKEND']} (preset, left alone)"
     if not is_wayland_session():
@@ -108,7 +110,7 @@ from core.xdg_paths import (  # noqa: E402
 )
 from platform_backend import get_backend  # noqa: E402
 
-# No XInitThreads: with it the hotkey threads silently fail to grab keys
+# No XInitThreads: with it the hotkey threads fail to grab keys, silently
 # (docs/how-it-works.md#threads-and-x11).
 from plugin_system import plugin_loader  # noqa: E402
 from triggers.editable_detect import focused_selection_rect, is_focus_editable  # noqa: E402
@@ -124,15 +126,38 @@ if TYPE_CHECKING:
 
 LOCK_FILE = CACHE_DIR / "vinopop.lock"
 FIRST_RUN_MARKER = CONFIG_DIR / ".first-run-done"
+FIRST_RUN_MARKERS = (
+    FIRST_RUN_MARKER,
+    CONFIG_DIR / ".default-plugins-seeded",
+    CONFIG_DIR / ".default-recipes-seeded",
+)
+LOG_MAX_BYTES = 512_000
+LOG_BACKUP_COUNT = 3
+TRAY_POLL_MS = 200
+PLUGIN_RELOAD_DEBOUNCE_MS = 400
+WELCOME_DELAY_MS = 800
+ELECTRON_PASTE_COMMIT_S = 0.08
+ANCHOR_TO_POINTER = None
+UNKNOWN_PID = "unknown"
 
-# Kept open for the life of the process: the kernel drops the flock with the fd
+# The kernel drops the flock when this fd closes, so it stays open for good.
 _lock_fd: int | None = None
 
 
+def _lock_holder_pid() -> str:
+    try:
+        with open(LOCK_FILE, encoding="utf-8") as f:
+            return f.read().strip() or UNKNOWN_PID
+    except OSError:
+        return UNKNOWN_PID
+
+
 def _acquire_single_instance_lock() -> None:
-    """Refuse to start a second copy. Uses fcntl.flock - robust against
-    crashes (kernel releases the lock automatically when the process dies,
-    no stale-lockfile cleanup needed)."""
+    """Refuse to start a second copy: open the running one's Settings
+    instead, or say it's running when it doesn't answer (pinned by
+    `tests/test_single_instance.py::test_second_copy_opens_settings_in_the_running_one`,
+    `tests/test_single_instance.py::test_second_copy_notifies_when_the_running_one_does_not_answer`).
+    A flock dies with its process, so a crash leaves no stale lock."""
     global _lock_fd
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
@@ -140,19 +165,12 @@ def _acquire_single_instance_lock() -> None:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, BlockingIOError):
         os.close(fd)
-        # Opened again from the app launcher: show the running copy's Settings.
         from core import remote
 
         if remote.send("settings") == 0:
             sys.exit(0)
-        # Read the existing PID for the user-facing message
-        try:
-            with open(LOCK_FILE, encoding="utf-8") as f:
-                existing_pid = f.read().strip() or "unknown"
-        except OSError:
-            existing_pid = "unknown"
         message = (
-            f"vinoPop is already running (PID {existing_pid}). "
+            f"vinoPop is already running (PID {_lock_holder_pid()}). "
             "Open the tray icon to use it. To force-restart, kill the "
             "existing process first: pkill -x vinopop"
         )
@@ -161,7 +179,6 @@ def _acquire_single_instance_lock() -> None:
 
         actions.notify("vinoPop is already running", message, urgency="normal")
         sys.exit(0)
-    # Write our PID inside the (now-locked) file for diagnostics
     os.ftruncate(fd, 0)
     os.write(fd, f"{os.getpid()}\n".encode("ascii"))
     _lock_fd = fd
@@ -169,22 +186,23 @@ def _acquire_single_instance_lock() -> None:
 
 log = logging.getLogger("vinopop")
 
-# One OCR capture at a time (see App._on_ocr_hotkey).
 _ocr_busy = threading.Lock()
-# One popup lookup at a time (see App._off_main).
 _popup_prep = threading.Lock()
+
+
+def _make_rotated_logs_private() -> None:
+    for i in range(1, LOG_BACKUP_COUNT + 1):
+        make_private(LOG_FILE.with_name(f"{LOG_FILE.name}.{i}"))
 
 
 def _setup_logging(debug: bool) -> None:
     private_dir(CACHE_DIR)
-    # Logs older versions wrote with the default umask.
-    for i in range(1, 4):
-        make_private(LOG_FILE.with_name(f"{LOG_FILE.name}.{i}"))
+    _make_rotated_logs_private()
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     level = logging.DEBUG if debug else logging.INFO
 
     file_handler = PrivateRotatingFileHandler(
-        LOG_FILE, maxBytes=512_000, backupCount=3, encoding="utf-8"
+        LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
     )
     file_handler.setFormatter(fmt)
     file_handler.setLevel(level)
@@ -208,6 +226,65 @@ def _pointer_position() -> tuple[int, int]:
     return get_backend().pointer_position()
 
 
+def _pointer_or_origin() -> tuple[int, int]:
+    try:
+        return _pointer_position()
+    except Exception:
+        return 0, 0
+
+
+def _log_selection(ctype_value: str, text: str) -> None:
+    """The selected text itself only at --debug: it can be a password (pinned
+    by `tests/test_core_main.py::test_info_logs_only_the_selection_length`,
+    `tests/test_core_main.py::test_debug_logs_the_selected_text`)."""
+    log.info("[%s] %d-char selection", ctype_value, len(text))
+    log.debug("[%s] %r", ctype_value, text[:60].replace("\n", "↵"))
+
+
+def _anchor_rect(settings):
+    """The selection's rectangle, or ANCHOR_TO_POINTER when the setting is
+    off, AT-SPI is off or the app reports no selection geometry."""
+    if not bool(settings.get("popup_anchor_to_selection")):
+        return ANCHOR_TO_POINTER
+    try:
+        return focused_selection_rect()
+    except Exception as exc:  # noqa: BLE001
+        log.info("[anchor] selection-rect lookup failed: %s", exc)
+        return ANCHOR_TO_POINTER
+
+
+def _paste_and_enter_submit_key() -> str:
+    """Which key submits in the focused app, by the Paste & Enter plugin's rule."""
+    try:
+        import importlib
+
+        ea = (
+            importlib.import_module("vinopop_user_editing_actions")
+            if "vinopop_user_editing_actions" in sys.modules
+            else importlib.import_module("editing_actions")
+        )
+        return ea._submit_keystroke_for_focus()
+    except Exception:
+        return "Return"
+
+
+def _freeze_startup_objects() -> bool:
+    """The startup object graph lives as long as the daemon: stop re-scanning it."""
+    import gc
+
+    gc.collect()
+    gc.freeze()
+    return GLib.SOURCE_REMOVE
+
+
+def _reset_first_run() -> None:
+    for marker in FIRST_RUN_MARKERS:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _once(fn: Callable[[], list[str]]) -> Callable[[], list[str]]:
     """Memoise a no-argument lookup, so one popup costs one KWin round-trip."""
     cache: list[list[str]] = []
@@ -223,9 +300,9 @@ def _once(fn: Callable[[], list[str]]) -> Callable[[], list[str]]:
 def _active_window_blocked(
     patterns: list[str], haystacks_fn: Callable[[], list[str]] | None = None
 ) -> bool:
-    """Return True if the focused window's title or class matches any of the
-    user's block patterns (case-insensitive substring). The backend supplies
-    the haystacks (X11: Xlib; KDE Wayland: KWin script)."""
+    """Whether the focused window's title or class contains any block
+    pattern, case-insensitively."""
+
     if not patterns:
         return False
     haystacks = (haystacks_fn or get_backend().active_window_haystacks)()
@@ -256,25 +333,18 @@ class App:
         self.hotkey = None
         self.clipboard_hotkey = None
         self.ocr_hotkey = None
-        # Open/close/ignore for presses of the popup hotkey (#44)
         self._popup_toggle = HotkeyToggle()
-        # Created once double_click_popup_enabled is on.
         self.dblclick_watcher = None
         self._reload_pending_id: int | None = None
-        # What is grabbed right now. Settings saves are diffed against these:
-        # the dialog has already changed the settings singleton by then.
         self._bound_hotkey: str = ""
         self._bound_clipboard_hotkey: str = ""
         self._bound_ocr_hotkey: str = ""
-        # Poll or grab is decided when a hotkey thread starts.
         self._bound_use_polling: bool = bool(self.settings.get("hotkey_use_polling", False))
         self._watcher_active = False
         self.tray = None
         self.restart_requested = False
         self._settings_dialog = None
         self._plugin_dialog = None
-        # Background model download, so a second start (Settings switch,
-        # onboarding) doesn't stack another thread on the same download.
         self._prefetch_thread: threading.Thread | None = None
 
         if bool(self.settings.get("show_on_selection")):
@@ -291,9 +361,10 @@ class App:
         self._maybe_prefetch_model()
 
     def _maybe_prefetch_model(self) -> None:
-        """Start the background model download if the user said yes
-        (onboarding or Settings). Without that the first AI click downloads
-        it, so nobody gets a ~4 GB pull they didn't ask for."""
+        """Start the background model download, once, if the user said yes
+        in onboarding or Settings (pinned by
+        `tests/test_prefetch_consent.py::test_fresh_config_does_not_download`,
+        `tests/test_prefetch_consent.py::test_yes_from_onboarding_or_settings_downloads`)."""
         if not self.settings.get("ai_prefetch_model"):
             return
         if self._prefetch_thread is not None and self._prefetch_thread.is_alive():
@@ -312,15 +383,12 @@ class App:
         except Exception:
             log.exception("model prefetch failed to start")
 
-    # ---- popup invocation ----------------------------------------------------
-    #
-    # Whatever can block (xclip, KWin's helpers at up to 3 s each, Xlib, AT-SPI)
-    # runs on a worker under _popup_prep; only the show is on the GTK thread.
-
     def _off_main(self, fn: Callable[..., None], *args: object, drop_if_busy: bool = False) -> None:
-        """Run fn(*args) on a worker thread, one popup lookup at a time.
-        drop_if_busy (the hotkey) ignores the call while another lookup is
-        running, so autorepeat or a triple-press can't queue three popups."""
+        """Run fn(*args) on a worker thread, one popup lookup at a time, since
+        xclip, KWin, Xlib and AT-SPI can each block for seconds. drop_if_busy
+        ignores the call while another lookup runs, so autorepeat can't queue
+        popups (pinned by
+        `tests/test_daemon_lifecycle.py::test_popup_hotkey_runs_off_main_and_drops_presses_while_busy`)."""
         if drop_if_busy and not _popup_prep.acquire(blocking=False):
             log.info("[popup] previous trigger still being handled - ignoring")
             return
@@ -342,50 +410,44 @@ class App:
         self._off_main(self._prepare_popup, text, x, y)
 
     def _prepare_popup(self, text: str, x: int, y: int, via_hotkey: bool = False) -> None:
-        """Worker thread: filters and probes, then shows on the GTK thread."""
-        # No minimum length here: that filter is the watcher's alone
-        # (tests/test_min_selection.py).
+        """Worker thread: filters and probes, then shows on the GTK thread,
+        with one active-window lookup for the blocklist and the read-only
+        check (pinned by
+        `tests/test_daemon_lifecycle.py::test_prepare_popup_shows_on_the_gtk_thread_with_one_window_lookup`).
+        The minimum length is the watcher's filter, not this one's (pinned by
+        `tests/test_min_selection.py::test_the_hotkey_shows_a_selection_shorter_than_the_minimum`)."""
         if not text:
             log.info("[show-for] suppressed -- empty text")
             return
         if self.ignore_ws and not text.strip():
             log.info("[show-for] suppressed -- whitespace-only")
             return
-        # One active-window lookup shared by the blocklist and the
-        # read-only check (on KDE each one is a KWin round-trip).
         haystacks = _once(get_backend().active_window_haystacks)
         patterns = list(self.settings.get("blocklist_patterns") or [])
         if _active_window_blocked(patterns, haystacks):
             log.info("[blocked] suppressed popup -- active window matches blocklist")
             return
         ctype = classify(text)
-        # What was selected only at --debug: it can be a password or a token.
-        log.info("[%s] %d-char selection", ctype.value, len(text))
-        log.debug("[%s] %r", ctype.value, text[:60].replace("\n", "↵"))
+        _log_selection(ctype.value, text)
         extra_ro = tuple(self.settings.get("readonly_app_classes") or [])
         editable = is_focus_editable(extra_readonly_classes=extra_ro, haystacks=haystacks)
-        # None (AT-SPI off, or no selection geometry) anchors to the pointer.
-        rect = None
-        if bool(self.settings.get("popup_anchor_to_selection")):
-            try:
-                rect = focused_selection_rect()
-            except Exception as exc:  # noqa: BLE001
-                log.info("[anchor] selection-rect lookup failed: %s", exc)
-                rect = None
+        rect = _anchor_rect(self.settings)
 
         def _show() -> bool:
             self._note_use()
             self.popup.show_for(
                 text, x, y, ctype, editable=editable, rect=rect, via_hotkey=via_hotkey
             )
-            return False
+            return GLib.SOURCE_REMOVE
 
         GLib.idle_add(_show)
 
     def _on_popup_hotkey(self) -> None:
         """The popup hotkey, on the GTK thread: closes the popup when it's
-        showing, opens it otherwise. A press that's the key still held
-        (autorepeat) does neither."""
+        showing, opens it otherwise, and ignores autorepeat (pinned by
+        `tests/test_daemon_lifecycle.py::test_popup_hotkey_closes_a_showing_popup`,
+        `tests/test_daemon_lifecycle.py::test_popup_hotkey_opens_a_hidden_popup`,
+        `tests/test_daemon_lifecycle.py::test_a_held_popup_hotkey_keeps_the_popup_it_opened`)."""
         popup = self.popup
         action = self._popup_toggle.press(popup.win.get_visible(), popup.hotkey_shown_at)
         if action == CLOSE:
@@ -402,7 +464,6 @@ class App:
         self._off_main(self._gather_hotkey_popup, via_hotkey, drop_if_busy=True)
 
     def _gather_hotkey_popup(self, via_hotkey: bool = False) -> None:
-        # Timed and logged: a "had to press it three times" report needs both
         t0 = time.monotonic()
         source = self.settings.get("hotkey_source") or "primary"
         text = _read_selection(source)
@@ -412,10 +473,7 @@ class App:
             len(text),
             (time.monotonic() - t0) * 1000,
         )
-        try:
-            x, y = _pointer_position()
-        except Exception:
-            x, y = 0, 0
+        x, y = _pointer_or_origin()
         if not text:
             log.info("[hotkey-fire] no selection - showing paste menu")
             self._prepare_no_selection_popup(x, y, via_hotkey)
@@ -431,14 +489,10 @@ class App:
         GLib.idle_add(self._show_no_selection_popup, x, y, via_hotkey)
 
     def _show_no_selection_popup(self, x: int, y: int, via_hotkey: bool = False) -> bool:
-        """Build a PopClip-style edit menu for the no-selection case.
-
-        Shown when the popup hotkey fires while you're sitting in an
-        editable field with nothing selected. Mirrors PopClip's "click
-        in text field" popup: paste, select-all, backspace, plus the
-        clipboard picker as the dedicated entry point for snippets and
-        recent items. GTK thread; returns False so idle_add runs it once.
-        """
+        """The edit menu for an editable field with nothing selected, on the
+        GTK thread. "Paste from history" hops back to the GTK thread from the
+        popup's worker (pinned by
+        `tests/test_daemon_lifecycle.py::test_paste_from_history_goes_through_idle_add`)."""
 
         def _send_keys(combo: str) -> Callable[[], None]:
             def _fire() -> None:
@@ -447,69 +501,33 @@ class App:
             return _fire
 
         def _paste_then_enter() -> None:
-            # The Paste & Enter plugin's rule for which key submits in this app
-            try:
-                import importlib
-
-                ea = (
-                    importlib.import_module("vinopop_user_editing_actions")
-                    if "vinopop_user_editing_actions" in sys.modules
-                    else importlib.import_module("editing_actions")
-                )
-                submit_key = ea._submit_keystroke_for_focus()
-            except Exception:
-                submit_key = "Return"
+            submit_key = _paste_and_enter_submit_key()
             get_backend().paste()
-            # Electron and React inputs need a moment to commit the paste
-            time.sleep(0.08)
+            time.sleep(ELECTRON_PASTE_COMMIT_S)
             get_backend().send_key(submit_key)
 
-        items: list[tuple[str, str, Callable[[], None]]] = []
-        items.append(
-            (
-                "edit-paste-symbolic",
-                "Paste",
-                _send_keys("ctrl+v"),
-            )
-        )
-        items.append(
-            (
-                "go-jump-symbolic",
-                "Paste & Enter",
-                _paste_then_enter,
-            )
-        )
+        items: list[tuple[str, str, Callable[[], None]]] = [
+            ("edit-paste-symbolic", "Paste", _send_keys("ctrl+v")),
+            ("go-jump-symbolic", "Paste & Enter", _paste_then_enter),
+        ]
         if bool(self.settings.get("clipboard_history_enabled", True)):
             items.append(
                 (
                     "vinopop-clipboard-symbolic",
                     "Paste from history",
-                    # Popup callbacks run on a worker thread; the picker
-                    # and the fallback popup are GTK, so hop back first.
                     lambda: GLib.idle_add(self._on_clipboard_hotkey),
                 )
             )
-        items.append(
-            (
-                "edit-select-all-symbolic",
-                "Select all",
-                _send_keys("ctrl+a"),
-            )
-        )
-        items.append(
-            (
-                "edit-clear-symbolic",
-                "Backspace",
-                _send_keys("BackSpace"),
-            )
-        )
+        items += [
+            ("edit-select-all-symbolic", "Select all", _send_keys("ctrl+a")),
+            ("edit-clear-symbolic", "Backspace", _send_keys("BackSpace")),
+        ]
         self._note_use()
         self.popup.show_actions(items, x, y, via_hotkey=via_hotkey)
-        return False
+        return GLib.SOURCE_REMOVE
 
     def _maybe_start_dblclick_watcher(self) -> None:
-        """Honour the double_click_popup_enabled setting. Idempotent.
-        Called at startup and again from the settings callback."""
+        """Start or stop the watcher to match double_click_popup_enabled. Idempotent."""
         enabled = bool(self.settings.get("double_click_popup_enabled", False))
         if enabled:
             if self.dblclick_watcher is None:
@@ -523,12 +541,8 @@ class App:
             self.dblclick_watcher = None
 
     def _on_global_double_click(self, x: int, y: int) -> None:
-        """PopClip-style: double-click inside an empty editable field
-        pops the edit menu. The watcher has already compared PRIMARY
-        before and after the second click - if a word got selected,
-        the watcher dropped the call entirely, so by the time we're
-        here we know it's a real "double-click in empty field" gesture.
-        We only need to confirm the focused widget is editable."""
+        """A double-click in an editable field pops the edit menu. The watcher
+        has already dropped double-clicks that selected a word."""
         self._off_main(self._prepare_double_click_popup, x, y)
 
     def _prepare_double_click_popup(self, x: int, y: int) -> None:
@@ -538,8 +552,6 @@ class App:
         except Exception:
             return
         self._prepare_no_selection_popup(x, y)
-
-    # ---- watcher -------------------------------------------------------------
 
     def _start_watcher(self) -> None:
         if self.watcher is not None:
@@ -562,7 +574,10 @@ class App:
         log.info("selection watcher started")
 
     def _below_min_selection(self, text: str) -> bool:
-        """The auto-popup's opt-in filter for very short selections."""
+        """The auto-popup's opt-in filter for very short selections (pinned by
+        `tests/test_min_selection.py::test_the_watcher_skips_a_selection_one_short_of_the_minimum`,
+        `tests/test_min_selection.py::test_the_watcher_shows_a_selection_at_the_minimum`,
+        `tests/test_min_selection.py::test_the_filter_is_off_until_enabled`)."""
         return bool(self.settings.get("min_selection_length_enabled")) and len(text) < self.min_len
 
     def _stop_watcher(self) -> None:
@@ -597,8 +612,6 @@ class App:
 
     def watcher_active(self) -> bool:
         return self._watcher_active
-
-    # ---- hotkey --------------------------------------------------------------
 
     def _start_hotkey(self) -> None:
         hotkey_str = (self.settings.get("hotkey") or "").strip()
@@ -651,8 +664,11 @@ class App:
         log.info("[ocr] hotkey '%s' bound (polling=%s)", hotkey_str, use_polling)
 
     def _on_ocr_hotkey(self) -> None:
+        """One capture at a time (pinned by
+        `tests/test_daemon_lifecycle.py::test_ocr_hotkey_drops_triggers_while_a_capture_runs`,
+        `tests/test_daemon_lifecycle.py::test_the_next_ocr_press_works_once_the_capture_is_done`,
+        `tests/test_daemon_lifecycle.py::test_ocr_lock_released_when_the_capture_raises`)."""
         self._note_use()
-        # test_ocr_hotkey_drops_triggers_while_a_capture_runs
         if not _ocr_busy.acquire(blocking=False):
             log.info("[ocr] capture already running - ignoring trigger")
             return
@@ -691,13 +707,8 @@ class App:
         self._bound_clipboard_hotkey = hotkey_str
 
     def _on_clipboard_hotkey(self) -> None:
-        """Capture the currently focused window BEFORE the picker steals
-        focus, then open the picker. Paste-on-select restores focus to
-        that window so Ctrl+V lands there.
-
-        plugin_loader gives every user plugin a sys.modules name of the
-        form 'vinopop_user_<stem>', so we look up the picker that way.
-        """
+        """Open the Clipboard plugin's picker, noting the focused window
+        before the picker takes focus so a paste lands back there."""
         self._note_use()
         mod = sys.modules.get("vinopop_user_clipboard_history")
         if mod is None or not hasattr(mod, "open_picker"):
@@ -714,21 +725,21 @@ class App:
                 "Clipboard picker unavailable", "Install the Clipboard plugin to get the picker."
             )
             return
-        try:
-            x, y = _pointer_position()
-        except Exception:
-            x, y = 0, 0
+        x, y = _pointer_or_origin()
         self._prepare_popup(text, x, y)
 
     def _apply_hotkey_settings(self) -> None:
         """Rebind whichever hotkeys changed since they were grabbed. Compares
-        against the _bound_* mirrors, not the settings singleton (settings_gui
-        has already mutated it by the time on_changed runs)."""
+        against the _bound_* mirrors: the Settings dialog has already changed
+        the settings singleton by the time this runs. Polling is X11-only and
+        tracked whatever is bound, so a save rebinds nothing it needn't (pinned by
+        `tests/test_daemon_lifecycle.py::test_the_first_save_after_turning_polling_on_rebinds_once`,
+        `tests/test_daemon_lifecycle.py::test_saves_dont_rebind_when_main_hotkey_is_cleared`,
+        `tests/test_daemon_lifecycle.py::test_polling_flip_is_ignored_on_wayland`,
+        `tests/test_daemon_lifecycle.py::test_an_unchanged_ocr_hotkey_binds_once_ocr_becomes_usable`)."""
         new_hotkey = (self.settings.get("hotkey") or "").strip()
         new_clip = (self.settings.get("clipboard_hotkey") or "").strip()
         new_polling = bool(self.settings.get("hotkey_use_polling", False))
-        # Polling is an X11-only grab mode; the Wayland backend ignores it, so a
-        # flip there must not tear down (and re-register) every shortcut.
         polling_changed = get_backend().name == "x11" and new_polling != self._bound_use_polling
         if polling_changed:
             log.info(
@@ -736,8 +747,6 @@ class App:
                 self._bound_use_polling,
                 new_polling,
             )
-        # Tracked on its own, not only when the main hotkey binds: with the main
-        # hotkey cleared it used to stay False, so every save rebound the rest.
         self._bound_use_polling = new_polling
         if new_hotkey != self._bound_hotkey or polling_changed:
             log.info(
@@ -765,7 +774,6 @@ class App:
             self._bound_clipboard_hotkey = ""
             if new_clip:
                 self._start_clipboard_hotkey()
-        # Also bound when it has just become usable (OCR installed from Settings)
         new_ocr = (self.settings.get("ocr_hotkey") or "").strip()
         if (
             new_ocr != self._bound_ocr_hotkey
@@ -779,12 +787,10 @@ class App:
             if new_ocr:
                 self._start_ocr_hotkey()
 
-    # ---- tray + dialogs ------------------------------------------------------
-
     def _poll_tray(self) -> bool:
         if self.tray is not None:
             self.tray.poll()
-        return True  # keep timeout alive
+        return GLib.SOURCE_CONTINUE
 
     def _start_tray(self) -> None:
         from tray.tray import Tray
@@ -799,7 +805,7 @@ class App:
             on_quit=self.quit,
             get_hide_after_minutes=lambda: self.settings.get_int("tray_idle_minutes"),
         )
-        GLib.timeout_add(200, self._poll_tray)
+        GLib.timeout_add(TRAY_POLL_MS, self._poll_tray)
 
     def _note_use(self) -> None:
         """Keeps the tray icon in view, or brings it back (tray_idle_minutes)."""
@@ -816,38 +822,35 @@ class App:
                 log.exception("settings_gui import failed")
                 return
 
-            def on_changed():
-                self.settings = get_settings()
-                self.min_len = self.settings.get_int("min_selection_length")
-                self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
-                self.popup._initial_grace_ms = self.settings.get_int("auto_hide_initial_ms")
-                self.popup._leave_grace_ms = self.settings.get_int("auto_hide_leave_ms")
-                if self.tray is not None:
-                    try:
-                        self.tray.reload_icon()
-                    except Exception:
-                        pass
-                self._sync_watcher_with_settings()
-                if self.watcher is not None:
-                    self.watcher.set_debounce_ms(self.settings.get_int("selection_debounce_ms"))
-                # Debounced: a burst of saves reloads the plugins once.
-                self._schedule_plugin_reload()
-                self._apply_hotkey_settings()
-                self._maybe_start_dblclick_watcher()
-                # The model download switch starts it now, not at next launch.
-                self._maybe_prefetch_model()
-                log.info("settings reloaded")
-
             self._settings_dialog = SettingsDialog(
-                on_changed=on_changed,
+                on_changed=self._apply_saved_settings,
                 on_restart=self.restart,
                 on_open_plugins=self.open_plugins,
             )
         try:
-            # Subsequent calls just present() the existing window.
             self._settings_dialog.show()
         except Exception:
             log.exception("settings dialog crashed")
+
+    def _apply_saved_settings(self) -> None:
+        self.settings = get_settings()
+        self.min_len = self.settings.get_int("min_selection_length")
+        self.ignore_ws = bool(self.settings.get("ignore_whitespace_only"))
+        self.popup._initial_grace_ms = self.settings.get_int("auto_hide_initial_ms")
+        self.popup._leave_grace_ms = self.settings.get_int("auto_hide_leave_ms")
+        if self.tray is not None:
+            try:
+                self.tray.reload_icon()
+            except Exception:
+                pass
+        self._sync_watcher_with_settings()
+        if self.watcher is not None:
+            self.watcher.set_debounce_ms(self.settings.get_int("selection_debounce_ms"))
+        self._schedule_plugin_reload()
+        self._apply_hotkey_settings()
+        self._maybe_start_dblclick_watcher()
+        self._maybe_prefetch_model()
+        log.info("settings reloaded")
 
     def open_plugins(self, tab: str | None = None) -> None:
         log.info("opening plugin manager…")
@@ -870,8 +873,6 @@ class App:
             log.exception("plugin manager dialog crashed")
 
     def open_about(self) -> None:
-        # Adw.AboutDialog (libadwaita 1.5); with no parent window it opens as
-        # its own window. Non-modal: no GTK 4 equivalent of dialog.run().
         about = Adw.AboutDialog()
         about.set_application_name("vinoPop")
         about.set_version(__version__)
@@ -880,25 +881,20 @@ class App:
         )
         about.set_license_type(Gtk.License.MIT_X11)
         about.set_application_icon("vinopop")
-        # Forks can point this at their own repo via VINOPOP_PROJECT_URL.
         project_url = (
             os.environ.get("VINOPOP_PROJECT_URL") or "https://github.com/karanshukla/vinoPop"
         )
         about.set_website(project_url)
         about.set_issue_url(f"{project_url.rstrip('/')}/issues")
         about.set_developer_name("Karan Shukla")
-        # vinoPop is a fork of LinuxPop; credit the original project.
         about.add_credit_section(
             "Based on LinuxPop by",
             ["Robert Berge https://github.com/GaimsDevSoftware/linuxpop"],
         )
-        # The family: vinopilot.ca, then the other apps (core/vino_family.py).
         about.add_link(vino_family.SITE_LABEL, vino_family.SITE)
         for app in vino_family.others("vinoPop"):
             about.add_link(f"{app.name}: {app.blurb}", app.page)
         about.present(None)
-
-    # ---- first-run experience ------------------------------------------------
 
     def _maybe_first_run(self) -> None:
         if FIRST_RUN_MARKER.is_file():
@@ -924,7 +920,7 @@ class App:
                         self.settings,
                         on_open_plugins=self.open_plugins,
                     )
-                    return False
+                    return GLib.SOURCE_REMOVE
                 except Exception:
                     log.exception("welcome dialog failed; falling back to notify")
                 from core import actions
@@ -934,22 +930,21 @@ class App:
                     "Select text anywhere to see actions. Tray icon has settings & plugins.",
                     timeout_ms=8000,
                 )
-            return False
+            return GLib.SOURCE_REMOVE
 
-        GLib.timeout_add(800, _open_welcome)
-
-    # ---- lifecycle -----------------------------------------------------------
+        GLib.timeout_add(WELCOME_DELAY_MS, _open_welcome)
 
     def _schedule_plugin_reload(self) -> None:
+        """Debounced, so a burst of saves reloads the plugins once."""
         if self._reload_pending_id is not None:
             GLib.source_remove(self._reload_pending_id)
 
         def _do_reload() -> bool:
             self._reload_pending_id = None
             plugin_loader.load_all()
-            return False
+            return GLib.SOURCE_REMOVE
 
-        self._reload_pending_id = GLib.timeout_add(400, _do_reload)
+        self._reload_pending_id = GLib.timeout_add(PLUGIN_RELOAD_DEBOUNCE_MS, _do_reload)
 
     def quit(self) -> None:
         gtk4_app.quit()
@@ -960,16 +955,27 @@ class App:
         self.restart_requested = True
         self.quit()
 
+    def stop_inputs(self) -> None:
+        for source in (
+            self.watcher,
+            self.hotkey,
+            self.clipboard_hotkey,
+            self.ocr_hotkey,
+            self.dblclick_watcher,
+        ):
+            if source:
+                source.stop()
+
 
 def _install_signal_handlers(app: App) -> None:
-    """Quit cleanly on Ctrl+C, `kill`/`pkill` (SIGTERM) and a closed terminal
-    or logout (SIGHUP). The shutdown path in main() unregisters the hotkeys;
-    skipping it left KGlobalAccel actions registered, still holding the chords.
-    GLib-level handlers fire reliably while the main loop sits in C."""
+    """Quit through main()'s shutdown path on SIGINT, SIGTERM and SIGHUP:
+    without it KGlobalAccel keeps the hotkeys' chords registered (pinned by
+    `tests/test_daemon_lifecycle.py::test_sigint_sigterm_sighup_quit_the_app`).
+    GLib's handlers, unlike Python's, fire while the main loop sits in C."""
 
     def _quit(*_args: object) -> bool:
         app.quit()
-        return True  # GLib.SOURCE_CONTINUE: a second signal still quits
+        return GLib.SOURCE_CONTINUE
 
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, _quit)
@@ -1003,20 +1009,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _exec_again(entry_point: str) -> None:
+    """Restart in this process with the entry point that started it (the
+    launcher, or main.py from an old autostart entry). os.open fds are
+    close-on-exec, so the new process can take the single-instance lock."""
+    os.execv(sys.executable, [sys.executable, entry_point, *sys.argv[1:]])
+
+
 def main(argv: list[str] | None = None) -> int:
-    # Captured before anything can chdir; the restart below re-runs it.
+    # Before anything can chdir.
     entry_point = os.path.abspath(sys.argv[0])
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.reset_first_run:
-        for marker in (
-            FIRST_RUN_MARKER,
-            CONFIG_DIR / ".default-plugins-seeded",
-            CONFIG_DIR / ".default-recipes-seeded",
-        ):
-            try:
-                marker.unlink(missing_ok=True)
-            except OSError:
-                pass
+        _reset_first_run()
 
     _setup_logging(args.debug)
     log.info("[display] %s", _GDK_BACKEND_CHOICE)
@@ -1031,8 +1036,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # SIGCHLD stays at its default: SIG_IGN froze the UI
     # (docs/how-it-works.md#threads-and-x11).
-
-    # Opens the display _choose_gdk_backend picked.
     gtk4_app.init()
     theme.install_premium_theme(get_settings().get("theme", "dark") or "dark")
 
@@ -1047,37 +1050,15 @@ def main(argv: list[str] | None = None) -> int:
         "on" if app.watcher else "off",
     )
     print("[vinopop] running - Ctrl+C to quit. Logs at " + str(LOG_FILE))
-
-    # The startup object graph lives as long as the daemon: stop re-scanning it.
-    def _freeze_gc_after_startup():
-        import gc
-
-        gc.collect()
-        gc.freeze()
-        return False
-
-    GLib.idle_add(_freeze_gc_after_startup)
+    GLib.idle_add(_freeze_startup_objects)
 
     gtk4_app.run()
-    if app.watcher:
-        app.watcher.stop()
-    if app.hotkey:
-        app.hotkey.stop()
-    if app.clipboard_hotkey:
-        app.clipboard_hotkey.stop()
-    if app.ocr_hotkey:
-        app.ocr_hotkey.stop()
-    if app.dblclick_watcher:
-        app.dblclick_watcher.stop()
+    app.stop_inputs()
     if app.restart_requested:
         if app.tray is not None:
             app.tray.stop()
         logging.shutdown()
-        # The single-instance lock fd is close-on-exec, so the new
-        # process can take it.
-        # Re-run whichever entry point started us: the vinopop launcher, or
-        # main.py from an old autostart entry.
-        os.execv(sys.executable, [sys.executable, entry_point, *sys.argv[1:]])
+        _exec_again(entry_point)
     return 0
 
 

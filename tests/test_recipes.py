@@ -26,10 +26,11 @@ def test_render_substitutes_selection_variants():
     assert recipe_loader._render("{unknown} {text}", "x") == "{unknown} x"
 
 
-def test_selection_is_never_run_through_the_snippet_engine(snippet_engine):
-    # The template's own tokens expand...
+def test_the_templates_own_snippet_tokens_expand(snippet_engine):
     assert recipe_loader._render("{date}: {text}", "hi") == "2026-01-02: hi"
-    # ...but a selection that merely looks like one is left alone.
+
+
+def test_selection_is_never_run_through_the_snippet_engine(snippet_engine):
     assert recipe_loader._render("echo {text_shell}", "{shell:id}") == "echo '{shell:id}'"
     assert recipe_loader._render("{text}", "{date}") == "{date}"
     assert all("{shell:id}" not in seen for seen in snippet_engine)
@@ -79,9 +80,6 @@ def test_bundled_recipes_validate():
 
     for path in _bundled_and_fixture_recipes():
         assert recipe_loader.validate(json.loads(path.read_text())) == [], path.name
-
-
-# ---- shell safety --------------------------------------------------------------
 
 
 def _run(template):
@@ -228,7 +226,9 @@ def test_command_argv_keeps_the_values_out_of_the_script():
         "a;b",
         "a%3Bb",
     ]
-    # the same placeholder twice is one argument
+
+
+def test_the_same_placeholder_twice_is_one_argument():
     assert recipe_loader._command_argv("echo {text}{text}", "a")[2:] == [
         'vinopop_1=$1; echo "${vinopop_1}""${vinopop_1}"',
         "vinopop",
@@ -352,8 +352,6 @@ def test_escaped_braces_render_as_literals_in_a_command():
 
 
 def test_a_nul_in_a_template_is_refused():
-    # The old renderer used \x00name\x00 as an internal marker: a template
-    # containing one passed every check and then received the raw selection.
     recipe = _run("echo \x00text\x00")
     assert any("NUL" in e for e in recipe_loader.validate(recipe))
     assert recipe_loader.safety_errors(recipe)
@@ -370,17 +368,21 @@ def test_a_nul_in_the_selection_reports_an_error_instead_of_raising(monkeypatch)
     assert notes and "Recipe error" in notes[0]
 
 
-def test_chain_run_command_steps_are_checked_too():
-    def chain(step):
-        return {"name": "x", "action": {"type": "chain", "steps": [step]}}
+def _chain(step):
+    return {"name": "x", "action": {"type": "chain", "steps": [step]}}
 
-    assert recipe_loader.safety_errors(chain({"type": "run_command", "template": "echo {text!r}"}))
-    # an empty template would execute the selection itself
-    assert recipe_loader.safety_errors(chain({"type": "run_command"}))
+
+def test_a_chain_command_step_without_a_template_is_refused():
+    """It would run the (transformed) selection itself."""
+    assert recipe_loader.safety_errors(_chain({"type": "run_command"}))
+
+
+def test_chain_run_command_steps_are_checked_too():
+    assert recipe_loader.safety_errors(_chain({"type": "run_command", "template": "echo {text!r}"}))
     assert not recipe_loader.safety_errors(
-        chain({"type": "run_command", "template": "echo {text}"})
+        _chain({"type": "run_command", "template": "echo {text}"})
     )
-    assert not recipe_loader.safety_errors(chain({"type": "notify", "template": "{text}"}))
+    assert not recipe_loader.safety_errors(_chain({"type": "notify", "template": "{text}"}))
 
 
 def test_chain_run_command_step_gets_the_value_as_an_argument(tmp_path, fake_desktop):
@@ -465,9 +467,6 @@ def test_validate_accepts_normal_templates():
         assert recipe_loader.validate(recipe) == [], template
 
 
-# ---- loading robustness (#33) ------------------------------------------------
-
-
 def _write_recipes(directory, recipes):
     import json
 
@@ -541,8 +540,6 @@ def date_engine(monkeypatch):
     ],
 )
 def test_snippet_tokens_with_a_colon_dont_break_the_template(date_engine, template, expected):
-    # format_map used to read {date:+7d} as a format spec, fail, and leave
-    # {text_url} unsubstituted too
     assert recipe_loader._render(template, "a b") == expected
 
 
@@ -557,8 +554,8 @@ def test_b64_decode_still_decodes_real_base64():
 
 
 def test_wizard_presets_skip_what_the_plugin_trim_removed():
-    # 3c01e65 dropped speak.py, define and google-translate: the wizard
-    # shouldn't offer them back as one-click presets.
+    """speak.py, define and google-translate are no longer bundled, so the
+    wizard doesn't offer them as presets."""
     pytest.importorskip("gi")
     from ui import recipe_wizard
 

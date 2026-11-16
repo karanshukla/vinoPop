@@ -1,12 +1,9 @@
-"""The XWayland backend: how vinoPop runs on GNOME, sway, Hyprland and every
-other Wayland desktop except KDE Plasma (which has wayland_kde.py). The whole
-process, GTK included, runs on XWayland inside the Wayland session. A plain
-Xorg session takes the same path, best-effort. The module and the
-VINOPOP_BACKEND value keep the name "x11" for compatibility.
+"""The XWayland backend, for every Wayland desktop except KDE Plasma (which
+has wayland_kde.py) and, best-effort, plain Xorg. The whole process, GTK
+included, runs on XWayland. The name stays "x11" for VINOPOP_BACKEND.
 
-Wraps xclip (selection/clipboard; see read_selection for why not
-wl-clipboard), Xlib (pointer, popup placement, active window, keystrokes and
-typing over XTEST) and the X11 watcher / hotkey / double-click modules.
+Wraps xclip (selection/clipboard), Xlib (pointer, popup placement, active
+window, keystrokes and typing over XTEST) and the X11 trigger modules.
 """
 
 from __future__ import annotations
@@ -19,25 +16,25 @@ import time
 
 from .base import PlatformBackend
 
-# Reused Xlib connection for pointer queries (opening a fresh Display() per
-# call costs ~5-15 ms of XOpenDisplay roundtrip, which the hotkey path hits on
-# every press). Module-scope; never closed - lives for the process lifetime.
+# One Xlib connection for the process, reopened after a failure: opening one
+# costs 5-15 ms (measured 2026-06), paid on every hotkey press otherwise.
 _pointer_dpy = None
-# The hotkey path queries the pointer from a worker thread, other callers from
-# the GTK thread; python-xlib connections aren't thread-safe by default.
+# python-xlib connections aren't thread-safe; the hotkey worker thread and
+# the GTK thread both use _pointer_dpy.
 _pointer_lock = threading.Lock()
+
+# Large selections (LibreOffice) read as empty with 0.5 s. Callers wait off
+# the GTK thread.
+XCLIP_TIMEOUT_S = 2.0
+XWAYLAND_WARNING_MS = 6000
 
 
 class X11Backend(PlatformBackend):
     name = "x11"
     popup_uses_xlib = True
 
-    # ---- session ---------------------------------------------------------
     def check_session(self) -> None:
-        """XWayland (GNOME, sway ...) is the main path and warns about its
-        limits; a plain Xorg session works best-effort. Without a DISPLAY
-        there is no XWayland to run on, which is fatal (KDE Plasma Wayland
-        gets the wayland_kde backend instead)."""
+        """Exit without a DISPLAY; warn about XWayland's limits under Wayland."""
         has_x11 = bool(os.environ.get("DISPLAY"))
         has_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
         if not has_x11:
@@ -53,28 +50,21 @@ class X11Backend(PlatformBackend):
             print(f"[vinopop] WARNING: {warning}", file=sys.stderr)
             from core import actions
 
-            actions.notify("Limited under XWayland", warning, timeout_ms=6000, urgency="normal")
+            actions.notify(
+                "Limited under XWayland", warning, timeout_ms=XWAYLAND_WARNING_MS, urgency="normal"
+            )
 
-    # ---- selection / clipboard ------------------------------------------
-    # xclip, not wl-clipboard, even with a WAYLAND_DISPLAY: don't "fix" this.
-    # wl-copy/wl-paste only work cleanly on a compositor with a data-control
-    # protocol (zwlr_data_control_manager_v1 or ext_data_control_manager_v1).
-    # Mutter (GNOME) has neither: there wl-copy falls back to a focus-stealing
-    # popup surface that flashes a window or fails silently, and
-    # wl-paste --primary can hang. This process runs on XWayland, and the
-    # compositor bridges the X selections to Wayland apps both ways, so xclip
-    # reaches native Wayland apps too. sway and KWin do have data-control,
-    # which is why wl-clipboard looks fine there; wayland_kde.py uses it.
     def read_selection(self, source: str) -> str:
+        """Read with xclip even under Wayland. wl-clipboard needs a
+        data-control protocol, which Mutter lacks (wl-copy flashes a window
+        or fails, wl-paste --primary can hang); the compositor bridges X
+        selections to Wayland apps both ways."""
         sel = "primary" if source.lower() == "primary" else "clipboard"
         try:
-            # Same 2 s as the watcher: 0.5 s read large selections
-            # (LibreOffice) as empty and showed the no-selection menu. The
-            # hotkey path calls this off the GTK thread, so waiting is safe.
             out = subprocess.run(
                 ["xclip", "-selection", sel, "-o"],
                 capture_output=True,
-                timeout=2.0,
+                timeout=XCLIP_TIMEOUT_S,
             )
             return out.stdout.decode("utf-8", errors="replace")
         except (OSError, subprocess.SubprocessError):
@@ -91,12 +81,11 @@ class X11Backend(PlatformBackend):
                 ["xclip", "-selection", "clipboard"],
                 input=text.encode("utf-8"),
                 check=False,
-                timeout=2.0,
+                timeout=XCLIP_TIMEOUT_S,
             )
         except subprocess.SubprocessError as exc:
             print(f"[x11] xclip failed: {exc}")
 
-    # ---- pointer ---------------------------------------------------------
     def pointer_position(self) -> tuple[int, int]:
         with _pointer_lock:
             return self._pointer_position_locked()
@@ -118,7 +107,6 @@ class X11Backend(PlatformBackend):
             _pointer_dpy = None
             raise
 
-    # ---- keystroke injection --------------------------------------------
     def send_key(self, combo: str) -> None:
         if send_keys(combo):
             return
@@ -143,62 +131,35 @@ class X11Backend(PlatformBackend):
             "x11", "Typing text needs the X server's XTEST extension, which this one lacks."
         )
 
-    # ---- opening URLs ----------------------------------------------------
     def open_url(self, url: str) -> None:
         import shutil
 
         if not shutil.which("xdg-open"):
             print("[x11] xdg-open not available")
             return
-        # X11 window managers raise the browser on their own.
         subprocess.Popen(["xdg-open", url], start_new_session=True)
 
-    # ---- active window ---------------------------------------------------
     def active_window_haystacks(self) -> list[str]:
-        """Window title + the WM_CLASS line in xprop's shape
-        (`wm_class(string) = "instance", "class"`, which
-        editable_detect._window_class matches on). Read over the shared Xlib
-        connection: it runs on every popup, and xdotool + xprop were three
-        process spawns."""
-        global _pointer_dpy
-        from Xlib import X, display
-        from Xlib.error import XError
+        """Window title and the WM_CLASS line in xprop's shape, which
+        editable_detect._window_class matches on."""
 
-        with _pointer_lock:
-            if _pointer_dpy is None:
-                _pointer_dpy = display.Display()
-            dpy = _pointer_dpy
-            try:
-                prop = dpy.screen().root.get_full_property(
-                    dpy.intern_atom("_NET_ACTIVE_WINDOW"), X.AnyPropertyType
-                )
-                wid = prop.value[0] if prop is not None and len(prop.value) else 0
-                if not wid:
-                    return []
-                win = dpy.create_resource_object("window", wid)
-                name = win.get_full_property(
-                    dpy.intern_atom("_NET_WM_NAME"), dpy.intern_atom("UTF8_STRING")
-                )
-                title = name.value if name is not None else win.get_wm_name()
-                if isinstance(title, bytes):
-                    title = title.decode("utf-8", errors="replace")
-                cls = win.get_wm_class()
-            except XError:
-                return []  # the window went away between the two reads
-            except Exception as exc:  # noqa: BLE001 - connection gone
-                print(f"[x11] active-window query failed: {exc}")
-                try:
-                    dpy.close()
-                except Exception:
-                    pass
-                _pointer_dpy = None
+        def read(dpy) -> list[str]:
+            wid = _active_window(dpy)
+            if not wid:
                 return []
-        haystacks = [title.lower()] if title else []
-        if cls:
-            haystacks.append(f'wm_class(string) = "{cls[0]}", "{cls[1]}"'.lower())
-        return haystacks
+            win = dpy.create_resource_object("window", wid)
+            name = win.get_full_property(
+                dpy.intern_atom("_NET_WM_NAME"), dpy.intern_atom("UTF8_STRING")
+            )
+            title = name.value if name is not None else win.get_wm_name()
+            if isinstance(title, bytes):
+                title = title.decode("utf-8", errors="replace")
+            haystacks = [title.lower()] if title else []
+            wm_class = _xprop_wm_class(win.get_wm_class())
+            return haystacks + [wm_class] if wm_class else haystacks
 
-    # ---- component factories --------------------------------------------
+        return _on_shared_display(read, [])
+
     def make_selection_watcher(self, on_selection, debounce_ms):
         from triggers.watcher import SelectionWatcher
 
@@ -223,7 +184,6 @@ class X11Backend(PlatformBackend):
 
         return DoubleClickWatcher(on_double_click)
 
-    # ---- popup positioning ----------------------------------------------
     def prepare_popup_window(self, win) -> None:
         x11_prepare_popup_window(win)
 
@@ -231,21 +191,19 @@ class X11Backend(PlatformBackend):
         x11_move_popup_window(win, x, y)
 
 
-# Keystrokes, typing and window activation over XTEST, on the shared
-# _pointer_dpy connection under _pointer_lock. Design and measurements:
-# docs/how-it-works.md#keystrokes-on-x11. tests/test_x11_keys.py pins the
-# modifier handling and one spare keycode per missing keysym.
+# Keystrokes, typing and window activation over XTEST on _pointer_dpy
+# (docs/how-it-works.md#keystrokes-on-x11).
 
-# How long a scratch keycode stays bound after its key events before it's
-# rebound, when there are more missing keysyms than spare keycodes, so the
-# client has handled the events before the binding changes under it.
+# A scratch keycode stays bound this long after its key events before it's
+# rebound, so the client reads the events before the binding changes.
 _REMAP_SETTLE_S = 0.012
-# How long the scratch keycodes stay bound after the last key event before
-# they're given back. Longer than the remap: a client still behind on its
-# event queue drops every character it hasn't read yet.
+# And this long after the last key event before it's given back: a client
+# behind on its event queue drops every character it hasn't read yet.
 _RESTORE_SETTLE_S = 0.25
+_ACTIVATE_POLL_S = 0.02
+# _NET_ACTIVE_WINDOW source indication "pager": WMs skip focus-stealing checks.
+_EWMH_SOURCE_PAGER = 2
 
-# xdotool's modifier spellings -> X keysym names
 _MODIFIER_NAMES = {
     "ctrl": "Control_L",
     "control": "Control_L",
@@ -259,9 +217,9 @@ _xtest_ok: bool | None = None
 
 
 def _on_shared_display(fn, default):
-    """fn(dpy) on the shared connection, or `default` if there's no X
-    display or python-xlib, or the connection broke (it's reopened next
-    time)."""
+    """fn(dpy) on the shared connection, or `default` when there's no X
+    display, no python-xlib, an X error, or a broken connection (reopened
+    next time)."""
     global _pointer_dpy
     with _pointer_lock:
         try:
@@ -271,7 +229,7 @@ def _on_shared_display(fn, default):
                 _pointer_dpy = display.Display()
             return fn(_pointer_dpy)
         except Exception as exc:  # noqa: BLE001
-            if _is_xerror(exc):  # e.g. BadWindow: the connection is fine
+            if _is_xerror(exc):
                 return default
             print(f"[x11] Xlib request failed: {exc}")
             try:
@@ -292,49 +250,58 @@ def _is_xerror(exc: Exception) -> bool:
 
 
 def _keysym(name: str) -> int:
+    """X keysym for an xdotool key name. A capital letter means its key, not
+    Shift+key (pinned by `tests/test_x11_keys.py::test_named_keys_and_capitals`)."""
     from Xlib import XK
 
     if len(name) == 1 and name.isascii() and name.isprintable():
-        # 'V' -> 'v' so a chord never asks for an implicit Shift.
         name = name.lower()
         return XK.string_to_keysym(name) or ord(name)
     return XK.string_to_keysym(_MODIFIER_NAMES.get(name.lower(), name))
 
 
+def _key_is_down(keymap, keycode: int) -> bool:
+    """Whether `keycode` is set in a QueryKeymap bit vector."""
+    return bool(keymap[keycode // 8] & (1 << (keycode % 8)))
+
+
 def _held_modifiers(dpy) -> list[int]:
-    """Keycodes of modifier keys (not Caps or Num Lock) that are down now."""
+    """Keycodes of modifier keys that are down now, except Caps and Num Lock
+    (pinned by `tests/test_x11_keys.py::test_held_modifiers_are_lifted_and_put_back`)."""
     from Xlib import X
 
+    caps_and_num_lock = (X.LockMapIndex, X.Mod2MapIndex)
     keymap = dpy.query_keymap()
     held: list[int] = []
     for index, keycodes in enumerate(dpy.get_modifier_mapping()):
-        if index in (X.LockMapIndex, X.Mod2MapIndex):  # Caps Lock, Num Lock
+        if index in caps_and_num_lock:
             continue
         for kc in keycodes:
-            if kc and keymap[kc // 8] & (1 << (kc % 8)) and kc not in held:
+            if kc and _key_is_down(keymap, kc) and kc not in held:
                 held.append(kc)
     return held
 
 
 class _Scratch:
-    """Spare keycodes (ones with no keysyms) that keys missing from the
-    layout are bound to while they're typed, one keycode per keysym. Found
-    on first use, and all `restore()`d to empty when the caller is done.
-    Only when the missing keysyms outnumber the spare keycodes is one
-    rebound, the least recently used. Clients learn about each binding from
-    the server's MappingNotify."""
+    """Spare keycodes (no keysyms) that keys missing from the layout are
+    bound to while typed, one per keysym, highest first, and all restored to
+    empty afterwards. Only when missing keysyms outnumber spare keycodes is
+    the least recently used one rebound (pinned by
+    `tests/test_x11_keys.py::test_a_key_the_layout_lacks_borrows_a_spare_keycode`,
+    `tests/test_x11_keys.py::test_typing_binds_each_missing_character_to_its_own_spare_keycode`,
+    `tests/test_x11_keys.py::test_more_missing_characters_than_spare_keycodes_rebinds_the_oldest`)."""
+
+    NOT_LOOKED_UP = None
 
     def __init__(self, dpy) -> None:
         self._dpy = dpy
-        self._free: list[int] | None = None  # None: not looked up yet
+        self._free: list[int] | None = self.NOT_LOOKED_UP
         self._bound: dict[int, int] = {}  # keysym -> keycode, least recent first
 
     def _find(self) -> list[int]:
         info = self._dpy.display.info
         lo, hi = info.min_keycode, info.max_keycode
         mapping = self._dpy.get_keyboard_mapping(lo, hi - lo + 1)
-        # The high keycodes are the ones the layout leaves unused; the list
-        # is popped from the end, so the highest goes first.
         return [lo + offset for offset, syms in enumerate(mapping) if not any(syms)]
 
     def _bind(self, keycode: int, keysym: int) -> None:
@@ -357,7 +324,7 @@ class _Scratch:
         """The scratch keycode bound to `keysym`, binding it if it isn't
         yet; 0 if the keyboard has no free keycode."""
         if keysym in self._bound:
-            self._bound[keysym] = self._bound.pop(keysym)  # most recent now
+            self._bound[keysym] = self._bound.pop(keysym)
             return self._bound[keysym]
         if self._free is None:
             self._free = self._find()
@@ -414,7 +381,8 @@ def xtest_send_key(
     `repeat` times, `delay_s` apart, with XTEST on `dpy`. A key the current
     layout lacks goes through a scratch keycode. Returns False, having sent
     nothing, when the server has no XTEST, the combo is empty, or a key has
-    no keysym at all."""
+    no keysym at all. A key on the Shift level gets Shift held (pinned by
+    `tests/test_x11_keys.py::test_a_shift_level_key_gets_shift`)."""
     from Xlib import X
     from Xlib.ext import xtest
 
@@ -433,7 +401,6 @@ def xtest_send_key(
             return False
         if kc not in chord:
             chord.append(kc)
-    # A key on the Shift level (e.g. 'plus' on a US layout) needs Shift held.
     if shifted:
         shift = dpy.keysym_to_keycode(_keysym("shift"))
         if shift and shift not in chord:
@@ -564,8 +531,7 @@ def activate_window(wid: int | str, timeout_s: float = 1.0) -> bool:
         msg = event.ClientMessage(
             window=dpy.create_resource_object("window", wid),
             client_type=dpy.intern_atom("_NET_ACTIVE_WINDOW"),
-            # source 2 = pager: WMs honour it without focus-stealing checks
-            data=(32, [2, X.CurrentTime, _active_window(dpy), 0, 0]),
+            data=(32, [_EWMH_SOURCE_PAGER, X.CurrentTime, _active_window(dpy), 0, 0]),
         )
         root.send_event(msg, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
         dpy.sync()
@@ -579,34 +545,33 @@ def activate_window(wid: int | str, timeout_s: float = 1.0) -> bool:
             return True
         if time.monotonic() >= deadline:
             return False
-        time.sleep(0.02)
+        time.sleep(_ACTIVATE_POLL_S)
 
 
 def window_wm_class(wid: int | str) -> str:
-    """WM_CLASS of X window `wid` in xprop's shape, lowercased
-    (`wm_class(string) = "instance", "class"`), or "" when it has none or is
-    gone. For callers that used to spawn `xprop -id <wid> WM_CLASS`."""
-
+    """WM_CLASS of X window `wid` as _xprop_wm_class gives it."""
     try:
         xid = int(wid)
     except ValueError:
         return ""
 
     def run(dpy) -> str:
-        cls = dpy.create_resource_object("window", xid).get_wm_class()
-        return f'wm_class(string) = "{cls[0]}", "{cls[1]}"'.lower() if cls else ""
+        return _xprop_wm_class(dpy.create_resource_object("window", xid).get_wm_class())
 
     return _on_shared_display(run, "")
 
 
-# Floating-window placement on X11 / XWayland: the window is marked
-# override-redirect before it is mapped and moved with XMoveWindow
-# (docs/how-it-works.md#popup-placement-on-x11). WaylandKdeBackend falls
-# back to this without gtk4-layer-shell.
+def _xprop_wm_class(cls) -> str:
+    """A WM_CLASS pair as xprop prints it, lowercased
+    (`wm_class(string) = "instance", "class"`), or "" for none."""
+    return f'wm_class(string) = "{cls[0]}", "{cls[1]}"'.lower() if cls else ""
 
-# Own Xlib connection for window attribute/move requests (main thread only).
-_win_dpy = None
-# id(win) -> (x, y) logical position requested before the window was realized.
+
+# Popup placement: override-redirect before mapping, then XMoveWindow
+# (docs/how-it-works.md#popup-placement-on-x11).
+
+_win_dpy = None  # GTK thread only, so separate from _pointer_dpy
+# id(win) -> logical (x, y) asked for before the window was realized
 _pending_xy: dict[int, tuple[int, int]] = {}
 _warned_not_x11 = False
 
@@ -659,8 +624,7 @@ def _scale_of(win) -> int:
 
 def _on_popup_realize(win) -> None:
     try:
-        # GDK created the X window on its own connection; make sure the
-        # server has processed that before we reference the XID on ours.
+        # GDK made the X window on its own connection: sync before using the XID.
         win.get_display().sync()
         xwin = _xwindow(win)
         if xwin is None:
@@ -669,9 +633,8 @@ def _on_popup_realize(win) -> None:
         from Xlib import Xatom
 
         xwin.change_attributes(override_redirect=True)
-        # Compositors (picom, muffin, mutter) still read the window type of an
-        # override-redirect window for shadows/animations - same hint GTK 3
-        # set for us via Gdk.WindowTypeHint.POPUP_MENU.
+        # Compositors still read an override-redirect window's type for
+        # shadows and animations.
         xwin.change_property(
             dpy.intern_atom("_NET_WM_WINDOW_TYPE"),
             Xatom.ATOM,
@@ -682,8 +645,7 @@ def _on_popup_realize(win) -> None:
         if pending is not None:
             s = _scale_of(win)
             xwin.configure(x=int(pending[0] * s), y=int(pending[1] * s))
-        # Round-trip so all of this lands before GTK maps the window.
-        dpy.sync()
+        dpy.sync()  # before GTK maps the window
     except Exception as exc:  # noqa: BLE001
         print(f"[x11] popup window setup failed: {exc}")
 
@@ -712,8 +674,7 @@ def x11_move_popup_window(win, x: int, y: int) -> None:
 
         s = _scale_of(win)
         if win.get_mapped():
-            # Override-redirect windows go on top when mapped; re-raise on
-            # every move so a dialog raised meanwhile can't cover the popup.
+            # Re-raise: a window raised since mapping could cover the popup.
             xwin.configure(x=int(x * s), y=int(y * s), stack_mode=X.Above)
         else:
             xwin.configure(x=int(x * s), y=int(y * s))

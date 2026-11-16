@@ -1,23 +1,16 @@
-"""Raw /dev/input reading, shared by everything that needs physical input on
-Wayland (the modifier+double-click watcher today; the selection watcher's
-"was this a real user gesture" check next).
+"""Raw /dev/input reading for everything that needs physical input on
+Wayland (the double-click watcher, the selection-gesture tracker).
 
-Which devices: every /dev/input/event* whose capability bits say it is a
-keyboard (EV_KEY with a modifier key) or a pointer (BTN_LEFT). Not the
-by-path links: keyd's virtual keyboard, Bluetooth and other hotplugged
-devices have none, and with keyd grabbing the physical keyboard its virtual
-device is the only place modifier presses show up. Excluded by name only:
-ydotoold's virtual device (our own injected keys would otherwise look like
-the user's) and anything vinoPop itself creates.
+Reads every /dev/input/event* whose capability bits make it a keyboard
+(EV_KEY with a modifier key) or a pointer (BTN_LEFT); not the by-path links,
+which keyd's virtual keyboard and Bluetooth devices lack. Excluded by name:
+ydotoold's device (our injected keys would look like the user's) and our own.
+/dev/input is rescanned every RESCAN_S seconds, for hotplug and for
+permissions that arrive after the node.
 
-Hotplug: /dev/input is rescanned every RESCAN_S seconds, which also picks up
-a node whose permissions (udev ACL / input group) arrive after it appears.
-
-Consumers subscribe with a callback; one reader thread serves them all and
-runs only while someone is subscribed. Callbacks run on that thread, so keep
-them short and thread-safe.
-
-Needs read access to /dev/input/event* (the `input` group on Fedora).
+One reader thread serves every subscriber, while there is one. Callbacks run
+on it, so keep them short and thread-safe. Needs read access to
+/dev/input/event* (the `input` group).
 """
 
 from __future__ import annotations
@@ -36,6 +29,10 @@ EV_KEY = 0x01
 EV_MAX = 0x1F
 KEY_MAX = 0x2FF
 BTN_LEFT = 0x110
+# InputEvent.value
+KEY_RELEASED, KEY_PRESSED, KEY_AUTOREPEAT = 0, 1, 2
+# xkb (and X) keycodes are evdev codes + 8
+EVDEV_TO_XKB_KEYCODE = 8
 
 KEY_LEFTCTRL, KEY_RIGHTCTRL = 29, 97
 KEY_LEFTSHIFT, KEY_RIGHTSHIFT = 42, 54
@@ -57,23 +54,39 @@ MODIFIER_KEYS = frozenset(
 KEYBOARD = "keyboard"
 POINTER = "pointer"
 
-# Lower-cased substrings of device names we never read.
 EXCLUDED_NAME_PARTS = ("ydotoold virtual device", "vinopop")
 
 _EVENT = struct.Struct("llHHi")  # struct input_event on 64-bit Linux
 
 
+# linux/ioctl.h: _IOC(dir, type, nr, size)
+_IOC_READ = 2
+_IOC_DIRSHIFT, _IOC_SIZESHIFT, _IOC_TYPESHIFT = 30, 16, 8
+_EVDEV_IOC_TYPE = ord("E")
+_EVIOCGNAME_NR = 0x06
+_EVIOCGBIT_NR = 0x20
+_NAME_BUF = 256
+
+
 def _ioc_read(nr: int, size: int) -> int:
-    # _IOC(_IOC_READ, 'E', nr, size)
-    return (2 << 30) | (size << 16) | (ord("E") << 8) | nr
+    return (
+        (_IOC_READ << _IOC_DIRSHIFT)
+        | (size << _IOC_SIZESHIFT)
+        | (_EVDEV_IOC_TYPE << _IOC_TYPESHIFT)
+        | nr
+    )
 
 
 def eviocgbit(ev: int, size: int) -> int:
-    return _ioc_read(0x20 + ev, size)
+    return _ioc_read(_EVIOCGBIT_NR + ev, size)
 
 
 def eviocgname(size: int) -> int:
-    return _ioc_read(0x06, size)
+    return _ioc_read(_EVIOCGNAME_NR, size)
+
+
+def _bitmap_size(max_code: int) -> int:
+    return max_code // 8 + 1
 
 
 def _bit(buf: bytes, n: int) -> bool:
@@ -116,13 +129,14 @@ def probe(
     """Name and kinds of an open evdev node. `ioctl(fd, request, size)`
     returns the filled buffer; tests pass a fake."""
     try:
-        raw = ioctl(fd, eviocgname(256), 256)
+        raw = ioctl(fd, eviocgname(_NAME_BUF), _NAME_BUF)
         name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
     except OSError:
         name = ""
     try:
-        ev_bits = ioctl(fd, eviocgbit(0, EV_MAX // 8 + 1), EV_MAX // 8 + 1)
-        key_bits = ioctl(fd, eviocgbit(EV_KEY, KEY_MAX // 8 + 1), KEY_MAX // 8 + 1)
+        ev_size, key_size = _bitmap_size(EV_MAX), _bitmap_size(KEY_MAX)
+        ev_bits = ioctl(fd, eviocgbit(0, ev_size), ev_size)
+        key_bits = ioctl(fd, eviocgbit(EV_KEY, key_size), key_size)
     except OSError:
         return DeviceInfo(path, name, frozenset())
     return DeviceInfo(path, name, classify(ev_bits, key_bits))
@@ -130,7 +144,7 @@ def probe(
 
 @dataclass(frozen=True)
 class InputEvent:
-    """One EV_KEY event. value: 1 press, 0 release, 2 autorepeat."""
+    """One EV_KEY event; value is KEY_PRESSED, KEY_RELEASED or KEY_AUTOREPEAT."""
 
     code: int
     value: int
@@ -168,7 +182,6 @@ class InputEventHub:
         self._skipped: dict[str, int] = {}  # path -> inode, not a device we want
         self.denied = 0  # nodes we couldn't open on the last scan
 
-    # ---- subscriptions -------------------------------------------------
     def subscribe(self, callback: Subscriber) -> int:
         with self._life:
             with self._lock:
@@ -194,15 +207,14 @@ class InputEventHub:
                 if self._subs:
                     return
             self._stop.set()
+            # Joined so the fds close before a new subscriber reopens them.
             t = self._thread
-            # Join so the fds are closed before a fresh subscriber reopens them.
             if t is not None and t is not threading.current_thread():
                 t.join(timeout=timeout)
 
     def devices(self) -> list[DeviceInfo]:
         return list(self._fds.values())
 
-    # ---- device set ----------------------------------------------------
     def scan(self) -> list[DeviceInfo]:
         """Open new keyboards / pointers under dev_dir. Returns the ones added."""
         added = []
@@ -247,7 +259,6 @@ class InputEventHub:
             self._drop(fd)
         self._skipped.clear()
 
-    # ---- reader --------------------------------------------------------
     def _run(self, stop: threading.Event) -> None:
         try:
             for info in self.scan():

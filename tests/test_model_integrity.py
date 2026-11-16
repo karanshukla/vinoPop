@@ -74,9 +74,6 @@ def _leftovers():
     return sorted(p.name for p in models.MODELS_DIR.iterdir() if p.name.startswith("."))
 
 
-# ---- markers and re-download ------------------------------------------------
-
-
 def test_fresh_download_is_verified_marked_and_swapped_in(hub, model):
     assert not models.is_downloaded(model)
     path = models.ensure_llm(model)
@@ -84,10 +81,18 @@ def test_fresh_download_is_verified_marked_and_swapped_in(hub, model):
     assert models.is_downloaded(model)
     assert (path / models.REVISION_MARKER).read_text().strip() == model.revision
     assert hub.calls[0]["revision"] == model.revision
-    assert hub.calls[0]["local_dir"] != str(path)  # downloaded aside, then swapped
     assert _leftovers() == []
+
+
+def test_download_goes_to_a_staging_folder_first(hub, model):
+    path = models.ensure_llm(model)
+    assert hub.calls[0]["local_dir"] != str(path)
+
+
+def test_marked_model_is_not_downloaded_again(hub, model):
     models.ensure_llm(model)
-    assert len(hub.calls) == 1  # no download once it's marked
+    models.ensure_llm(model)
+    assert len(hub.calls) == 1
 
 
 def test_revision_mismatch_re_downloads(hub, model):
@@ -97,12 +102,17 @@ def test_revision_mismatch_re_downloads(hub, model):
     models.ensure_llm(model)
     assert len(hub.calls) == 1
     assert models.downloaded_revision(old) == model.revision
-    assert not (old / "stale-only-in-old.bin").exists()  # the old folder is gone
     assert _leftovers() == []
 
 
+def test_re_download_replaces_the_old_folder(hub, model):
+    old = _folder(model, revision=OLD_REVISION)
+    (old / "stale-only-in-old.bin").write_bytes(b"x")
+    models.ensure_llm(model)
+    assert not (old / "stale-only-in-old.bin").exists()
+
+
 def test_missing_complete_marker_re_downloads(hub, model):
-    # Killed after the revision was written but before .complete: never adopted
     _folder(model, revision=model.revision, complete=False)
     assert not models.is_downloaded(model)
     models.ensure_llm(model)
@@ -111,7 +121,6 @@ def test_missing_complete_marker_re_downloads(hub, model):
 
 
 def test_folder_without_markers_is_not_downloaded(hub, model):
-    # The old check passed this: main xml/bin and tokenizer, no detokenizer
     partial = {k: v for k, v in FILES.items() if k != "openvino_detokenizer.xml"}
     _folder(model, files=partial)
     assert not models.is_downloaded(model)
@@ -123,8 +132,8 @@ def test_folder_without_markers_is_not_downloaded(hub, model):
 
 def test_verified_folder_from_before_markers_is_adopted(hub, model):
     _folder(model)
-    staging = models._staging_dir(model)
-    staging.mkdir(parents=True)  # a re-download an earlier run started
+    abandoned_redownload = models._staging_dir(model)
+    abandoned_redownload.mkdir(parents=True)
     models.ensure_llm(model)
     assert hub.calls == []
     assert models.is_downloaded(model)
@@ -138,17 +147,27 @@ def test_unmarked_folder_that_differs_is_downloaded_again(hub, model):
     assert (models.model_dir(model) / "openvino_tokenizer.xml").read_bytes() == b"<tok/>"
 
 
-def test_hash_mismatch_is_reported_and_not_marked(hub, model):
+def _tampered_download(hub, model):
     hub.serve["openvino_language_model.bin"] = b"tampered" * 100
     with pytest.raises(RuntimeError, match="integrity check"):
         models.ensure_llm(model)
+
+
+def test_hash_mismatch_is_reported_and_not_marked(hub, model):
+    _tampered_download(hub, model)
     assert not models.is_downloaded(model)
     assert not models.model_dir(model).exists()
-    # Only the bad file is dropped, so the retry fetches just that
+
+
+def test_hash_mismatch_drops_only_the_bad_file(hub, model):
+    _tampered_download(hub, model)
     staging = models._staging_dir(model)
     assert not (staging / "openvino_language_model.bin").exists()
     assert (staging / "openvino_tokenizer.xml").is_file()
 
+
+def test_retry_after_a_hash_mismatch_completes_the_download(hub, model):
+    _tampered_download(hub, model)
     hub.serve = dict(FILES)
     models.ensure_llm(model)
     assert models.is_downloaded(model)
@@ -180,10 +199,10 @@ def test_stale_staging_for_another_revision_is_removed(hub, model):
     assert not stale.exists()
 
 
-# ---- integrity.verify ---------------------------------------------------------
-
-
-def test_verify_tells_drift_from_tampering(tmp_path, model):
+@pytest.fixture
+def checked_folder(tmp_path, model):
+    """FILES plus a .cache folder and one extra file, and a verify() for it
+    against a table pinning FILES at the model's revision."""
     table = {model.repo_id: {model.revision: _digests(FILES)}}
     for name, data in FILES.items():
         (tmp_path / name).write_bytes(data)
@@ -191,23 +210,37 @@ def test_verify_tells_drift_from_tampering(tmp_path, model):
     (tmp_path / ".cache" / "meta").write_text("")
     (tmp_path / "notes.txt").write_text("")
 
-    ok = integrity.verify(tmp_path, model.repo_id, model.revision, model.revision, table)
+    def verify(repo=model.repo_id, downloaded=model.revision, pinned=model.revision):
+        return integrity.verify(tmp_path, repo, downloaded, pinned, table)
+
+    return types.SimpleNamespace(path=tmp_path, verify=verify)
+
+
+def test_verify_passes_pinned_files_and_lists_extras(checked_folder):
+    ok = checked_folder.verify()
     assert ok.status == integrity.VERIFIED and ok.extra == ("notes.txt",)
 
-    drift = integrity.verify(tmp_path, model.repo_id, OLD_REVISION, model.revision, table)
+
+def test_verify_tells_drift_from_tampering(checked_folder):
+    drift = checked_folder.verify(downloaded=OLD_REVISION)
     assert drift.status == integrity.DRIFT and not drift.severe
 
-    (tmp_path / "openvino_tokenizer.xml").write_bytes(b"<evil/>")  # same size
-    bad = integrity.verify(tmp_path, model.repo_id, model.revision, model.revision, table)
+
+def test_verify_reports_a_changed_file_as_a_severe_mismatch(checked_folder):
+    (checked_folder.path / "openvino_tokenizer.xml").write_bytes(b"<evil/>")
+    bad = checked_folder.verify()
     assert bad.status == integrity.MISMATCH and bad.severe
     assert bad.differing == ("openvino_tokenizer.xml",)
     assert "corrupt or was altered" in bad.summary()
 
-    (tmp_path / "openvino_detokenizer.xml").unlink()
-    gone = integrity.verify(tmp_path, model.repo_id, model.revision, model.revision, table)
-    assert gone.status == integrity.INCOMPLETE
 
-    assert integrity.verify(tmp_path, "other/repo", "abc", "", table).status == integrity.UNPINNED
+def test_verify_reports_a_missing_file_as_incomplete(checked_folder):
+    (checked_folder.path / "openvino_detokenizer.xml").unlink()
+    assert checked_folder.verify().status == integrity.INCOMPLETE
+
+
+def test_verify_of_a_repo_without_digests_is_unpinned(checked_folder):
+    assert checked_folder.verify("other/repo", "abc", "").status == integrity.UNPINNED
 
 
 def test_shipped_digests_cover_every_pinned_model():
@@ -249,7 +282,6 @@ class _FakeTqdm:
 
 
 def test_progress_counts_written_bytes_once(monkeypatch):
-    # tqdm comes with the AI extras, which CI doesn't install
     fake = types.ModuleType("tqdm.auto")
     fake.tqdm = _FakeTqdm  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "tqdm", types.ModuleType("tqdm"))
@@ -258,13 +290,12 @@ def test_progress_counts_written_bytes_once(monkeypatch):
     monkeypatch.setattr(models, "_emit", seen.append)
     monkeypatch.setattr(models.time, "monotonic", iter(range(0, 100, 2)).__next__)
     bar_cls = models._progress_class("M")
-    # the transfer is compressed, so its total is smaller than the files'
-    transfer = bar_cls(desc="Downloading bytes", total=3 * 10**9, unit="B")
+    compressed_transfer = bar_cls(desc="Downloading bytes", total=3 * 10**9, unit="B")
     written = bar_cls(desc="Reconstructing (incomplete total...)", total=4 * 10**9, unit="B")
-    transfer.update(3 * 10**9)
+    compressed_transfer.update(3 * 10**9)
     written.update(2 * 10**9)
     assert seen[-1] == "Downloading M: 50% (2.0 of 4.0 GB)"
-    transfer.close()
+    compressed_transfer.close()
     written.close()
 
 
@@ -274,9 +305,6 @@ def test_doctor_reports_an_older_download_as_drift(hub, model, monkeypatch):
     rows = {r.label: r for r in doctor._models()}
     assert rows["llm model"].status == doctor.WARN
     assert rows["llm model files"].status == doctor.WARN
-
-
-# ---- compile cache --------------------------------------------------------------
 
 
 @pytest.fixture
@@ -305,13 +333,14 @@ def test_prune_keeps_only_the_current_key_and_leaves_ocr_alone(ov_cache):
     _blob(ov_cache / "llm" / "current" / "CPU" / "b.blob")
     _blob(ov_cache / "llm" / "old-model" / "NPU" / "c.blob")
     _blob(ov_cache / "ocr" / "d.blob")
-    _blob(ov_cache / "e.blob")  # written by older versions straight into ov-cache
+    loose_blob_from_older_versions = ov_cache / "e.blob"
+    _blob(loose_blob_from_older_versions)
     llm.prune_cache("current")
     assert sorted(p.name for p in (ov_cache / "llm").iterdir()) == ["current"]
     assert (ov_cache / "llm" / "current" / "NPU" / "a.blob").is_file()
     assert (ov_cache / "llm" / "current" / "CPU" / "b.blob").is_file()
     assert (ov_cache / "ocr" / "d.blob").is_file()
-    assert not (ov_cache / "e.blob").exists()
+    assert not loose_blob_from_older_versions.exists()
 
 
 def test_load_uses_a_per_device_cache_and_prunes_stale_ones(monkeypatch, tmp_path, ov_cache):
@@ -386,11 +415,17 @@ def test_ticking_repeats_the_status_with_elapsed_time():
 
     with llm._ticking(status, "Compiling…", every=0.01):
         assert ticked.wait(2)
-    after = len(seen)
     assert seen[0] == "Compiling…"
     assert re.fullmatch(r"Compiling… \(0:\d\d\)", seen[1])
+
+
+def test_ticking_stops_with_the_block():
+    seen: list[str] = []
+    with llm._ticking(seen.append, "Compiling…", every=0.01):
+        time.sleep(0.05)
+    after = len(seen)
     time.sleep(0.05)
-    assert len(seen) == after  # stops with the block
+    assert len(seen) == after
 
 
 def test_prune_waits_for_background_compiles(monkeypatch, ov_cache):

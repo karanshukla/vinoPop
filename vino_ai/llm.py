@@ -1,9 +1,9 @@
-"""Local LLM tasks: summarize, rewrite, explain, translate.
+"""Local LLM tasks: summarize, rewrite, explain, translate, describe.
 
 One OpenVINO GenAI pipeline is loaded on first use and kept until it has
-been idle for `ai_idle_unload_minutes` (compiled blobs are cached under
-$XDG_CACHE_HOME/vinopop/ov-cache/llm, so a reload is quick). Generation is
-serialised with a lock: two clicks in a row queue instead of fighting
+been idle for `ai_idle_unload_minutes`. Compiled blobs are cached under
+$XDG_CACHE_HOME/vinopop/ov-cache/llm, so a reload is quick. Generation is
+serialised with a lock, so two clicks in a row queue instead of fighting
 over the device.
 """
 
@@ -29,19 +29,25 @@ from .idle import float_setting as _setting
 
 log = logging.getLogger("vinopop")
 
-# Long selections are cut to keep the prompt inside the NPU's static
-# prompt window (MAX_PROMPT_LEN). The char cap is a cheap first cut; the
-# token count decides, since CJK runs well under 4 chars per token.
-MAX_INPUT_CHARS = 8000
+# The NPU compiles a static pipeline: a prompt window of MAX_PROMPT_LEN tokens
+# and a KV cache of MAX_PROMPT_LEN + MIN_RESPONSE_LEN.
 MAX_PROMPT_LEN = 3072
 MIN_RESPONSE_LEN = 512
-# Room for what the pipeline adds around the templated prompt (measured
-# ~40 tokens on Gemma 4's VLM pipeline).
+MAX_INPUT_CHARS = 8000
+# Tokens the pipeline adds around the templated prompt: ~40 measured on
+# Gemma 4's VLM pipeline (2026-10-17).
 _PROMPT_MARGIN = 96
-# Seconds to wait for one device before trying the next. A first NPU
-# compile of a big model can take minutes; it carries on in the background
-# (see _construct) instead of holding the click hostage.
+# Seconds per device. A first NPU compile of a big model can take minutes.
 LOAD_TIMEOUT = 120.0
+# The NPU decoder emits NaNs on a single-token step (openvino#35222).
+_NPU_MIN_NEW_TOKENS = 2
+_BUDGET_PER_INPUT_TOKEN = 1.5
+_BUDGET_FLOOR = 64
+_MAX_CUT_PASSES = 8
+_CUT_UNDERSHOOT = 0.97
+_SENTENCE_CUT_MIN_SHARE = 0.8
+_SPACE_CUT_MIN_SHARE = 0.9
+_SKIPPED_BEFORE = "failed before"
 
 _PROMPTS = {
     "summarize": (
@@ -64,10 +70,8 @@ _PROMPTS = {
 
 _MAX_NEW_TOKENS = {"summarize": 200, "rewrite": 600, "explain": 300, "translate": 800}
 
-# Alt text for a screen capture. The checklist is what got faces, art
-# style and mood in (a bare "write alt text" skipped them), and handing
-# over RapidOCR's text is what got captions quoted: the model alone
-# reads text only when it's asked to transcribe.
+# Without the checklist the model skips faces, art style and mood, and it
+# quotes text in the image only when handed the OCR text.
 _DESCRIBE_PROMPT = (
     "Write alt text for this image for a screen reader user, in two or three sentences. "
     "Cover: the main subject and what it is doing, any face and its expression, the setting, "
@@ -80,15 +84,13 @@ _DESCRIBE_MAX_NEW = 200
 
 _lock = threading.Lock()
 _pipe = None
-_pipe_key: tuple[str, str] | None = None  # (model key, device)
-# Pipelines that finished compiling after their timeout, by device.
-_late: dict[str, tuple[object, tuple[str, str]]] = {}
-# Devices whose abandoned compile is still running: never start a second.
-_inflight: set[str] = set()
+PipeKey = tuple[str, str]  # (model key, device)
+_pipe_key: PipeKey | None = None
+_late: dict[str, tuple[object, PipeKey]] = {}  # compiled after their timeout, by device
+_inflight: set[str] = set()  # devices whose abandoned compile still runs
 _state_lock = threading.Lock()  # guards _late and _inflight
 _last_used = 0.0
 _idle_timer: threading.Timer | None = None
-# The stuck-NPU notification went out; again only once the NPU has recovered.
 _told_stuck = False
 
 
@@ -100,7 +102,8 @@ def _construct(cls, path, dev: str, props: dict, key: tuple[str, str], timeout: 
     """Build the pipeline on a helper thread and stop waiting after
     `timeout` seconds. A native compile can't be cancelled, so a slow one
     keeps going: it fills the compile cache either way, and on success it
-    is parked in _late and swapped in on the next run."""
+    is parked in _late and swapped in on the next run (pinned by
+    `tests/test_vino_ai.py::test_llm_falls_back_when_npu_compile_times_out_then_moves_back`)."""
     state: dict[str, object] = {}
     guard = threading.Lock()
     finished = threading.Event()
@@ -147,10 +150,11 @@ def _construct(cls, path, dev: str, props: dict, key: tuple[str, str], timeout: 
 
 def _adopt_late(model_key: str, order: list[str]) -> None:
     """Swap in the best pipeline that finished after its timeout, if it
-    beats the one in use; drop the rest so their memory goes back."""
+    beats the one in use; drop the rest so their memory goes back (pinned by
+    `tests/test_vino_ai.py::test_late_npu_beats_late_gpu_whatever_finishes_last`)."""
     global _pipe, _pipe_key
     with _state_lock:
-        late = [v for v in _late.values() if v[1][0] == model_key]
+        late = [entry for entry in _late.values() if entry[1][0] == model_key]
         _late.clear()
     if not late:
         return
@@ -158,10 +162,13 @@ def _adopt_late(model_key: str, order: list[str]) -> None:
     def rank(dev: str) -> int:
         return order.index(dev) if dev in order else len(order)
 
-    best = min(late, key=lambda v: rank(v[1][1]))
-    key = _pipe_key
-    current = rank(key[1]) if _pipe is not None and key and key[0] == model_key else len(order) + 1
-    if rank(best[1][1]) < current:
+    def device_rank(entry: tuple[object, PipeKey]) -> int:
+        return rank(entry[1][1])
+
+    nothing_in_use = len(order) + 1
+    in_use = _pipe_key if _pipe is not None and _pipe_key and _pipe_key[0] == model_key else None
+    best = min(late, key=device_rank)
+    if device_rank(best) < (rank(in_use[1]) if in_use else nothing_in_use):
         log.info("[vino_ai] LLM moved to %s", best[1][1])
         _pipe, _pipe_key = best
     del late, best
@@ -169,10 +176,6 @@ def _adopt_late(model_key: str, order: list[str]) -> None:
 
 
 OV_CACHE = CACHE_DIR / "ov-cache"
-# One folder per model, revision and OpenVINO build, with a folder per
-# device inside. Anything else under it is a compile nothing will load
-# again (a 2+ GB blob each on the NPU), so a successful load prunes it.
-# The OCR engine keeps its own cache in OV_CACHE / "ocr".
 LLM_CACHE = OV_CACHE / "llm"
 
 
@@ -183,18 +186,28 @@ def _ov_version() -> str:
 
 
 def cache_key(model: models.LlmModel, ov_version: str) -> str:
+    """LLM_CACHE folder name for this model, revision and OpenVINO build (pinned by
+    `tests/test_model_integrity.py::test_cache_key_changes_with_model_revision_and_openvino`)."""
     raw = f"{model.key}@{model.revision[:12]}-ov{ov_version}"
     return re.sub(r"[^A-Za-z0-9@._-]+", "_", raw)
 
 
 def cache_dir(key: str, dev: str) -> Path:
+    """Compile cache for one device (pinned by
+    `tests/test_model_integrity.py::test_load_uses_a_per_device_cache_and_prunes_stale_ones`)."""
     return LLM_CACHE / key / re.sub(r"[^A-Za-z0-9._-]+", "_", dev)
 
 
+def _loose_blobs() -> list[Path]:
+    """Compile blobs older versions wrote straight into ov-cache, LLM and OCR mixed."""
+    return [child for child in OV_CACHE.iterdir() if child.is_file()] if OV_CACHE.is_dir() else []
+
+
 def prune_cache(key: str) -> list[Path]:
-    """Delete LLM compile caches for any other key, and the blobs older
-    versions wrote straight into ov-cache (LLM and OCR mixed). Leaves the
-    OCR cache alone. Returns what was removed."""
+    """Delete the LLM compile caches of every other key (each a compile
+    nothing will load again, 2+ GB on the NPU) and the loose blobs. Leaves
+    the OCR cache alone. Returns what was removed (pinned by
+    `tests/test_model_integrity.py::test_prune_keeps_only_the_current_key_and_leaves_ocr_alone`)."""
     removed: list[Path] = []
     if LLM_CACHE.is_dir():
         for child in LLM_CACHE.iterdir():
@@ -205,17 +218,16 @@ def prune_cache(key: str) -> list[Path]:
             else:
                 child.unlink(missing_ok=True)
             removed.append(child)
-    if OV_CACHE.is_dir():
-        for child in OV_CACHE.iterdir():
-            if child.is_file():
-                child.unlink(missing_ok=True)
-                removed.append(child)
+    for blob in _loose_blobs():
+        blob.unlink(missing_ok=True)
+        removed.append(blob)
     return removed
 
 
 def _prune_after_load(key: str) -> None:
+    """prune_cache, unless a background compile may still be writing a cache
+    for another key (pinned by `tests/test_model_integrity.py::test_prune_waits_for_background_compiles`)."""
     with _state_lock:
-        # A background compile may still be writing a cache for another key
         if _inflight:
             return
     try:
@@ -247,41 +259,16 @@ def _load(on_status: Callable[[str], None]):
     fp = failures.fingerprint(model.key, model.revision)
     forced = devices.forced()
     for dev in order:
-        with _state_lock:
-            busy = dev in _inflight
-        if busy:
-            errors.append(f"{dev}: still compiling in the background")
+        skip = _skip_reason(dev, fp, forced, on_status)
+        if skip is not None:
+            errors.append(f"{dev}: {skip}")
             continue
-        rec = failures.blocking(dev, fp) if dev != forced else None
-        if rec is not None:
-            log.info(
-                "[vino_ai] skipping %s, it failed before on this driver/runtime: %s",
-                dev,
-                rec.get("error"),
-            )
-            errors.append(f"{dev}: skipped, failed before ({rec.get('error')})")
-            continue
-        if dev == "NPU":
-            on_status("Checking the NPU…")
-            # Not recorded: a driver reload fixes it without any version changing.
-            if npu_canary.stuck():
-                errors.append(f"NPU: {npu_canary.STUCK}")
-                continue
         cache = cache_dir(key, dev)
         cache.mkdir(parents=True, exist_ok=True)
-        if any(cache.iterdir()):
-            msg = f"Loading model on {dev}…"
-        else:
-            msg = f"Compiling the model for {dev}, one time only…"
-            log.info("[vino_ai] no compile cache for %s at %s, compiling", dev, cache)
-        props: dict[str, object] = {"CACHE_DIR": str(cache)}
-        if dev == "NPU":
-            props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=MIN_RESPONSE_LEN)
+        msg = _load_status(dev, cache)
+        props = _pipeline_props(dev, cache)
         try:
-            if (path / "openvino_model.xml").is_file():
-                cls = ov_genai.LLMPipeline
-            else:  # multimodal export (Gemma 4): text-only use of the VLM pipeline
-                cls = ov_genai.VLMPipeline
+            cls = _pipeline_class(ov_genai, path)
             with _ticking(on_status, msg):
                 pipe = _construct(cls, path, dev, props, (model.key, dev), timeout, fp)
         except Exception as exc:  # noqa: BLE001 - try the next device
@@ -294,13 +281,78 @@ def _load(on_status: Callable[[str], None]):
         failures.forget(dev)
         if dev == "NPU":
             _told_stuck = False
-        warn = errors and errors[0].startswith("NPU:") and "failed before" not in errors[0]
-        if warn and not (_told_stuck and npu_canary.STUCK in errors[0]):
+        if errors and _should_warn_fallback(errors[0]):
             _warn_fallback(dev, errors[0], on_status)
         _pipe, _pipe_key = pipe, (model.key, dev)
         _prune_after_load(key)
         return pipe
     raise RuntimeError("could not load the model: " + "; ".join(errors))
+
+
+def _skip_reason(
+    dev: str, fp: dict, forced: str | None, on_status: Callable[[str], None]
+) -> str | None:
+    """Why `dev` isn't tried this time, or None to try it. A device still
+    compiling in the background isn't compiled twice, one with a recorded
+    failure is skipped unless forced, and a stuck NPU is skipped without a
+    record, since a driver reload fixes it without any version changing (pinned
+    by `tests/test_vino_ai.py::test_device_still_compiling_is_not_compiled_twice`,
+    `tests/test_vino_ai.py::test_failed_npu_is_recorded_and_skipped_next_start`,
+    `tests/test_vino_ai.py::test_forced_device_is_tried_despite_a_record`,
+    `tests/test_vino_ai.py::test_stuck_npu_is_skipped_and_reported_once_until_it_recovers`)."""
+    with _state_lock:
+        if dev in _inflight:
+            return "still compiling in the background"
+    rec = failures.blocking(dev, fp) if dev != forced else None
+    if rec is not None:
+        log.info(
+            "[vino_ai] skipping %s, it failed before on this driver/runtime: %s",
+            dev,
+            rec.get("error"),
+        )
+        return f"skipped, {_SKIPPED_BEFORE} ({rec.get('error')})"
+    if dev == "NPU":
+        on_status("Checking the NPU…")
+        if npu_canary.stuck():
+            return npu_canary.STUCK
+    return None
+
+
+def _pipeline_class(ov_genai, path: Path):
+    """LLMPipeline for a text-only export, else the VLM pipeline of a
+    multimodal one (Gemma 4), which also serves text-only prompts."""
+    if (path / "openvino_model.xml").is_file():
+        return ov_genai.LLMPipeline
+    return ov_genai.VLMPipeline
+
+
+def _load_status(dev: str, cache: Path) -> str:
+    """Compiling the first time on a device, loading after (pinned by
+    `tests/test_model_integrity.py::test_load_says_compiling_only_when_there_is_no_cache`)."""
+    if any(cache.iterdir()):
+        return f"Loading model on {dev}…"
+    log.info("[vino_ai] no compile cache for %s at %s, compiling", dev, cache)
+    return f"Compiling the model for {dev}, one time only…"
+
+
+def _pipeline_props(dev: str, cache: Path) -> dict[str, object]:
+    props: dict[str, object] = {"CACHE_DIR": str(cache)}
+    if dev == "NPU":
+        props.update(MAX_PROMPT_LEN=MAX_PROMPT_LEN, MIN_RESPONSE_LEN=MIN_RESPONSE_LEN)
+    return props
+
+
+def _should_warn_fallback(first_error: str) -> bool:
+    """Whether a load that skipped or lost the NPU should say so: not for a
+    recorded failure (told on the start that recorded it), and a stuck NPU
+    only until it recovers (pinned by
+    `tests/test_vino_ai.py::test_llm_warns_when_npu_fails_and_another_device_loads`,
+    `tests/test_vino_ai.py::test_npu_skipped_for_a_recorded_failure_is_not_warned_about_again`,
+    `tests/test_vino_ai.py::test_stuck_npu_is_reported_once_not_on_every_reload`,
+    `tests/test_vino_ai.py::test_npu_stuck_again_after_recovering_is_reported_again`)."""
+    if not first_error.startswith("NPU:") or _SKIPPED_BEFORE in first_error:
+        return False
+    return not (_told_stuck and npu_canary.STUCK in first_error)
 
 
 @contextmanager
@@ -409,12 +461,9 @@ def delete_models() -> int:
             raise Busy(str(exc)) from exc
         freed += models.dir_size(LLM_CACHE)
         shutil.rmtree(LLM_CACHE, ignore_errors=True)
-        # loose blobs from versions that wrote straight into ov-cache
-        if OV_CACHE.is_dir():
-            for child in OV_CACHE.iterdir():
-                if child.is_file():
-                    freed += child.stat().st_size
-                    child.unlink(missing_ok=True)
+        for blob in _loose_blobs():
+            freed += blob.stat().st_size
+            blob.unlink(missing_ok=True)
         return freed
     finally:
         _lock.release()
@@ -433,7 +482,6 @@ def _count_tokens(tok, s: str) -> int | None:
         return None
 
 
-# Control tokens spelled out in a chat template: <|turn>, <turn|>, <|im_start|>.
 _TEMPLATE_TOKEN = re.compile(r"<\|[^<>|\s]{1,40}\|?>|<[^<>|\s]{1,40}\|>")
 _special_cache: dict[str, re.Pattern[str] | None] = {}
 
@@ -467,7 +515,10 @@ def _config_special_tokens(path: Path) -> set[str]:
 def _special_pattern(tok, path: Path | None) -> re.Pattern[str] | None:
     """One regex matching every special token of the active model, from its
     tokenizer config, the tokenizer's own BOS/EOS/PAD and the literal
-    control tokens in its chat template. Cached per model directory."""
+    control tokens (`<|turn>`, `<turn|>`, `<|im_start|>`) in its chat template.
+    Cached per model directory (pinned by
+    `tests/test_vino_ai.py::test_gemma_control_tokens_in_the_selection_are_stripped`,
+    `tests/test_vino_ai.py::test_control_tokens_come_from_the_chat_template_without_a_config`)."""
     key = str(path)
     if key in _special_cache:
         return _special_cache[key]
@@ -511,20 +562,27 @@ _SENTENCE_END = re.compile(r"[.!?…](?=\s)|[。！？]|\n")
 
 def _cut(text: str, keep: int) -> str:
     """`text` cut to at most `keep` chars, at a sentence end (or failing that
-    a space) when one is close to the cut."""
+    a space) when one is close to the cut (pinned by
+    `tests/test_vino_ai.py::test_cut_ends_at_a_sentence_in_the_last_fifth`,
+    `tests/test_vino_ai.py::test_cut_ignores_a_sentence_end_before_the_last_fifth`,
+    `tests/test_vino_ai.py::test_cut_falls_back_to_a_space_in_the_last_tenth`,
+    `tests/test_vino_ai.py::test_cut_is_mid_word_without_a_space_in_the_last_tenth`)."""
     head = text[:keep]
     ends = [m.end() for m in _SENTENCE_END.finditer(head)]
-    if ends and ends[-1] >= keep * 0.8:
+    if ends and ends[-1] >= keep * _SENTENCE_CUT_MIN_SHARE:
         return head[: ends[-1]].rstrip()
     space = head.rfind(" ")
-    if space >= keep * 0.9:
+    if space >= keep * _SPACE_CUT_MIN_SHARE:
         return head[:space].rstrip()
     return head
 
 
 def _fit_prompt(tok, task: str, text: str, lang: str) -> tuple[str, str]:
     """The templated prompt and the (possibly shortened) text, cut by token
-    count until the prompt fits the NPU's MAX_PROMPT_LEN."""
+    count until the prompt fits the NPU's MAX_PROMPT_LEN. MAX_INPUT_CHARS is
+    only a cheap first cut: CJK runs well under 4 chars per token (pinned by
+    `tests/test_vino_ai.py::test_cjk_selection_is_cut_by_tokens_to_fit_the_npu_prompt`,
+    `tests/test_vino_ai.py::test_prompt_that_cannot_fit_raises_instead_of_overflowing`)."""
     limit = MAX_PROMPT_LEN - _PROMPT_MARGIN
 
     def template(t: str) -> str:
@@ -539,11 +597,8 @@ def _fit_prompt(tok, task: str, text: str, lang: str) -> tuple[str, str]:
     if n is None or n <= limit or not text:
         return prompt, text
     overhead = _count_tokens(tok, template("")) or 0
-    for _ in range(8):
-        # Scale by the text's share of the tokens, not the whole prompt's:
-        # with a long system prompt that would cut too little per pass.
-        room = max(limit - overhead, 0)
-        keep = int(len(text) * room / max(n - overhead, 1) * 0.97)
+    for _ in range(_MAX_CUT_PASSES):
+        keep = _chars_to_keep(len(text), n, overhead, limit)
         log.info("[vino_ai] prompt is %d tokens, cutting the text to %d chars", n, keep)
         text = _cut(text, min(keep, len(text) - 1))
         prompt = template(text)
@@ -553,6 +608,14 @@ def _fit_prompt(tok, task: str, text: str, lang: str) -> tuple[str, str]:
         if not text:
             break
     raise RuntimeError(f"the prompt is still {n} tokens after cutting the text (limit {limit})")
+
+
+def _chars_to_keep(n_chars: int, n_tokens: int, overhead: int, limit: int) -> int:
+    """Chars of text that should bring a prompt of `n_tokens` (`overhead` of
+    them not the text's) under `limit`. Scaled by the text's share of the
+    tokens: the whole prompt's would cut too little with a long system prompt."""
+    room = max(limit - overhead, 0)
+    return int(n_chars * room / max(n_tokens - overhead, 1) * _CUT_UNDERSHOOT)
 
 
 def _num_generated(result, tok, text: str) -> int | None:
@@ -566,9 +629,12 @@ def _num_generated(result, tok, text: str) -> int | None:
 
 @dataclass
 class Answer:
+    """The model's answer, flagged when only part of the selection reached
+    the model or the answer stopped at its length cap."""
+
     text: str
-    truncated_input: bool = False  # only part of the selection reached the model
-    hit_max_new_tokens: bool = False  # the answer stopped at its length cap
+    truncated_input: bool = False
+    hit_max_new_tokens: bool = False
 
     @property
     def incomplete(self) -> bool:
@@ -580,18 +646,17 @@ class Cancelled(Exception):
 
 
 def _streamer(on_token, cancelled):
-    """GenAI streamer kwargs for on_token/cancelled, or {} for neither."""
-    # VLMPipeline (Gemma 4) takes these by name only, and rejects
-    # streamer=None.
+    """GenAI streamer kwargs for on_token/cancelled, or {} for neither:
+    VLMPipeline takes them by name only and rejects streamer=None.
+
+    CANCEL and STOP both end a one-shot generate() at the next token. GenAI
+    before StreamingStatus took a bool, True meaning stop."""
     if on_token is None and cancelled is None:
         return {}
     import openvino_genai as ov_genai
 
     statuses = getattr(ov_genai, "StreamingStatus", None)
     running = getattr(statuses, "RUNNING", False)
-    # CANCEL and STOP both end generate() at the next token; they differ only
-    # in the chat history, which a one-shot generate() doesn't keep. Older
-    # GenAI took a bool, where True meant stop.
     cancel = getattr(statuses, "CANCEL", True)
     is_cancelled = cancelled or (lambda: False)
     sink = on_token or (lambda _c: None)
@@ -603,6 +668,39 @@ def _streamer(on_token, cancelled):
         return running
 
     return {"streamer": _stream}
+
+
+def _answer_budget(task: str, n_text: int | None, n_prompt: int | None, *, on_npu: bool) -> int:
+    """max_new_tokens for `task`. Short selections get short budgets, so a
+    runaway answer to a one-line rewrite ends sooner. On the NPU, generation
+    also ends when the static KV cache is full, so the budget stops there and
+    an answer cut short is reported as one (pinned by
+    `tests/test_vino_ai.py::test_max_new_tokens_follows_the_input_length`,
+    `tests/test_vino_ai.py::test_npu_answer_is_capped_by_the_static_kv_cache`)."""
+    max_new = _MAX_NEW_TOKENS[task]
+    if n_text:
+        max_new = min(max_new, int(_BUDGET_PER_INPUT_TOKEN * n_text) + _BUDGET_FLOOR)
+    if on_npu and n_prompt:
+        kv_room = MAX_PROMPT_LEN + MIN_RESPONSE_LEN - n_prompt
+        max_new = max(_NPU_MIN_NEW_TOKENS, min(max_new, kv_room))
+    return max_new
+
+
+def _greedy_config(pipe, max_new: int):
+    cfg = pipe.get_generation_config()
+    cfg.max_new_tokens = max_new
+    cfg.do_sample = False
+    if device() == "NPU":
+        cfg.min_new_tokens = _NPU_MIN_NEW_TOKENS
+    return cfg
+
+
+def _stops_at_blank_line(task: str, text: str) -> bool:
+    """Small models append "(Note: ...)" after a blank line however the
+    prompt forbids it, so a translation of one paragraph stops there (pinned by
+    `tests/test_vino_ai.py::test_llm_translate_stops_at_blank_line_for_single_paragraph`,
+    `tests/test_vino_ai.py::test_llm_translate_keeps_paragraphs_of_multi_paragraph_input`)."""
+    return task == "translate" and "\n\n" not in text
 
 
 def _generate(
@@ -620,31 +718,14 @@ def _generate(
     prompt, text = _fit_prompt(tok, task, text, lang)
     truncated = len(text) < before
 
-    cfg = pipe.get_generation_config()
-    max_new = _MAX_NEW_TOKENS[task]
-    n_text = _count_tokens(tok, text)
-    if n_text:
-        # Short selections get short budgets: a runaway answer to a one-line
-        # rewrite ends (and is cancelled) sooner.
-        max_new = min(max_new, int(1.5 * n_text) + 64)
-    n_prompt = _count_tokens(tok, prompt)
-    if device() == "NPU" and n_prompt:
-        # The static pipeline's KV cache holds MAX_PROMPT_LEN + MIN_RESPONSE_LEN
-        # tokens and generation ends when it's full; cap at that so an answer
-        # cut short there is reported as one.
-        max_new = max(2, min(max_new, MAX_PROMPT_LEN + MIN_RESPONSE_LEN - n_prompt))
-    cfg.max_new_tokens = max_new
-    cfg.do_sample = False
-    if device() == "NPU":
-        # The NPU decoder emits NaNs on a single-token step
-        # (openvino#35222); forcing a second token avoids it.
-        cfg.min_new_tokens = 2
-    if task == "translate" and "\n\n" not in text:
-        # Small models append "(Note: ...)" disclaimers after a blank line
-        # however the prompt forbids them.
+    max_new = _answer_budget(
+        task, _count_tokens(tok, text), _count_tokens(tok, prompt), on_npu=device() == "NPU"
+    )
+    cfg = _greedy_config(pipe, max_new)
+    if _stops_at_blank_line(task, text):
         cfg.stop_strings = {"\n\n"}
     if hasattr(cfg, "apply_chat_template"):
-        cfg.apply_chat_template = False  # already applied above
+        cfg.apply_chat_template = False
 
     result = pipe.generate(prompt, generation_config=cfg, **_streamer(on_token, cancelled))
     if cancelled is not None and cancelled():
@@ -671,7 +752,9 @@ def run(
     thread. `on_token` receives text as it streams, `on_status` gets
     progress lines (download / load) worth showing. Once `cancelled()` is
     true the run stops at the next token, or doesn't start if it was still
-    queued, and raises Cancelled."""
+    queued, and raises Cancelled (pinned by
+    `tests/test_vino_ai.py::test_cancel_stops_the_stream_and_frees_the_lock`,
+    `tests/test_vino_ai.py::test_queued_run_cancelled_before_it_starts_never_loads`)."""
     if task not in _PROMPTS:
         raise ValueError(f"unknown task {task!r}")
     full = text.strip()
@@ -706,8 +789,7 @@ def describe(
     prompt = _DESCRIBE_PROMPT.format(ocr=ocr)
 
     def _work(pipe, sink) -> Answer:
-        # After any "Loading model…" line, which would otherwise stay up
-        # through the ~5 s before the first word.
+        # Replaces "Loading model…", which would otherwise stay up until the first word.
         if on_status is not None:
             on_status("Looking at the image…")
         return _describe(pipe, image_path, prompt, sink, cancelled)
@@ -731,13 +813,8 @@ def _describe(pipe, image_path, prompt, on_token, cancelled) -> Answer:
         raise RuntimeError(f"{models.llm_model().label} can't look at images")
     with Image.open(image_path) as img:
         pixels = np.array(img.convert("RGB"))
-    cfg = pipe.get_generation_config()
-    cfg.max_new_tokens = _DESCRIBE_MAX_NEW
-    cfg.do_sample = False
-    if device() == "NPU":
-        cfg.min_new_tokens = 2  # see _generate
-    # The pipeline applies the chat template itself: it places the image
-    # tokens, which a hand-templated prompt would leave out.
+    cfg = _greedy_config(pipe, _DESCRIBE_MAX_NEW)
+    # Untemplated: the pipeline's own template places the image tokens.
     result = pipe.generate(
         prompt,
         images=[ov.Tensor(pixels[None])],
@@ -759,8 +836,13 @@ def _with_pipe(
     cancelled: Callable[[], bool] | None,
 ) -> Answer:
     """Run `work(pipe, on_token)` under the model lock: load the model,
-    retry once if the NPU was reset before anything streamed, and arm the
-    idle unload afterwards."""
+    reload and retry once if the device was reset before anything streamed
+    (another app's fault can reset the NPU, dropping every model compiled on
+    it), and arm the idle unload afterwards, even after a cancel or failure
+    (pinned by `tests/test_vino_ai.py::test_device_lost_reloads_and_retries_once`,
+    `tests/test_vino_ai.py::test_device_lost_after_streaming_is_not_retried`,
+    `tests/test_vino_ai.py::test_cancelled_run_still_arms_the_idle_unload`,
+    `tests/test_vino_ai.py::test_failed_run_still_arms_the_idle_unload`)."""
     status = on_status or (lambda _m: None)
     global _last_used
     streamed = False
@@ -783,8 +865,6 @@ def _with_pipe(
                 except Exception as exc:
                     if not failures.is_device_lost(exc):
                         raise
-                    # Another app's fault can reset the NPU under us; every
-                    # compiled model on it is gone, so reload and retry once.
                     log.warning("[vino_ai] %s was reset (device lost), reloading", device())
                     pipe = None
                     _drop_pipe()
@@ -793,6 +873,5 @@ def _with_pipe(
                     status("The NPU was reset, reloading the model…")
         finally:
             _last_used = time.monotonic()
-            # A cancelled or failed run still loaded the model; it must still unload.
             _schedule_unload()
     return result

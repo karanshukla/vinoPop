@@ -1,5 +1,6 @@
 """Which PRIMARY changes the X11 watcher treats as real selections."""
 
+import time
 import types
 
 import pytest
@@ -10,6 +11,7 @@ from platform_backend.base import expect_selection  # noqa: E402
 from triggers.watcher import SelectionWatcher  # noqa: E402
 
 CLIPBOARD = 42
+PRIMARY = 1
 
 
 def _watcher(clipboard):
@@ -27,7 +29,7 @@ def test_clipboard_event_is_only_timestamped():
     w = _watcher("")
     assert not w._note_event(_event(CLIPBOARD))
     assert w._clip_changed_at is not None
-    assert w._note_event(_event(1))  # PRIMARY
+    assert w._note_event(_event(PRIMARY))
 
 
 def test_copy_button_is_ignored():
@@ -36,8 +38,7 @@ def test_copy_button_is_ignored():
     assert not w._should_show("curl … | bash", burst_t0=100.0)
 
 
-def test_reselecting_what_was_copied_is_shown():
-    # select "foo", Ctrl+C, later select "foo" again
+def test_reselecting_what_was_copied_long_ago_is_shown():
     w = _watcher("foo")
     w._clip_changed_at = 50.0
     assert w._should_show("foo", burst_t0=100.0)
@@ -48,9 +49,6 @@ def test_ocr_text_is_shown_though_clipboard_matches():
     w._clip_changed_at = 100.1
     expect_selection("recognised text")
     assert w._should_show("recognised text", burst_t0=100.0)
-
-
-# ---- selecting gestures over XRecord -----------------------------------------
 
 
 class _Gestures:
@@ -76,32 +74,89 @@ def test_settle_comes_from_the_gesture():
     assert w._settle_s(100.0) == 0.05
 
 
-def test_x_events_reach_the_gesture_tracker():
-    from Xlib import X
+KEY_RIGHT = 106  # evdev
+X_KEYCODE_OFFSET = 8
+X_BUTTON_LEFT = 1
 
-    from platform_backend import evdev_input as ev
-    from platform_backend.gestures import SelectionGestures
+
+@pytest.fixture
+def xrecord():
     from platform_backend.x11_input import XRecordInput
 
     src = XRecordInput()
-    src._recording = True  # pretend XRecord is up; no thread started
-    seen = []
-    src._subs[1] = seen.append
+    src._recording = True  # no thread started
+    return src
+
+
+def _tracker(src):
+    from platform_backend.gestures import SelectionGestures
+
     g = SelectionGestures(src)
     src._subs[2] = g._on_event
-    import time
+    return g
 
-    t = time.monotonic()
-    src.on_x_event(X.KeyPress, ev.KEY_LEFTSHIFT + 8, 1000)
-    src.on_x_event(X.KeyPress, 114, 1100)  # Right arrow: evdev 106
-    assert [(e.code, e.value) for e in seen] == [(ev.KEY_LEFTSHIFT, 1), (106, 1)]
+
+def test_x_keys_reach_subscribers_as_evdev_codes(xrecord):
+    from Xlib import X
+
+    from platform_backend import evdev_input as ev
+
+    seen = []
+    xrecord._subs[1] = seen.append
+    xrecord.on_x_event(X.KeyPress, ev.KEY_LEFTSHIFT + X_KEYCODE_OFFSET, 1000)
+    xrecord.on_x_event(X.KeyPress, KEY_RIGHT + X_KEYCODE_OFFSET, 1100)
+    assert [(e.code, e.value) for e in seen] == [(ev.KEY_LEFTSHIFT, 1), (KEY_RIGHT, 1)]
+
+
+def test_shift_arrow_over_xrecord_is_a_selecting_gesture(xrecord):
+    from Xlib import X
+
+    from platform_backend import evdev_input as ev
+
+    g, t = _tracker(xrecord), time.monotonic()
+    xrecord.on_x_event(X.KeyPress, ev.KEY_LEFTSHIFT + X_KEYCODE_OFFSET, 1000)
+    xrecord.on_x_event(X.KeyPress, KEY_RIGHT + X_KEYCODE_OFFSET, 1100)
     assert g.selected_since(t)
 
-    g2, t = SelectionGestures(src), time.monotonic()
-    src._subs[2] = g2._on_event
-    src.on_x_event(X.ButtonPress, 1, 5000)
-    src.on_x_event(X.ButtonRelease, 1, 5080)  # click to focus
-    assert not g2.selected_since(t)
-    src.on_x_event(X.ButtonPress, 1, 6000)
-    src.on_x_event(X.ButtonRelease, 1, 6500)  # drag
-    assert g2.selected_since(t)
+
+def test_a_click_over_xrecord_is_not_a_selecting_gesture(xrecord):
+    from Xlib import X
+
+    g, t = _tracker(xrecord), time.monotonic()
+    xrecord.on_x_event(X.ButtonPress, X_BUTTON_LEFT, 5000)
+    xrecord.on_x_event(X.ButtonRelease, X_BUTTON_LEFT, 5080)
+    assert not g.selected_since(t)
+
+
+def test_a_drag_over_xrecord_is_a_selecting_gesture(xrecord):
+    from Xlib import X
+
+    g, t = _tracker(xrecord), time.monotonic()
+    xrecord.on_x_event(X.ButtonPress, X_BUTTON_LEFT, 6000)
+    xrecord.on_x_event(X.ButtonRelease, X_BUTTON_LEFT, 6500)
+    assert g.selected_since(t)
+
+
+def _shown_after_reads(monkeypatch, primary):
+    from triggers import watcher
+
+    monkeypatch.setattr(watcher.time, "sleep", lambda _s: None)
+    shown = []
+    w = SelectionWatcher(lambda text, x, y: shown.append(text))
+    w._gestures = None
+    w._read_primary = lambda: primary
+    w._pointer_position = lambda _dpy: (0, 0)
+    return w, shown
+
+
+def test_reselecting_the_same_text_shows_it_again(monkeypatch):
+    w, shown = _shown_after_reads(monkeypatch, "foo")
+    w._handle_selection_change(None, burst_t0=0.0)
+    w._handle_selection_change(None, burst_t0=0.0)
+    assert shown == ["foo", "foo"]
+
+
+def test_a_blank_selection_is_not_shown(monkeypatch):
+    w, shown = _shown_after_reads(monkeypatch, "  ")
+    w._handle_selection_change(None, burst_t0=0.0)
+    assert shown == []

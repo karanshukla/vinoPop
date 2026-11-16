@@ -1,20 +1,7 @@
-"""Global Ctrl+double-click watcher for the no-selection popup.
-
-PopClip-style "click-in-editable-field" feature: Ctrl+double-click
-anywhere and the edit menu (Paste / Select All / Backspace) appears
-at the cursor. Ctrl as the gating modifier means we never collide
-with the app's own double-click word-select behaviour - the user has
-to deliberately ask for our menu, so there's no race with PRIMARY
-selections from word-select gestures.
-
-Opt-in via the `double_click_popup_enabled` setting. When off, the
-thread is never started and no mouse events are observed.
-
-Position match uses an 8 px tolerance so a tiny mouse wiggle
-between the two clicks still counts as a double-click.
-
-The watcher emits the callback on the GLib main thread via
-timeout_add, so the popup builder doesn't need its own locking.
+"""Global modifier+double-click watcher over XRecord, for the no-selection
+edit menu (Paste / Select All / Backspace). The modifier keeps it apart from
+the app's own double-click word select. The callback runs on the GLib main
+thread.
 """
 
 from __future__ import annotations
@@ -27,30 +14,31 @@ from gi.repository import GLib
 
 _DOUBLE_CLICK_MS = 300
 _POSITION_TOLERANCE_PX = 8
+_AFTER_CLICK_MS = 20  # the app under the pointer sees the click first
+_STOP_JOIN_S = 0.2
+_X_BUTTON_LEFT = 1
+
+# X.h modifier masks
+_SHIFT_MASK, _CONTROL_MASK, _MOD1_MASK, _MOD4_MASK = 1, 4, 8, 64
+_MODIFIER_MASKS = {
+    "ctrl": _CONTROL_MASK,
+    "shift": _SHIFT_MASK,
+    "alt": _MOD1_MASK,
+    "super": _MOD4_MASK,
+}
+_DEFAULT_MODIFIER = "ctrl"
 
 
 def _required_modifier_mask() -> int:
-    """Return the X11 modifier mask the user wants on the chord. Read
-    fresh each event so the setting takes effect without a restart.
-
-    Mapping is the standard X.h constants:
-      ShiftMask   = 1
-      ControlMask = 4
-      Mod1Mask    = 8   (Alt)
-      Mod4Mask    = 64  (Super / Windows key)
-    """
+    """The X modifier mask of the double_click_modifier setting, read on each
+    event so a change applies live."""
     try:
         from core.settings import get_settings
 
-        name = (get_settings().get("double_click_modifier") or "ctrl").lower()
+        name = (get_settings().get("double_click_modifier") or _DEFAULT_MODIFIER).lower()
     except Exception:
-        name = "ctrl"
-    return {
-        "ctrl": 4,
-        "shift": 1,
-        "alt": 8,
-        "super": 64,
-    }.get(name, 4)
+        name = _DEFAULT_MODIFIER
+    return _MODIFIER_MASKS.get(name, _MODIFIER_MASKS[_DEFAULT_MODIFIER])
 
 
 class DoubleClickWatcher:
@@ -63,8 +51,6 @@ class DoubleClickWatcher:
         self._record_display = None
         self._local_display = None
         self._ctx = None
-        # Tracking the last single click so we can recognise the
-        # following one as a double-click.
         self._last_ms = 0
         self._last_xy = (0, 0)
 
@@ -80,11 +66,9 @@ class DoubleClickWatcher:
         self._thread.start()
 
     def stop(self, timeout: float = 1.0) -> None:
-        """Stop recording and wait (briefly) for the thread to exit.
-
-        record_enable_context blocks its connection inside the RECORD reply
-        loop, so the disable request has to go out on the OTHER one
-        (_local_display) - which is why enable runs on _record_display."""
+        """Stop recording and wait briefly for the thread. record_enable_context
+        blocks its connection in the RECORD reply loop, so the disable goes
+        out on the other one (_local_display)."""
         self._stop.set()
         thread = self._thread
         deadline = time.monotonic() + timeout
@@ -100,7 +84,7 @@ class DoubleClickWatcher:
                 pass
             if thread is None or thread is threading.current_thread():
                 return
-            thread.join(timeout=0.2)
+            thread.join(timeout=_STOP_JOIN_S)
             if not thread.is_alive() or time.monotonic() >= deadline:
                 return
 
@@ -139,8 +123,8 @@ class DoubleClickWatcher:
                 }
             ],
         )
-        # Make sure the server has the context before the other connection
-        # enables it (and before stop() may disable it).
+        # The server must have the context before the other connection
+        # enables it, or stop() disables it.
         self._local_display.sync()
 
         def handler(reply):
@@ -158,21 +142,15 @@ class DoubleClickWatcher:
                     None,
                     None,
                 )
-                # Button 1 = primary mouse button. Require the user's
-                # configured modifier held so the gesture never
-                # collides with the app's own double-click word-
-                # select behaviour.
                 if (
                     event.type == X.ButtonPress
-                    and event.detail == 1
+                    and event.detail == _X_BUTTON_LEFT
                     and event.state & _required_modifier_mask()
                 ):
                     self._on_left_click(event.root_x, event.root_y)
 
         try:
-            # stop() may have run before the context existed.
-            if not self._stop.is_set():
-                # Blocks until stop() disables the context from _local_display.
+            if not self._stop.is_set():  # stop() may have run before the context existed
                 self._record_display.record_enable_context(self._ctx, handler)
         except Exception as exc:
             print(f"[dblclick] record_enable_context exited: {exc}")
@@ -192,10 +170,14 @@ class DoubleClickWatcher:
             self._local_display = None
 
     def _on_left_click(self, x: int, y: int) -> None:
-        """Handle a Ctrl+Left-click. We see only the Ctrl-modified
-        ones - the handler filter upstream drops plain clicks - so
-        any second click within the double-click window IS our
-        gesture and there's no PRIMARY-race to worry about."""
+        """A left click with the modifier held. The second within
+        _DOUBLE_CLICK_MS and _POSITION_TOLERANCE_PX fires; a third starts
+        over (pinned by
+        `tests/test_platform_double_click.py::test_a_second_click_just_inside_the_window_fires`,
+        `tests/test_platform_double_click.py::test_a_second_click_just_after_the_window_does_not`,
+        `tests/test_platform_double_click.py::test_a_wiggle_just_inside_the_tolerance_still_fires`,
+        `tests/test_platform_double_click.py::test_a_move_of_the_tolerance_does_not`,
+        `tests/test_platform_double_click.py::test_a_third_click_does_not_fire_again`)."""
         now_ms = int(time.monotonic() * 1000)
         elapsed = now_ms - self._last_ms
         dx = abs(x - self._last_xy[0])
@@ -205,13 +187,9 @@ class DoubleClickWatcher:
             and dx < _POSITION_TOLERANCE_PX
             and dy < _POSITION_TOLERANCE_PX
         ):
-            # Reset so a third click doesn't fire again.
             self._last_ms = 0
             self._last_xy = (0, 0)
-            # Tiny settle so the app sees the click first, then we
-            # show the menu. Modifier+double-click is unambiguous user
-            # intent so we don't need to wait for PRIMARY-resolution.
-            GLib.timeout_add(20, self._fire_callback, x, y)
+            GLib.timeout_add(_AFTER_CLICK_MS, self._fire_callback, x, y)
             return
         self._last_ms = now_ms
         self._last_xy = (x, y)
@@ -221,4 +199,4 @@ class DoubleClickWatcher:
             self._cb(x, y)
         except Exception as exc:
             print(f"[dblclick] callback failed: {exc}")
-        return False  # one-shot
+        return False  # GLib.SOURCE_REMOVE

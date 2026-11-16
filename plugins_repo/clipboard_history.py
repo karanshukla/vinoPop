@@ -98,7 +98,6 @@ def _apply_x11_hints(window) -> None:
         except (OSError, subprocess.SubprocessError):
             pass
 
-    # Off the main thread - wmctrl round-trips to the WM.
     threading.Thread(target=_above, daemon=True, name="clipboard-above").start()
 
 
@@ -116,7 +115,7 @@ def _force_to_front(window) -> None:
                 server_time = GdkX11.x11_get_server_time(surface)
             except Exception:
                 server_time = 0
-            # A real timestamp survives focus-stealing prevention
+            # Focus-stealing prevention ignores a request with timestamp 0
             try:
                 surface.focus(server_time)
             except Exception:
@@ -149,7 +148,8 @@ def _cfg(key: str, default):
 
 def _cfg_number(key: str, default, kind):
     """_cfg() for a number: a hand-edited non-number falls back to `default`
-    instead of raising in the watcher (#24)."""
+    (pinned by `tests/test_clipboard_store.py::test_non_numeric_history_size_falls_back_to_the_default`,
+    `tests/test_clipboard_store.py::test_capture_still_works_with_a_bad_history_size`)."""
     from settings import as_number
 
     return as_number(key, _cfg(key, default), kind, default)
@@ -175,8 +175,7 @@ def _max_image_bytes() -> int:
     return max(1, _cfg_number("clipboard_history_max_image_mb", 20, int)) * 1024 * 1024
 
 
-# The values at import, for the startup log line only: the getters above
-# read the live setting.
+# For the startup log line only; the getters above read the live setting.
 HISTORY_SIZE = _history_size()
 CAPTURE_IMAGES = _capture_images()
 POLL_INTERVAL = _poll_interval()
@@ -190,8 +189,8 @@ CACHE_DIR = _LP_CACHE / "clipboard"
 HISTORY_FILE = CACHE_DIR / "history.json"
 SNIPPETS_FILE = _LP_CONFIG / "snippets.json"
 IMAGES_DIR = CACHE_DIR / "images"
-# Pinned images get their own copy here: history evicts (and the cache can
-# be cleared) without taking a snippet's image with it.
+# Outside the cache, so clearing it keeps pinned images (pinned by
+# `tests/test_clipboard_store.py::test_a_pinned_image_survives_its_history_entry_ageing_out`)
 SNIPPET_IMAGES_DIR = _LP_DATA / "snippet_images"
 
 
@@ -203,44 +202,51 @@ def _parse_triggers(text: str) -> list[str]:
 @dataclass
 class Entry:
     """One row of history.json or snippets.json. Every field after `kind`
-    has a default, so files saved before a field existed still load."""
+    has a default, so files saved before a field existed still load
+    (pinned by `tests/test_clipboard_store.py::test_snippets_saved_before_the_flag_load_as_live`).
+
+    `kind` is "text" or "image". `name`, `trigger` (comma-separated
+    shortcodes), `usage_count` and `category` ("" is General) are for
+    snippets. `image_hash` is the sha1 of an image's PNG, so a re-copy moves
+    it up (pinned by `tests/test_clipboard_store.py::test_pasting_an_older_image_moves_it_up_without_a_second_file`).
+    A `literal` entry pastes as written: text pinned from a selection is
+    someone else's, so a {shell:...} in it must not run (pinned by
+    `tests/test_clipboard_store.py::test_pin_as_snippet_saves_the_selection_as_literal`,
+    `tests/test_snippet_shell.py::test_a_literal_snippet_never_reaches_the_shell`)."""
 
     id: str
     timestamp: float
-    kind: str  # "text" | "image"
+    kind: str
     text: str = ""
     image_path: str = ""
-    name: str = ""  # snippets only
-    trigger: str = ""  # snippets only: comma-separated shortcodes
-    usage_count: int = 0  # times a snippet was pasted
-    category: str = ""  # the picker's group; "" is General
-    # sha1 of an image entry's PNG: copying the same image again moves it
-    # up instead of saving a duplicate
+    name: str = ""
+    trigger: str = ""
+    usage_count: int = 0
+    category: str = ""
     image_hash: str = ""
-    # Pasted as written, no {placeholder} expansion: text pinned from a
-    # selection is someone else's (issue #86), so a {shell:...} in it must
-    # not run. tests/test_clipboard_store.py pins it.
     literal: bool = False
 
     def trigger_list(self) -> list[str]:
         return _parse_triggers(self.trigger)
 
     def preview(self, max_len: int = 80) -> str:
+        """The row label. Sliced before the replaces, so a long copy isn't
+        walked in full (pinned by
+        `tests/test_clipboard_store.py::test_long_preview_matches_the_short_one`)."""
         if self.name:
             return self.name
         if self.kind == "image":
             return f"🖼  Image - {Path(self.image_path).name}"
-        # Sliced before replacing: a long copy isn't walked in full for a label
         shown = self.text[: max_len + 1].replace("\n", "↵").replace("\t", "  ")
         return shown[:max_len] + "…" if len(shown) > max_len else shown
 
     def search_haystack(self) -> str:
-        """What the picker's search matches, lower-cased. Not the image
-        path: a home folder plus a hex id would match "home" for every image."""
+        """What the picker's search matches, lower-cased, cached per row
+        because the filter asks on every keystroke. Not the image path
+        (pinned by `tests/test_clipboard_store.py::test_image_path_is_not_searchable`,
+        `tests/test_clipboard_store.py::test_search_haystack_follows_edits`)."""
         body = "image" if self.kind == "image" else self.text
         searched_fields = (self.name, self.trigger, body)
-        # The filter asks per row per keystroke, so the result is cached,
-        # keyed on the fields so an edit can't leave it stale
         cached = self.__dict__.get("_haystack")
         if cached is not None and cached[0] == searched_fields:
             return cached[1]
@@ -258,9 +264,10 @@ _watcher_stop = threading.Event()
 
 
 def _atomic_write_json(path: Path, data) -> None:
+    """Write through a private temp file of its own, so concurrent saves
+    don't share one (pinned by `tests/test_clipboard_store.py::test_concurrent_saves_are_not_lost`,
+    `tests/test_clipboard_store.py::test_snippets_file_is_private`)."""
     private_dir(path.parent)
-    # A temp name per write, created 0600: two writers sharing one ".tmp"
-    # lose a save (test_concurrent_saves_are_not_lost)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -280,11 +287,13 @@ def _atomic_write_json(path: Path, data) -> None:
 
 
 def _load_list(path: Path, target: list[Entry]) -> bool:
-    """Return True on a successful load (including empty list), False if
-    the file existed but couldn't be parsed. Callers use this to decide
-    whether subsequent reference-tracking operations (like orphan-image
-    sweeps) are safe - sweeping when the load failed would treat every
-    image as unreferenced and delete the lot."""
+    """Append the entries in `path` to `target`. False if the file exists
+    but can't be parsed; it is then copied to `.unreadable` before the next
+    save replaces it (pinned by
+    `tests/test_clipboard_store.py::test_unreadable_snippets_are_backed_up_not_overwritten`,
+    `tests/test_clipboard_store.py::test_wrong_shape_counts_as_unreadable`). An
+    unknown field is dropped, not its entry (pinned by
+    `tests/test_clipboard_store.py::test_entries_with_unknown_fields_survive_a_load`)."""
     if not path.is_file():
         return True
     try:
@@ -297,14 +306,12 @@ def _load_list(path: Path, target: list[Entry]) -> bool:
             if not isinstance(item, dict):
                 continue
             try:
-                # An unknown field is dropped, not the entry with it
                 target.append(Entry(**{k: v for k, v in item.items() if k in known}))
             except TypeError:
                 continue
         return True
     except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError
         print(f"[clipboard] could not load {path}: {exc}")
-        # The next save replaces the unreadable file with an empty list
         try:
             backup = path.with_suffix(path.suffix + ".unreadable")
             if not backup.exists():
@@ -345,8 +352,9 @@ def _same_content(a: Entry, b: Entry) -> bool:
 
 def _promote_existing(entry: Entry) -> bool:
     """If history already holds this content, move that entry to the top
-    and return True. Pasting an older entry puts it back on the clipboard,
-    and the watcher would otherwise record it a second time."""
+    and return True (pinned by
+    `tests/test_clipboard_store.py::test_pasting_an_older_text_entry_moves_it_up`,
+    `tests/test_clipboard_store.py::test_text_copied_again_after_an_image_comes_back_to_the_top`)."""
     with _history_lock:
         i = next((i for i, e in enumerate(_history) if _same_content(e, entry)), -1)
         if i < 0:
@@ -386,18 +394,18 @@ def _delete_history_image(entry: Entry) -> None:
 
 
 def _snippet_uses_image(image_path: str) -> bool:
-    """True if a snippet points at this image file. Pins now get their own
-    copy, but snippets pinned by older versions share the history file, so
-    history must not delete it from under one."""
+    """True if a snippet points at this image file: snippets pinned by
+    older versions share the history copy (pinned by
+    `tests/test_clipboard_store.py::test_eviction_keeps_an_image_an_older_pin_shares`,
+    `tests/test_clipboard_store.py::test_delete_keeps_an_image_a_snippet_uses`)."""
     with _snippets_lock:
         return any(s.kind == "image" and s.image_path == image_path for s in _snippets)
 
 
 def _remove_history_entry(entry_id: str) -> bool:
-    """Delete one history entry (the picker's per-row Delete) and its image
-    file unless a snippet still uses it. Saves straight away: this is how
-    you get rid of something you shouldn't have copied. Returns False if
-    the entry was already gone."""
+    """Delete one history entry and its image file unless a snippet still
+    uses it, saving straight away. False if the entry was already gone
+    (pinned by `tests/test_clipboard_store.py::test_delete_removes_the_entry_and_its_image`)."""
     with _history_lock:
         removed = [e for e in _history if e.id == entry_id]
         if not removed:
@@ -422,7 +430,6 @@ def _pin_entry(
     new_id = uuid.uuid4().hex[:12]
     image_path = ""
     if entry.kind == "image":
-        # Its own file: the history one goes when the entry ages out
         dest = SNIPPET_IMAGES_DIR / f"{new_id}.png"
         try:
             private_dir(SNIPPET_IMAGES_DIR)
@@ -451,13 +458,13 @@ def _pin_entry(
 
 
 def _unpin_snippet(snippet_id: str) -> None:
+    """Remove a snippet and its own image copy. An older pin's image lives
+    in the history cache and is left for history to clean up."""
     with _snippets_lock:
         removed = [s for s in _snippets if s.id == snippet_id]
         _snippets[:] = [s for s in _snippets if s.id != snippet_id]
     _save_snippets()
     _rebuild_trigger_index()
-    # Only the snippet's own copy goes; an older pin's shared history file
-    # is left for history to clean up.
     for s in removed:
         p = Path(s.image_path) if s.kind == "image" and s.image_path else None
         if p is not None and p.parent == SNIPPET_IMAGES_DIR and not _snippet_uses_image(str(p)):
@@ -470,8 +477,8 @@ def _unpin_snippet(snippet_id: str) -> None:
 def _create_snippet(
     name: str, text: str, trigger: str = "", category: str = "", literal: bool = False
 ) -> None:
-    """Make a brand-new snippet from scratch (not derived from history).
-    `literal` saves it to paste as written, placeholders and all."""
+    """A new snippet not taken from history. `literal` pastes it as
+    written, placeholders and all."""
     snippet = Entry(
         id=uuid.uuid4().hex[:12],
         timestamp=time.time(),
@@ -503,8 +510,7 @@ def _set_snippet_category(snippet_id: str, category: str) -> None:
 
 
 def _bump_usage(snippet_id: str) -> None:
-    """Count one more paste of a snippet. A failed save must not block
-    the paste."""
+    """Count one more paste of a snippet; a failed save doesn't block it."""
     _change_snippet(snippet_id, lambda s: setattr(s, "usage_count", int(s.usage_count or 0) + 1))
     try:
         _save_snippets()
@@ -518,16 +524,16 @@ def _set_snippet_trigger(snippet_id: str, trigger: str) -> None:
     _rebuild_trigger_index()
 
 
-# trigger -> snippet (case-sensitive keys), rebuilt whenever snippets change
-# and read by the trigger watcher's thread
+# Rebuilt whenever snippets change; read by the trigger watcher's thread
 _trigger_index: dict[str, Entry] = {}
 _trigger_index_lock = threading.Lock()
 
 
 def _find_trigger_conflicts(triggers: list[str], own_id: str = "") -> list[tuple]:
-    """Return [(trigger, snippet_name), ...] for any of `triggers` that
-    are already claimed by a different snippet. own_id is excluded so a
-    snippet being edited doesn't clash with itself."""
+    """[(trigger, snippet label), ...] for each of `triggers` another
+    snippet already claims; the snippet `own_id` doesn't clash with itself
+    (pinned by `tests/test_plugins_clipboard_rules.py::test_a_trigger_another_snippet_has_is_a_conflict`,
+    `tests/test_plugins_clipboard_rules.py::test_a_snippet_does_not_conflict_with_its_own_trigger`)."""
     if not triggers:
         return []
     conflicts: list[tuple] = []
@@ -545,13 +551,14 @@ def _find_trigger_conflicts(triggers: list[str], own_id: str = "") -> list[tuple
 
 
 def _rebuild_trigger_index() -> None:
+    """Text snippets by trigger. On a shared trigger the newest snippet
+    wins (pinned by `tests/test_plugins_clipboard_rules.py::test_the_newest_snippet_wins_a_shared_trigger`,
+    `tests/test_plugins_clipboard_rules.py::test_an_image_snippet_has_no_trigger`)."""
     new_index: dict[str, Entry] = {}
     with _snippets_lock:
         for s in _snippets:
             if s.kind != "text":
                 continue
-            # Snippets are stored newest first, so on a shared trigger the
-            # newest one wins
             for trig in s.trigger_list():
                 new_index.setdefault(trig, s)
     with _trigger_index_lock:
@@ -570,9 +577,10 @@ def _set_snippet_text(snippet_id: str, new_text: str) -> None:
     _save_snippets()
 
 
-# Typing one of these checks the buffer for a trigger. Whitespace only, as
-# in espanso and AutoKey: punctuation here would break triggers that start
-# with it (";mvh").
+# Typing one of these checks the buffer for a trigger. Whitespace only, so a
+# trigger can start with punctuation (pinned by
+# `tests/test_plugins_clipboard_rules.py::test_whitespace_ends_a_trigger`,
+# `tests/test_plugins_clipboard_rules.py::test_punctuation_does_not_end_a_trigger`)
 _TRIGGER_CHARS = set(" \t\n")
 _TRIGGER_BUFFER_MAX = 64
 
@@ -580,14 +588,14 @@ _trigger_watcher: _TriggerWatcher | None = None
 
 
 class _TriggerWatcher:
-    """Background XRecord listener. When the user types a snippet trigger
-    followed by a word-boundary character (space, tab, enter, punctuation),
-    expand it in place: backspace the shortcode + the boundary char,
-    paste the rendered snippet, optionally reposition the caret.
+    """Background XRecord listener. A snippet trigger followed by
+    whitespace is expanded in place: the shortcode and the whitespace are
+    backspaced, the rendered snippet pasted, the caret moved to {cursor}.
 
-    Privacy: this thread sees every keystroke, but stores at most the
-    last 64 characters in memory and never writes them to disk. Disabled
-    by default; opt-in via the 'snippet_triggers_enabled' setting.
+    It sees every keystroke, so it keeps only the last
+    _TRIGGER_BUFFER_MAX characters, in memory only (pinned by
+    `tests/test_trigger_expansion.py::test_the_watcher_keeps_only_the_newest_characters`).
+    Off unless 'snippet_triggers_enabled' is set.
     """
 
     def __init__(self) -> None:
@@ -595,7 +603,8 @@ class _TriggerWatcher:
         self._thread: threading.Thread | None = None
         self._buffer: list[str] = []
         self._lock = threading.Lock()
-        # XRecord needs a display of its own; the other looks keycodes up
+        # XRecord blocks the display it records on, so keycodes are looked
+        # up on a second one
         self._record_display = None
         self._local_display = None
         self._ctx = None
@@ -695,7 +704,7 @@ class _TriggerWatcher:
 
     def _on_keypress(self, event, X, XK) -> None:
         state = event.state
-        chord = state & (X.ControlMask | X.Mod1Mask | X.Mod4Mask)  # Ctrl, Alt, Super
+        chord = state & (X.ControlMask | X.Mod1Mask | X.Mod4Mask)
         if chord:
             self._forget_typed()
             return
@@ -718,8 +727,7 @@ class _TriggerWatcher:
         if keysym == XK.XK_Escape:
             self._forget_typed()
             return
-        is_function_keysym = 0xFF00 <= keysym <= 0xFFFF  # modifiers, arrows, F-keys
-        if is_function_keysym and keysym not in (XK.XK_space,):
+        if keysym in _FUNCTION_KEYSYMS:
             return
 
         ch = self._keysym_to_char(keysym, caps, shift, XK)
@@ -731,12 +739,10 @@ class _TriggerWatcher:
     def _keysym_to_char(keysym, caps_lock: bool, shift: bool, XK) -> str | None:
         char = XK.keysym_to_string(keysym)
         if char is None or len(char) > 1:
-            is_latin1 = 0x20 <= keysym <= 0xFF
-            if not is_latin1:
+            if keysym not in _LATIN1_KEYSYMS:
                 return None
             char = chr(keysym)
-        # Caps Lock uppercases letters and Shift undoes it (an approximation:
-        # non-Latin layouts vary)
+        # Shift undoes Caps Lock. An approximation: non-Latin layouts vary
         if caps_lock and not shift and char.isalpha():
             return char.upper()
         if caps_lock and shift and char.isalpha():
@@ -747,7 +753,6 @@ class _TriggerWatcher:
         with self._lock:
             if ch not in _TRIGGER_CHARS:
                 self._buffer.append(ch)
-                # A match is always at the end, so the oldest go first
                 del self._buffer[: max(0, len(self._buffer) - _TRIGGER_BUFFER_MAX)]
                 return
             matched = _match_typed_trigger("".join(self._buffer))
@@ -759,8 +764,10 @@ class _TriggerWatcher:
 
 def _match_typed_trigger(typed_text: str) -> tuple[str, str, Entry] | None:
     """(trigger, as typed, snippet) for the trigger `typed_text` ends with,
-    or None. The longest wins, so "abcd" beats "cd". Case is ignored; the
-    typed form is returned so its case can carry over to the expansion."""
+    or None. The longest wins and case is ignored; the typed form is
+    returned so its case can carry over to the expansion (pinned by
+    `tests/test_trigger_expansion.py::test_the_longest_trigger_the_text_ends_with_wins`,
+    `tests/test_trigger_expansion.py::test_a_trigger_inside_a_word_is_not_matched`)."""
     typed_lower = typed_text.lower()
     with _trigger_index_lock:
         for trigger in sorted(_trigger_index.keys(), key=len, reverse=True):
@@ -774,36 +781,30 @@ def _match_typed_trigger(typed_text: str) -> tuple[str, str, Entry] | None:
 
 
 def _trigger_word_boundary_ok(buf: str, trig_lc: str) -> bool:
-    """The trigger has already been confirmed to be a suffix of buf
-    (case-insensitive). Reject the match unless the trigger occupies a
-    word boundary on its leading side:
-      - it's at the very start of the buffer, OR
-      - the char immediately before it is NOT a word char (letters /
-        digits / underscore), OR
-      - the trigger itself starts with a non-word char (e.g. ';mvh') -
-        the punctuation is its own boundary.
-    Trailing boundary is implicit because we're called from a boundary
-    handler (space/tab/enter just triggered the check).
-    """
+    """Whether `trig_lc`, already a suffix of `buf`, starts on a word
+    boundary: at the start of `buf`, after a non-word character, or itself
+    starting with one (";mvh") (pinned by
+    `tests/test_trigger_expansion.py::test_word_boundary`)."""
     if len(buf) == len(trig_lc):
         return True
     before = buf[-(len(trig_lc) + 1)]
-    if not (before.isalnum() or before == "_"):
-        return True
-    return bool(not (trig_lc[0].isalnum() or trig_lc[0] == "_"))
+    return not _is_word_char(before) or not _is_word_char(trig_lc[0])
+
+
+def _is_word_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
 
 
 def _detect_case_style(typed: str) -> str:
-    """Classify the case pattern of what the user actually typed.
-    Returns one of: 'lower' / 'title' / 'upper' / 'mixed'. Triggers
-    with only digits/symbols return 'lower' (no transformation)."""
+    """'lower', 'title', 'upper' or 'mixed' for how a trigger was typed;
+    no letters is 'lower', one capital alone 'title' (pinned by
+    `tests/test_trigger_expansion.py::test_detect_case_style`)."""
     letters = [c for c in typed if c.isalpha()]
     if not letters:
         return "lower"
     if all(c.islower() for c in letters):
         return "lower"
     if all(c.isupper() for c in letters):
-        # One capital alone could be either; it counts as title
         return "upper" if len(letters) >= 2 else "title"
     if letters[0].isupper() and all(c.islower() for c in letters[1:]):
         return "title"
@@ -811,10 +812,9 @@ def _detect_case_style(typed: str) -> str:
 
 
 def _propagate_case(typed: str, output: str) -> str:
-    """Apply the case pattern from `typed` (what the user actually
-    typed) to `output` (the rendered snippet text). Mixed/lower leaves
-    output alone; title capitalises the first alpha char; upper
-    uppercases everything."""
+    """`output` in the case `typed` was typed in: title capitalises the
+    first letter, upper all of it, lower and mixed leave it (pinned by
+    `tests/test_trigger_expansion.py::test_propagate_case`)."""
     style = _detect_case_style(typed)
     if style in ("lower", "mixed"):
         return output
@@ -828,9 +828,9 @@ def _propagate_case(typed: str, output: str) -> str:
 
 
 def _active_window_haystacks() -> list[str]:
-    """Lower-cased window title + WM_CLASS of the focused window. Used
-    by the trigger blocklist to decide whether to expand here. Asks the
-    platform backend, the same lookup the popup's blocklist uses."""
+    """Lower-cased title and WM_CLASS of the focused window, from the
+    platform backend (pinned by
+    `tests/test_clipboard_store.py::test_trigger_blocklist_asks_the_backend_for_the_active_window`)."""
     try:
         from platform_backend import get_backend
 
@@ -840,38 +840,48 @@ def _active_window_haystacks() -> list[str]:
         return []
 
 
-# Wayland triggers: XRecord only sees XWayland clients and XTEST can't reach
-# native Wayland windows, so there the keyboards are read from /dev/input
-# (the user must be in the 'input' group), mapped through the xkb layout with
-# libxkbcommon, and expansions are injected with ydotool.
+# On Wayland, XRecord only sees XWayland clients and XTEST can't reach native
+# windows, so the keyboards are read from /dev/input (needs the 'input'
+# group), mapped with libxkbcommon, and expansions injected with ydotool.
 
-# Linux input event codes (linux/input-event-codes.h)
+# X keysyms for modifiers, arrows and F-keys, and the Latin-1 range
+_FUNCTION_KEYSYMS = range(0xFF00, 0xFFFF + 1)
+_LATIN1_KEYSYMS = range(0x20, 0xFF + 1)
+
+# linux/input-event-codes.h
+_EV_KEY = 0x01
+_KEY_RELEASED, _KEY_PRESSED = 0, 1  # 2 is autorepeat
 _KEY_BACKSPACE = 14
+_KEY_LEFTCTRL = 29
 _KEY_LEFTSHIFT = 42
+_KEY_LEFTALT = 56
+_KEY_RIGHTCTRL = 97
 _KEY_LEFT = 105
 _KEY_INSERT = 110
-# A chord, not typing, so a partial trigger is dropped. Not right Alt (AltGr,
-# 100): it types @ { } [ ] on many layouts.
-_ABORT_MODS = {29, 97, 56, 125, 126}  # ctrl L/R, left-alt, super L/R
-# ydotool's keystrokes come back through /dev/input; the watcher ignores
-# events until this monotonic time
+_KEY_LEFTMETA = 125
+_KEY_RIGHTMETA = 126
+# struct input_event: sec, usec, type, code, value
+_INPUT_EVENT_FORMAT = "llHHi"
+# A chord, not typing, drops a partial trigger. Not right Alt: as AltGr it
+# types @ { } [ ] on many layouts.
+_ABORT_MODS = {_KEY_LEFTCTRL, _KEY_RIGHTCTRL, _KEY_LEFTALT, _KEY_LEFTMETA, _KEY_RIGHTMETA}
+# ydotool's keystrokes come back through /dev/input; until this monotonic
+# time the watcher ignores them
 _kbd_suppress_until = 0.0
 
 
 def _is_wayland() -> bool:
-    """A Wayland session: picks the trigger watcher's input path (evdev +
-    ydotool), not the clipboard tool - see _wl_clipboard."""
+    """Picks the trigger watcher's input path (evdev + ydotool), not the
+    clipboard tool: see _wl_clipboard."""
     return bool(os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _wl_clipboard() -> bool:
-    """Read and write the clipboard with wl-clipboard (else xclip). Only on
-    the KDE Wayland backend, not whenever WAYLAND_DISPLAY is set: mutter
-    (GNOME) has no data-control protocol, so wl-copy there steals focus with
-    a popup surface or fails silently and wl-paste --primary can hang. On
-    the XWayland backend (GNOME, sway ...) xclip goes through the
-    compositor's X selection bridge instead. Same rule as
-    platform_backend/x11.py's read_selection."""
+    """Use wl-clipboard rather than xclip: only on the KDE Wayland backend.
+    mutter has no data-control protocol, so wl-copy there steals focus or
+    fails silently and wl-paste --primary can hang; elsewhere xclip goes
+    through the compositor's X selection bridge (pinned by
+    `tests/test_clipboard_store.py::test_history_uses_the_backends_clipboard_tool`)."""
     try:
         from platform_backend import get_backend
 
@@ -1017,8 +1027,7 @@ class _WaylandTriggerWatcher(_TriggerWatcher):
     def _open_keyboards(self) -> list:
         import glob
 
-        # by-path lists the physical keyboards only, not ydotool's virtual
-        # device, whose injected keys must not be read back
+        # by-path lists only physical keyboards, not ydotool's virtual one
         paths = set()
         for p in glob.glob("/dev/input/by-path/*-event-kbd"):
             try:
@@ -1049,9 +1058,7 @@ class _WaylandTriggerWatcher(_TriggerWatcher):
         print(f"[triggers] watching {len(self._fds)} keyboard device(s)")
         import struct
 
-        input_event = "llHHi"  # struct input_event: sec, usec, type, code, value
-        event_size = struct.calcsize(input_event)
-        EV_KEY = 0x01
+        event_size = struct.calcsize(_INPUT_EVENT_FORMAT)
         try:
             while not self._stop.is_set():
                 readable, _, _ = _select.select(self._fds, [], [], 0.5)
@@ -1062,9 +1069,9 @@ class _WaylandTriggerWatcher(_TriggerWatcher):
                         continue
                     for offset in range(0, len(data) - event_size + 1, event_size):
                         _sec, _usec, event_type, code, value = struct.unpack_from(
-                            input_event, data, offset
+                            _INPUT_EVENT_FORMAT, data, offset
                         )
-                        if event_type == EV_KEY:
+                        if event_type == _EV_KEY:
                             self._on_key(code, value)
         finally:
             for fd in self._fds:
@@ -1075,7 +1082,7 @@ class _WaylandTriggerWatcher(_TriggerWatcher):
             self._fds = []
 
     def _on_key(self, code: int, value: int) -> None:
-        released, pressed = value == 0, value == 1  # 2 is autorepeat
+        released, pressed = value == _KEY_RELEASED, value == _KEY_PRESSED
         if released:
             self._mapper.update(code, False)
             return
@@ -1102,8 +1109,8 @@ class _WaylandTriggerWatcher(_TriggerWatcher):
 
 
 def _trigger_blocked() -> bool:
-    """Return True if the active window matches any pattern in the
-    user's trigger_blocklist_patterns setting."""
+    """Whether the active window matches trigger_blocklist_patterns (pinned
+    by `tests/test_trigger_expansion.py::test_a_blocklisted_window_gets_nothing`)."""
     patterns = list(_cfg("trigger_blocklist_patterns", []) or [])
     if not patterns:
         return False
@@ -1111,11 +1118,10 @@ def _trigger_blocked() -> bool:
 
 
 def _snapshot_clipboard() -> tuple[str, bytes] | None:
-    """The clipboard as (type, data), so a trigger expansion can put it back
-    after staging the snippet there. Keeps the text, or failing that the
-    PNG, not every format the app offered. None when it's empty or
-    unreadable, or a password manager's copy: restoring that would undo its
-    auto-clear and drop the hint that keeps it out of history."""
+    """The clipboard as (type, data), for a trigger expansion to put back:
+    the text, else the PNG. None when empty or unreadable, or a password
+    manager's copy, whose restore would undo its auto-clear (pinned by
+    `tests/test_clipboard_store.py::test_a_password_copy_is_not_snapshotted`)."""
     targets = _read_clipboard_targets()
     if not targets or _is_password_copy(targets):
         return None
@@ -1141,9 +1147,11 @@ def _write_clipboard(kind: str, data: bytes, primary: bool = False) -> None:
 
 def _restore_clipboard(saved: tuple[str, bytes] | None, staged: str) -> None:
     """Put back what was on the clipboard before an expansion staged
-    `staged` there, unless something else was copied in the meantime. The
-    watcher is told it's ours, so it doesn't land in history again (or for
-    the first time, if it came from a blocklisted app)."""
+    `staged` there, unless something else was copied since, marked as our
+    own copy so history doesn't record it (pinned by
+    `tests/test_clipboard_store.py::test_expansion_restores_the_clipboard`,
+    `tests/test_trigger_expansion.py::test_a_newer_copy_is_not_overwritten_by_the_restore`,
+    `tests/test_clipboard_store.py::test_expansion_text_and_the_restored_copy_are_not_recorded`)."""
     if saved is None or _read_clipboard_text() != staged:
         return
     kind, data = saved
@@ -1166,11 +1174,16 @@ _BACKSPACE_INTERVAL = 0.016
 _AFTER_DELETE_WAIT = 0.08
 _AFTER_PASTE_WAIT = 0.05
 _BEFORE_MODIFIER_RELEASE_WAIT = 0.02
-# The target app asks for the clipboard after the paste key arrives: too
-# short and it pastes what the user had there instead
+# The target app reads the clipboard after the paste key arrives: too short
+# and it pastes what the user had there instead
 _RESTORE_DELAY = 0.3
 _YDOTOOL_AFTER_DELETE_WAIT = 0.03
 _YDOTOOL_AFTER_STAGE_WAIT = 0.05
+# How long the Wayland watcher ignores keys while ydotool injects: a base,
+# plus a margin per injected key, then a tail after the last key
+_YDOTOOL_SUPPRESS_BASE = 1.2
+_YDOTOOL_SUPPRESS_PER_KEY = 0.02
+_YDOTOOL_SUPPRESS_TAIL = 0.25
 
 
 def _fire_trigger_expansion(
@@ -1179,18 +1192,19 @@ def _fire_trigger_expansion(
     boundary_char: str,
     snippet: Entry,
 ) -> bool:
-    """GLib-main-thread callback: delete the typed trigger and boundary,
-    then paste the rendered snippet, in the case `typed` was typed in.
-    Returns False so idle_add fires only once."""
+    """GLib idle callback: delete the typed trigger and boundary, then
+    paste the rendered snippet in the case `typed` was typed in. An image
+    or an {ask:} snippet is left to the picker (pinned by
+    `tests/test_trigger_expansion.py::test_an_image_entry_is_never_typed`,
+    `tests/test_trigger_expansion.py::test_an_ask_snippet_is_left_to_the_picker`)."""
     if snippet.kind != "text":
-        return False
-    # A dialog mid-keystroke would be jarring; the picker still runs these
+        return GLib.SOURCE_REMOVE
     if not snippet.literal and "{ask:" in snippet.text:
         print(f"[triggers] '{trigger}' has {{ask:}} - skipping (use picker)")
-        return False
+        return GLib.SOURCE_REMOVE
     if _trigger_blocked():
         print(f"[triggers] '{trigger}' skipped - active window is in blocklist")
-        return False
+        return GLib.SOURCE_REMOVE
     if snippet.literal:
         rendered, cursor_left = snippet.text, 0
     else:
@@ -1202,18 +1216,19 @@ def _fire_trigger_expansion(
     _bump_usage(snippet.id)
 
     expand = _expand_with_ydotool if _is_wayland() else _expand_over_xtest
-    typed_length = len(trigger) + 1  # the trigger and its boundary character
+    typed_length = len(trigger) + len(boundary_char)
     threading.Thread(
         target=lambda: expand(typed_length, rendered, cursor_left),
         daemon=True,
         name="trigger-expansion",
     ).start()
-    return False
+    return GLib.SOURCE_REMOVE
 
 
 def _expand_over_xtest(typed_length: int, rendered: str, cursor_left: int) -> None:
-    # Checked before anything is deleted: bailing out after the BackSpaces
-    # would leave neither the trigger nor the expansion
+    """Checks its tools before deleting anything, so a failure leaves the
+    trigger typed (pinned by `tests/test_trigger_expansion.py::test_without_xtest_nothing_is_deleted`,
+    `tests/test_trigger_expansion.py::test_without_xclip_nothing_is_deleted`)."""
     if not _x_can_inject() or not shutil.which("xclip"):
         print("[triggers] no XTEST or no xclip - cannot expand")
         return
@@ -1231,8 +1246,8 @@ def _expand_over_xtest(typed_length: int, rendered: str, cursor_left: int) -> No
     if cursor_left > 0:
         time.sleep(_AFTER_PASTE_WAIT)
         _x_key("Left", repeat=cursor_left)
-    # Putting the held modifiers back races the user's own key-up and can
-    # leave Ctrl or Shift logically down, so they are released outright
+    # Restoring held modifiers races the user's key-up and can leave Ctrl
+    # down, so they are released outright
     time.sleep(_BEFORE_MODIFIER_RELEASE_WAIT)
     _x_keyup("ctrl", "shift", "alt", "super", "Control_L", "Control_R")
     time.sleep(_RESTORE_DELAY)
@@ -1245,13 +1260,21 @@ def _ydotool_taps(key_code: int, count: int) -> list[str]:
 
 
 def _expand_with_ydotool(typed_length: int, rendered: str, cursor_left: int) -> None:
+    """The Wayland expansion (pinned by
+    `tests/test_trigger_expansion.py::test_wayland_deletes_with_ydotool_and_pastes_with_shift_insert`,
+    `tests/test_trigger_expansion.py::test_wayland_stages_clipboard_and_primary_and_puts_both_back`,
+    `tests/test_trigger_expansion.py::test_wayland_without_ydotool_deletes_nothing`)."""
     clip_tool = "wl-copy" if _wl_clipboard() else "xclip"
     if not shutil.which("ydotool") or not shutil.which(clip_tool):
         print(f"[triggers] ydotool/{clip_tool} not found - cannot expand on Wayland")
         return
     global _kbd_suppress_until
     env = _ydotool_env()
-    _kbd_suppress_until = time.monotonic() + 1.2 + 0.02 * (typed_length + cursor_left)
+    _kbd_suppress_until = (
+        time.monotonic()
+        + _YDOTOOL_SUPPRESS_BASE
+        + _YDOTOOL_SUPPRESS_PER_KEY * (typed_length + cursor_left)
+    )
     time.sleep(_BOUNDARY_KEY_RELEASE_WAIT)
     subprocess.run(
         ["ydotool", "key", *_ydotool_taps(_KEY_BACKSPACE, typed_length)], env=env, check=False
@@ -1281,7 +1304,7 @@ def _expand_with_ydotool(typed_length: int, rendered: str, cursor_left: int) -> 
         subprocess.run(
             ["ydotool", "key", *_ydotool_taps(_KEY_LEFT, cursor_left)], env=env, check=False
         )
-    _kbd_suppress_until = time.monotonic() + 0.25
+    _kbd_suppress_until = time.monotonic() + _YDOTOOL_SUPPRESS_TAIL
     time.sleep(_RESTORE_DELAY)
     _restore_clipboard(saved, rendered)
     if saved_primary and _read_primary_selection() == rendered:
@@ -1339,22 +1362,22 @@ def _read_clipboard_target(target: str) -> bytes | None:
     return out.stdout if out.returncode == 0 else None
 
 
-# How password managers mark a copy for clipboard managers to leave alone:
-# KeePassXC, KWallet and Plasma offer this target with the value "secret",
-# some apps the macOS concealed type. Lower-cased: X11 echoes an atom name
-# as the app wrote it.
+# How password managers mark a copy for clipboard managers to leave alone.
+# Lower-cased: X11 echoes an atom name in the case the app wrote it.
 _PASSWORD_HINT_TARGET = "x-kde-passwordmanagerhint"  # nosec B105
 _CONCEALED_TARGETS = ("application/x-nspasteboard-concealed-type",)
 
 
 def _is_password_copy(targets: list[str]) -> bool:
+    """A concealed copy, or a hint whose value is "secret" or can't be read:
+    keeping a password by mistake is worse than missing one copy (pinned by
+    `tests/test_clipboard_store.py::test_password_manager_copies_are_not_captured`,
+    `tests/test_clipboard_store.py::test_a_non_secret_hint_value_is_captured`)."""
     lowered = {t.strip().lower(): t.strip() for t in targets}
     if any(t in lowered for t in _CONCEALED_TARGETS):
         return True
     if _PASSWORD_HINT_TARGET not in lowered:
         return False
-    # Only "secret" is defined, but skip too if the value can't be read:
-    # keeping a password by mistake is worse than missing one copy.
     value = _read_clipboard_target(lowered[_PASSWORD_HINT_TARGET])
     if not value:
         return True
@@ -1370,9 +1393,9 @@ def _matches_blocklist(patterns: list[str], haystacks: list[str]) -> bool:
 
 
 def _capture_blocked() -> bool:
-    """True if the focused window (normally the app the copy came from)
-    matches the popup's blocklist_patterns. People list their password
-    manager and bank there; their copies shouldn't land in history either."""
+    """Whether the focused window, normally the app the copy came from,
+    matches the popup's blocklist_patterns (pinned by
+    `tests/test_clipboard_store.py::test_copies_from_a_blocklisted_window_are_not_captured`)."""
     patterns = list(_cfg("blocklist_patterns", []) or [])
     if not patterns:
         return False
@@ -1387,8 +1410,8 @@ def _capture_blocked() -> bool:
 
 
 def _skip_capture(targets: list[str]) -> bool:
-    """Checked once per new copy, after the dedup check, so polling doesn't
-    re-run the active-window query every interval. Silent on purpose: not
+    """Call once per new copy, after the dedup check, so polling doesn't
+    query the active window every interval. Logs nothing on purpose: not
     even the log should note that a password went by."""
     return _is_password_copy(targets) or _capture_blocked()
 
@@ -1443,9 +1466,8 @@ def _read_clipboard_image() -> bytes | None:
 
 _state = {"last_text": "", "last_image_hash": b""}
 
-# What vinoPop itself just put on the clipboard (a trigger expansion, and
-# the user's copy restored after it), text or image sha1, with a monotonic
-# deadline. The watcher counts these as seen instead of recording them.
+# What vinoPop itself just put on the clipboard (text or image sha1) -> the
+# monotonic time until which the watcher doesn't record it
 _OWN_COPY_TTL = 5.0
 _own_copies: dict[str | bytes, float] = {}
 _own_copies_lock = threading.Lock()
@@ -1464,8 +1486,8 @@ def _is_own_copy(content: str | bytes) -> bool:
         return _own_copies.get(content, 0.0) >= time.monotonic()
 
 
-# The last captured image's hash, kept on disk so a restart with that image
-# still on the clipboard doesn't save it again
+# Kept on disk so a restart with the same image on the clipboard doesn't
+# save it again
 _DEDUP_STATE_FILE = CACHE_DIR / "last_image.sha1"
 
 
@@ -1473,7 +1495,7 @@ def _load_dedup_state() -> None:
     try:
         _state["last_image_hash"] = _DEDUP_STATE_FILE.read_bytes()
     except OSError:
-        pass  # first run
+        pass
 
 
 def _save_dedup_state(h: bytes) -> None:
@@ -1512,9 +1534,8 @@ def _sweep_orphan_images() -> None:
 
 
 def _tighten_permissions() -> None:
-    """One-time fix-up for files older versions wrote with the default
-    umask (0644 files in 0755 folders): only the user should be able to
-    read what they copied."""
+    """Make files older versions wrote with the default umask private
+    (pinned by `tests/test_clipboard_store.py::test_files_from_older_versions_are_made_private`)."""
     for d in (_LP_CACHE, CACHE_DIR, IMAGES_DIR, _LP_CONFIG, SNIPPET_IMAGES_DIR):
         make_private(d)
     for f in (HISTORY_FILE, SNIPPETS_FILE, _DEDUP_STATE_FILE):
@@ -1526,12 +1547,15 @@ def _tighten_permissions() -> None:
 
 
 def _capture_current_clipboard() -> None:
+    """Record what is on the clipboard now. Text wins over an image, since
+    a LibreOffice cell comes with a bitmap of itself; an SVG-only copy is
+    kept as text (pinned by `tests/test_clipboard_store.py::test_text_wins_when_an_image_is_offered_too`,
+    `tests/test_clipboard_store.py::test_an_svg_only_copy_is_kept_as_text`,
+    `tests/test_clipboard_store.py::test_a_stopped_watcher_captures_nothing`)."""
     if _watcher_stop.is_set():
-        return  # this copy of the module was replaced by a reload
+        return
     try:
         targets = _read_clipboard_targets()
-        # Text wins when both are offered: a LibreOffice cell comes with a
-        # bitmap of itself
         if any(t in _TEXT_TARGETS for t in targets):
             _capture_text(_read_clipboard_text(), targets)
             return
@@ -1541,7 +1565,6 @@ def _capture_current_clipboard() -> None:
         if data:
             _capture_image(data, targets)
         elif _SVG_TARGET in targets:
-            # Inkscape offers SVG and no PNG; kept as the text it is
             svg = _read_clipboard_target(_SVG_TARGET)
             if svg:
                 _capture_text(svg.decode("utf-8", errors="replace"), targets)
@@ -1560,7 +1583,7 @@ def _capture_image(data: bytes, targets: list[str]) -> None:
     if h == _state["last_image_hash"]:
         return
     _state["last_image_hash"] = h
-    _state["last_text"] = ""  # so copying the same text again counts as new
+    _state["last_text"] = ""
     _save_dedup_state(h)
     if _is_own_copy(h) or _skip_capture(targets):
         return
@@ -1572,7 +1595,6 @@ def _capture_image(data: bytes, targets: list[str]) -> None:
     entry = Entry(
         id=eid, timestamp=time.time(), kind="image", image_path=str(path), image_hash=h.hex()
     )
-    # Checked before writing so a re-copied image doesn't leave a second PNG
     if _promote_existing(entry):
         return
     private_dir(CACHE_DIR)
@@ -1586,15 +1608,16 @@ def _capture_image(data: bytes, targets: list[str]) -> None:
 
 
 def _capture_text(text: str, targets: list[str]) -> None:
+    """Too big a copy is skipped, not cut: half a log pasted back is worse
+    than none (pinned by `tests/test_clipboard_store.py::test_oversized_text_is_not_kept`)."""
     if not text or text == _state["last_text"] or not text.strip():
         return
     _state["last_text"] = text
-    _state["last_image_hash"] = b""  # so copying the same image again counts as new
+    _state["last_image_hash"] = b""
     if _is_own_copy(text) or _skip_capture(targets):
         return
     size = len(text.encode("utf-8", errors="replace"))
     if size > _max_text_bytes():
-        # Skipped, not cut: half a log pasted back is worse than none
         print(f"[clipboard] not keeping a {size // 1024} KB copy (too big)")
         return
     _add_entry(
@@ -1636,8 +1659,7 @@ def _watcher_loop() -> None:
         _capture_current_clipboard()
         while not _watcher_stop.is_set():
             try:
-                # Short timeout so shutdown() can join this thread quickly
-                readable, _, _ = _select.select([fd], [], [], 0.5)
+                readable, _, _ = _select.select([fd], [], [], _WATCHER_WAKE_S)
             except (OSError, ValueError):
                 break
             if not readable:
@@ -1656,6 +1678,10 @@ def _watcher_loop() -> None:
             pass
 
 
+# How often the XFixes loop checks for shutdown(), which joins it
+_WATCHER_WAKE_S = 0.5
+
+
 def _poll_only_loop() -> None:
     while not _watcher_stop.is_set():
         _capture_current_clipboard()
@@ -1663,15 +1689,15 @@ def _poll_only_loop() -> None:
 
 
 def shutdown() -> None:
-    """Stop this copy's background threads. plugin_loader calls it before it
-    re-executes the file as a fresh module (every settings save or plugin
-    change), otherwise the old watcher keeps capturing and rewriting
-    history.json beside the new one, and the old trigger watcher expands
-    every snippet a second time."""
+    """Stop this copy's background threads, waiting for a capture in
+    progress. plugin_loader calls it before it re-executes the file as a
+    fresh module; otherwise the old watchers keep recording history and
+    expanding snippets beside the new ones (pinned by
+    `tests/test_clipboard_store.py::test_shutdown_stops_the_watchers`,
+    `tests/test_clipboard_store.py::test_shutdown_waits_for_the_watcher`,
+    `tests/test_clipboard_store.py::test_plugin_loader_shuts_down_the_previous_copy_before_reloading`)."""
     global _watcher_thread, _trigger_watcher
     _watcher_stop.set()
-    # A capture in progress must not save history.json after the reloaded
-    # copy has read it
     if _watcher_thread is not None and _watcher_thread is not threading.current_thread():
         _watcher_thread.join(timeout=1.0)
     _watcher_thread = None
@@ -1691,8 +1717,8 @@ def _start_watcher_once() -> None:
     history_ok = _load_list(HISTORY_FILE, _history)
     snippets_ok = _load_list(SNIPPETS_FILE, _snippets)
     _load_dedup_state()
-    # After a failed load every cached image looks unreferenced
-    if history_ok and snippets_ok:
+    every_reference_loaded = history_ok and snippets_ok
+    if every_reference_loaded:
         _sweep_orphan_images()
     else:
         print("[clipboard] skipping orphan-image sweep - a reference file failed to load")
@@ -1721,7 +1747,8 @@ def _get_active_window() -> str | None:
     return str(wid) if wid else None
 
 
-# Terminals paste with Ctrl+Shift+V. Matched as substrings of WM_CLASS.
+# Substrings of WM_CLASS that paste with Ctrl+Shift+V (pinned by
+# `tests/test_clipboard_store.py::test_picker_paste_key_follows_the_target_window_class`)
 _TERMINAL_CLASSES = (
     "gnome-terminal",
     "konsole",
@@ -1801,14 +1828,13 @@ def _copy_entry_to_clipboard(entry: Entry) -> bool:
     return True
 
 
-# The picker's paste, in seconds; docs/how-it-works.md, "Pasting from the
-# clipboard picker" has what each wait is for
+# In seconds; docs/how-it-works.md, "Pasting from the clipboard picker" has
+# what each wait is for
 _HOTKEY_RELEASE_WAIT = 0.06
 _FOCUS_WAIT = 0.18
 _TERMINAL_FOCUS_WAIT = 0.30
 _REACTIVATE_WAIT = 0.12
 _TYPING_INTERVAL = 0.001
-# Longer text, and anything with a newline, is pasted instead of typed
 _MAX_TYPED_CHARS = 2048
 _CTRL_AND_SUPER_KEYS = (
     "ctrl",
@@ -1837,6 +1863,14 @@ def _activate_target_window(target_window: str) -> None:
 
 
 def _paste_into_window(entry: Entry, target_window: str | None, cursor_left: int) -> None:
+    """Focus `target_window` and type or paste `entry` there.
+
+    A short single line is typed, since Electron editors drop a synthetic
+    Ctrl+V and a terminal's bracketed paste gets out of step; anything
+    longer or with a newline is pasted, as typed lines would each run in a
+    shell (pinned by `tests/test_clipboard_paste.py::test_a_short_line_is_typed_not_pasted`,
+    `tests/test_clipboard_paste.py::test_text_at_the_typing_limit_is_typed_and_one_over_is_pasted`,
+    `tests/test_clipboard_paste.py::test_several_lines_are_pasted_so_a_shell_does_not_run_each`)."""
     if not (target_window and _x_can_inject()):
         _log.warning("[clipboard.paste] skipped - no target, or no XTEST")
         return
@@ -1857,9 +1891,6 @@ def _paste_into_window(entry: Entry, target_window: str | None, cursor_left: int
     if active and active != target_window:
         _x_activate(target_window)
         time.sleep(_REACTIVATE_WAIT)
-    # A short single line is typed, not pasted: Electron editors drop a
-    # synthetic Ctrl+V and a terminal's bracketed paste gets out of step.
-    # Several lines typed into a shell would each run.
     x11 = _x11()
     types_it = (
         entry.kind == "text"
@@ -1877,11 +1908,11 @@ def _paste_into_window(entry: Entry, target_window: str | None, cursor_left: int
     if cursor_left > 0:
         time.sleep(_AFTER_PASTE_WAIT)
         _x_key("Left", repeat=cursor_left)
-    # The window manager may have re-asserted one while activating
+    # The window manager may have re-asserted one while activating (pinned by
+    # `tests/test_clipboard_paste.py::test_held_modifiers_are_released_before_and_after`)
     _x_keyup(*_CTRL_AND_SUPER_KEYS)
 
 
-# tests/test_snippet_placeholders.py has what each token renders as
 _PLACEHOLDER_RE = re.compile(
     r"\{("
     r"date(?::[^}]+)?|time|datetime|weekday|clipboard|selection|cursor|name"
@@ -1893,9 +1924,8 @@ _PLACEHOLDER_RE = re.compile(
 
 
 def _resolve_var(name: str) -> str:
-    """Look up a user-defined variable from snippet_variables setting.
-    Returns empty string for unknown keys - users will see the empty
-    space and know to define the variable in Settings."""
+    """A variable from the snippet_variables setting, "" when undefined (pinned
+    by `tests/test_snippet_placeholders.py::test_var_comes_from_the_snippet_variables_setting`)."""
     if _settings is None:
         return ""
     vars_dict = _settings.get("snippet_variables") or {}
@@ -1925,11 +1955,11 @@ def _read_primary_selection() -> str:
 
 
 def _render_shell_token(cmd: str) -> str:
-    """Run `cmd` through bash, return stdout (trailing newline stripped).
-    Gated behind snippet_shell_enabled - when off, returns the literal
-    {shell:...} token so the user sees that it didn't run. Timeout 5 s
-    so a runaway snippet can't freeze the paste.
-    """
+    """`cmd`'s stdout through bash, without the trailing newline. With
+    snippet_shell_enabled off, the token comes back as written so the user
+    sees it didn't run (pinned by `tests/test_snippet_shell.py::test_off_returns_the_token_and_runs_nothing`,
+    `tests/test_snippet_shell.py::test_on_runs_bash_with_a_timeout`,
+    `tests/test_snippet_shell.py::test_a_timeout_is_reported_inline`)."""
     if not bool(_cfg("snippet_shell_enabled", False)):
         return f"{{shell:{cmd}}}"
     cmd = cmd.strip()
@@ -1940,7 +1970,7 @@ def _render_shell_token(cmd: str) -> str:
             ["bash", "-c", cmd],
             capture_output=True,
             text=True,
-            timeout=5.0,
+            timeout=_SHELL_TOKEN_TIMEOUT_S,
         )
         return out.stdout.rstrip("\n")
     except subprocess.TimeoutExpired:
@@ -1948,6 +1978,9 @@ def _render_shell_token(cmd: str) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         return f"[shell error: {exc}]"
 
+
+# So a runaway {shell:} snippet can't freeze the paste
+_SHELL_TOKEN_TIMEOUT_S = 5.0
 
 # Private-use characters never appear in real text, and unlike NUL nothing
 # drops them
@@ -1993,7 +2026,9 @@ def render_placeholders(
     text: str,
     ask_callback: Callable[[list[tuple[str, list[str] | None]]], dict | None],
 ) -> tuple[str, int, bool]:
-    """Expand the placeholder tokens in a snippet body.
+    """Expand the placeholder tokens in a snippet body. {clipboard} is read
+    once, before the paste replaces it (pinned by
+    `tests/test_snippet_placeholders.py::test_the_clipboard_is_read_once_however_often_it_is_used`).
 
     `ask_callback` is called once with every {ask:} field in the body and
     returns {label: answer}, or None when the user cancels.
@@ -2028,7 +2063,6 @@ def render_placeholders(
         if placeholder == "name":
             return _full_user_name()
         if placeholder == "clipboard":
-            # Read once, before the paste puts the snippet on the clipboard
             if clipboard_value is None:
                 clipboard_value = _read_clipboard_text() or ""
             return clipboard_value
@@ -2055,7 +2089,7 @@ _STRFTIME_TOKENS = {
     "date": "%Y-%m-%d",
     "time": "%H:%M",
     "datetime": "%Y-%m-%d %H:%M",
-    "weekday": "%A",  # in the system language
+    "weekday": "%A",
 }
 _UNLABELLED_ASK = "Value"
 
@@ -2125,8 +2159,8 @@ def _monitor_geometry_at(px: int, py: int):
 
 
 def _position_at_pointer(win: Gtk.Window) -> None:
-    """Place the picker near the pointer, clamped to its monitor."""
-    # A Wayland client can't position its own toplevel
+    """Place the picker near the pointer, clamped to its monitor. Not on
+    Wayland, where a client can't position its own toplevel."""
     if _is_wayland_kde():
         return
     try:
@@ -2628,8 +2662,8 @@ def _flat_icon_button(icon_name: str, tooltip: str, on_clicked, entry: Entry) ->
     return button
 
 
-# A snippet's row says how often it was used once that is worth knowing:
-# a hint at which ones could go
+# (pinned by `tests/test_clipboard_store.py::test_a_snippet_row_says_how_often_it_was_used_from_the_third_time`,
+# `tests/test_clipboard_store.py::test_a_snippet_used_twice_shows_only_its_body`)
 _USAGE_SHOWN_FROM = 3
 
 
@@ -2670,7 +2704,6 @@ class _PickerDialog:
         self._dragging = False
 
     def show(self, target_window: str | None = None) -> None:
-        # Each phase is logged: one over 100 ms explains a picker that felt frozen
         started = time.monotonic()
 
         def log_phase(label):
@@ -2844,7 +2877,7 @@ class _PickerDialog:
     def _grab_search_focus(self) -> bool:
         if self.search_entry is not None and self.dialog is not None:
             self.search_entry.grab_focus()
-        return False  # one-shot
+        return GLib.SOURCE_REMOVE
 
     def _on_header_pressed(self, gesture: Gtk.GestureClick, _n_press, x, y) -> None:
         """Start a window move. The window manager takes focus for the
@@ -2877,7 +2910,7 @@ class _PickerDialog:
 
     def _clear_dragging(self) -> bool:
         self._dragging = False
-        return False  # one-shot
+        return GLib.SOURCE_REMOVE
 
     def _on_active_changed(self, _win, _pspec) -> None:
         if self.dialog is None or self.dialog.is_active():
@@ -2886,17 +2919,15 @@ class _PickerDialog:
             return
 
         def close_if_focus_stayed_away() -> bool:
-            if self.dialog is None:
-                return False
-            if self._modal_child_open:
-                return False
+            if self.dialog is None or self._modal_child_open:
+                return GLib.SOURCE_REMOVE
             try:
                 still_active = self.dialog.is_active()
             except Exception:
                 still_active = False
             if not still_active:
                 self._dismiss()
-            return False  # one-shot
+            return GLib.SOURCE_REMOVE
 
         # IBus and Cinnamon take focus for a frame and give it back, so the
         # loss only counts if it lasts
@@ -3135,15 +3166,16 @@ class _PickerDialog:
         if is_snippet:
             _bump_usage(entry.id)
         cursor_left = 0
-        # History is pasted as copied, and so is a snippet pinned from a
-        # selection: a "{date}" from somewhere else stays literal
+        # History and literal snippets paste as copied (pinned by
+        # `tests/test_clipboard_store.py::test_picker_pastes_a_literal_snippet_as_written`,
+        # `tests/test_clipboard_store.py::test_picker_still_expands_a_user_snippet`)
         if is_snippet and entry.kind == "text" and not entry.literal and "{" in entry.text:
             rendered, cursor_left, cancelled = render_placeholders(
                 entry.text,
                 self._ask_placeholder_values,
             )
             if cancelled:
-                return  # the picker stays open for another try
+                return
             if rendered != entry.text or cursor_left:
                 entry = Entry(
                     id=entry.id,
@@ -3651,7 +3683,7 @@ class _PickerDialog:
         return False
 
     def _on_key_pressed(self, _ctrl, keyval: int, _keycode: int, state) -> bool:
-        # A prompt inside the picker gets its own keys
+        """(pinned by `tests/test_clipboard_picker_keys.py::test_a_prompt_inside_the_picker_gets_its_own_keys`)"""
         if self._modal_child_open:
             return False
         return self._handle_key(keyval, state)
@@ -3766,8 +3798,7 @@ _picker = _PickerDialog()
 
 
 def open_picker(target_window: str | None = None) -> None:
-    """Module-level entry point used by both the popup plugin button and
-    the global clipboard hotkey in main.py."""
+    """Open the picker from the popup button or main.py's clipboard hotkey."""
     GLib.idle_add(_picker.show, target_window)
 
 
@@ -3777,7 +3808,6 @@ def _open_from_popup(_text: str) -> None:
 
 
 def register(register_plugin) -> None:
-    # Off means no watcher thread, no hotkey and no popup button
     if not bool(_cfg("clipboard_history_enabled", True)):
         print("[clipboard] disabled in settings - not registering")
         return
@@ -3788,7 +3818,7 @@ def register(register_plugin) -> None:
             icon="vinopop-clipboard-symbolic",
             tooltip="Clipboard & snippets",
             handler=_open_from_popup,
-            content_types=(),  # always available
+            content_types=(),
             priority=5,
         )
     )

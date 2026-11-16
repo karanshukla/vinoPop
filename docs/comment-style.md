@@ -9,23 +9,24 @@ when all four rungs fail.
 
    ```python
    # Before
-   if delay > 4000:  # 4 s: long enough to move the pointer to the bar
-   return ctypes.CDLL(None).prctl(15, name, 0, 0, 0)  # PR_SET_NAME
+   ctypes.CDLL(None).prctl(15, name, 0, 0, 0)  # PR_SET_NAME
+   flags = dbus.UInt32(6)  # SetPresent | NoAutoloading
 
    # After
-   if delay > INITIAL_HIDE_MS:
-   return ctypes.CDLL(None).prctl(PR_SET_NAME, name, 0, 0, 0)
+   ctypes.CDLL(None).prctl(PR_SET_NAME, name, 0, 0, 0)
+   flags = dbus.UInt32(_KGA_SET_PRESENT | _KGA_NO_AUTOLOADING)
    ```
 
 2. **Name it.** A comment that labels a block (`# Phase 2: cache lookup`)
    means the block wants to be a function. Sentinels get names too: write
-   `USE_THEME_DEFAULT = ""`, not `""  # empty means the theme's colour`.
+   `rect = ANCHOR_TO_POINTER`, not `rect = None  # anchor to the pointer`.
 
 3. **Pin it with a test pair.** A comment that states a business rule is a
    rule nothing enforces. Write one test inside the boundary and one
-   outside, named after the rule (`test_a_two_character_selection_shows_the_popup`
-   / `test_a_one_character_selection_does_not`), instead of writing
-   `# one character is usually a misclick`. The pair is the point: it fails
+   outside, named after the rule
+   (`test_the_watcher_skips_a_selection_one_short_of_the_minimum` /
+   `test_the_watcher_shows_a_selection_at_the_minimum`), instead of writing
+   `# exactly at the minimum is fine`. The pair is the point: it fails
    the day someone moves the limit. In a test, a comment that labels the
    next few asserts is the same smell. Split those asserts into their own
    test, named after what the comment said.
@@ -51,10 +52,11 @@ When rung 3 or 4 replaced a comment, the code it governs says which test
 pins the rule, always with the same phrase:
 
 ```python
-def should_show(text: str) -> bool:
-    """Whether a selection is long enough to pop up for (pinned by
-    `tests/test_min_selection.py::test_two_characters_show_the_popup`,
-    `tests/test_min_selection.py::test_one_character_does_not`)."""
+def _below_min_selection(self, text: str) -> bool:
+    """Shorter than the minimum, with the filter on (pinned by
+    `tests/test_min_selection.py::test_the_watcher_skips_a_selection_one_short_of_the_minimum`,
+    `tests/test_min_selection.py::test_the_watcher_shows_a_selection_at_the_minimum`,
+    `tests/test_min_selection.py::test_the_filter_is_off_until_enabled`)."""
 ```
 
 `tests/test_doc_links.py` (CI job "Doc Links") checks every

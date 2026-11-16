@@ -28,32 +28,28 @@ VINOPOP_DIR = str(Path(__file__).resolve().parent.parent)
 REPO_PLUGIN_DIR = Path(VINOPOP_DIR) / "plugins_repo"
 ICONS_DIR = Path(VINOPOP_DIR) / "icons"
 
-# Curated set seeded into a brand-new install. Aim is "useful within
-# 5 seconds of first selection" without overwhelming the popup. Dev-
-# heavy plugins (base64, json_format, etc.) and niche transforms stay
-# in the catalogue - they're one click away from Plugin Manager.
+# What a new install starts with: useful at once without crowding the popup.
+# The rest is one click away in Plugin Manager's catalogue.
 DEFAULT_PLUGIN_SEEDS = (
-    "editing_actions.py",  # Cut / Paste / Backspace / Select All
-    "clipboard_history.py",  # the core picker
+    "editing_actions.py",
+    "clipboard_history.py",
     "wordcount.py",
-    "text_transformations.py",  # reverse, sort/dedupe/trim, swap case; predicate-guarded
-    "translate.py",  # offline translation bubble, language picker
-    "local_ai.py",  # offline summarize / rewrite / explain
+    "text_transformations.py",
+    "translate.py",
+    "local_ai.py",
 )
 _PLUGIN_SEED_MARKER = USER_PLUGIN_DIR.parent / ".default-plugins-seeded"
 
 
 def _ensure_on_path() -> None:
-    """User plugins import classifier/plugin_base - make sure those resolve."""
+    """Make the imports user plugins use (`plugin_base`, `classifier`) resolve."""
     compat.install()
     if VINOPOP_DIR not in sys.path:
         sys.path.insert(0, VINOPOP_DIR)
 
 
-# Cache of (icons_dir_mtime, user_icons_dir_mtime) → (any_copied) from the
-# previous _install_all_icons / _sync_user_icons run. Lets load_all() skip
-# the whole icon stat/copy/rescan dance when the source dirs haven't
-# changed -- which is the common case after first startup.
+# The icon dirs' mtimes at the last completed _install_all_icons(), so a
+# load_all() with neither changed skips the copying
 _icon_sync_cache: dict[str, float] = {}
 
 
@@ -65,17 +61,12 @@ def _dir_mtime(p: Path) -> float:
 
 
 def _install_all_icons() -> None:
-    """Copy every SVG from vinopop/icons/ into the user's hicolor theme,
-    register an extra search path with the running GTK process, and refresh
-    the icon-theme cache so newly installed icons are findable.
-    """
+    """Copy the bundled and the user's icons into the user's hicolor theme
+    and point the running GTK at the bundled ones."""
     if not ICONS_DIR.is_dir():
         return
-    # Fast path: if neither the bundled icons dir nor the user icons dir
-    # has been touched since the last run, skip the stat-storm + rescan.
-    user_icons_dir = USER_ICONS_DIR
     bundled_mtime = _dir_mtime(ICONS_DIR)
-    user_mtime = _dir_mtime(user_icons_dir)
+    user_mtime = _dir_mtime(USER_ICONS_DIR)
     if (
         _icon_sync_cache.get("bundled") == bundled_mtime
         and _icon_sync_cache.get("user") == user_mtime
@@ -92,11 +83,8 @@ def _install_all_icons() -> None:
             except OSError as exc:
                 print(f"[plugin_loader] icon copy failed for {src.name}: {exc}")
 
-    # Tell the running GTK process about our icon dir.
-    # Without this, GTK has already scanned its theme dirs before we copied,
-    # and falls back to the "image-missing" icon for our vinopop-* names.
-    # (GTK 4 re-checks its theme directories on its own; adding the search
-    # path is all that's needed in-process.)
+    # GTK scanned its theme dirs before the copy, so without the search path
+    # it draws "image-missing" for the vinopop-* names until restarted
     try:
         theme = _icon_theme()
         if theme is not None and str(ICONS_DIR) not in (theme.get_search_path() or []):
@@ -104,12 +92,8 @@ def _install_all_icons() -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[plugin_loader] could not refresh icon theme: {exc}")
 
-    # Mirror any user-supplied icons from ~/.config/vinopop/icons/ into
-    # hicolor so they're searchable in the picker and usable by recipes.
     _sync_user_icons()
 
-    # Remember that we've completed an install pass with these source-dir
-    # mtimes so subsequent load_all() calls can short-circuit.
     _icon_sync_cache["bundled"] = bundled_mtime
     _icon_sync_cache["user"] = user_mtime
     _icon_sync_cache["done"] = True  # type: ignore[assignment]
@@ -117,9 +101,7 @@ def _install_all_icons() -> None:
 
 def _icon_theme():
     """The GTK 4 icon theme for the default display, or None when GTK isn't
-    loaded / has no display (e.g. tests, --doctor)."""
-    import sys
-
+    loaded or has no display (tests, --doctor)."""
     if "gi.repository.Gtk" not in sys.modules:
         return None
     from gi.repository import Gdk, Gtk
@@ -129,6 +111,8 @@ def _icon_theme():
 
 
 def _sync_user_icons() -> None:
+    """Mirror ~/.config/vinopop/icons/ into hicolor, for the icon picker and
+    recipes. GTK 4 notices the new files by itself."""
     user_icons_dir = USER_ICONS_DIR
     user_icons_dir.mkdir(parents=True, exist_ok=True)
     user_copied = False
@@ -141,23 +125,19 @@ def _sync_user_icons() -> None:
             except OSError as exc:
                 print(f"[plugin_loader] user icon copy failed for {src.name}: {exc}")
     if user_copied:
-        # GTK 4's icon theme notices the new hicolor files on its own
-        # (no rescan_if_needed() any more).
         print(f"[plugin_loader] synced user icons from {user_icons_dir}")
 
 
-# Map plugin.name -> source file basename (e.g. "editing_actions.py").
-# Populated by the file-loader so the Plugin Manager can show "which
-# bundle does this come from", and so users can disable sub-plugins
-# without removing the whole .py file.
+# plugin name -> the file that registered it ("editing_actions.py"), for
+# Plugin Manager to list a file's buttons under it
 _SOURCE_BY_NAME: dict[str, str] = {}
 
 
 def register(plugin: Plugin) -> None:
-    """Register a plugin. Silently drops it if its name appears in the
-    `disabled_plugins` setting - lets users hide one sub-plugin from a
-    bundled .py file (e.g. "select-all" from editing_actions) without
-    deleting the whole bundle."""
+    """Add a popup button, unless its name is in the `disabled_plugins`
+    setting, which hides one button of a file that registers several
+    (pinned by `tests/test_plugins_loader.py::test_a_disabled_plugin_is_not_registered`,
+    `tests/test_plugins_loader.py::test_a_plugin_not_in_disabled_plugins_is_registered`)."""
     try:
         from core.settings import get_settings
 
@@ -174,15 +154,12 @@ def all_plugins() -> list[Plugin]:
 
 
 def source_for(name: str) -> str | None:
-    """Return the .py file that registered the plugin named `name`,
-    or None for built-ins / unknown."""
+    """The .py file that registered the plugin `name`; None for built-ins."""
     return _SOURCE_BY_NAME.get(name)
 
 
 def plugins_by_source() -> dict[str, list[str]]:
-    """Mapping of source-file basename to the list of plugin names it
-    registered. Used by Plugin Manager → Installed to show a bundle as
-    expandable with its sub-plugins listed underneath."""
+    """{file name: names of the plugins it registered}."""
     out: dict[str, list[str]] = {}
     for plugin_name, source in _SOURCE_BY_NAME.items():
         out.setdefault(source, []).append(plugin_name)
@@ -198,7 +175,9 @@ def for_content_type(content_type: ContentType, text: str | None = None) -> list
 
 def in_user_order(plugins: list[Plugin]) -> list[Plugin]:
     """`plugins` as the popup shows them: those in the plugin_order setting
-    first, in that order, then the rest by their built-in priority."""
+    first, in that order, then the rest by their built-in priority (pinned
+    by `tests/test_plugins_loader.py::test_plugin_order_puts_listed_plugins_first_in_its_order`,
+    `tests/test_plugins_loader.py::test_unlisted_plugins_follow_by_priority`)."""
     try:
         from core.settings import get_settings
 
@@ -215,63 +194,50 @@ def in_user_order(plugins: list[Plugin]) -> list[Plugin]:
     return sorted(plugins, key=sort_key)
 
 
+def _snippets_loaded() -> bool:
+    """Whether the clipboard_history plugin is loaded, so Pin as snippet
+    has somewhere to save (pinned by
+    `tests/test_plugins_loader.py::test_pin_as_snippet_shows_with_the_clipboard_plugin_loaded`,
+    `tests/test_plugins_loader.py::test_pin_as_snippet_hides_without_the_clipboard_plugin`)."""
+    ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get("clipboard_history")
+    return ch is not None and hasattr(ch, "_create_snippet")
+
+
+def _can_run(text: str) -> bool:
+    """Run in terminal: a command, or a path to an executable script
+    (`./build.sh`)."""
+    from core.classifier import classify, is_runnable_path
+
+    content_type = classify(text)
+    if content_type == ContentType.COMMAND:
+        return True
+    if content_type == ContentType.PATH:
+        return is_runnable_path(text)
+    return False
+
+
 def _register_builtins() -> None:
-    # Universal: copy works on anything
     register(
         Plugin(
             name="copy",
             icon="edit-copy-symbolic",
             tooltip="Copy",
             handler=actions.copy_to_clipboard,
-            content_types=(),  # empty = all
+            content_types=(),
             priority=10,
         )
     )
-
-    # Universal: pin the current selection as a snippet. Sits next to
-    # Copy in the popup so the path from "I keep retyping this" to
-    # "now it's a snippet" is one click long. Only registers when the
-    # clipboard_history plugin is actually loaded - otherwise there's
-    # nothing to save into.
-    def _snippets_loaded() -> bool:
-        import sys
-
-        ch = sys.modules.get("vinopop_user_clipboard_history") or sys.modules.get(
-            "clipboard_history"
-        )
-        return ch is not None and hasattr(ch, "_create_snippet")
-
     register(
         Plugin(
             name="pin-as-snippet",
             icon="non-starred-symbolic",
             tooltip="Pin as snippet",
             handler=actions.pin_as_snippet,
-            content_types=(),  # empty = all
+            content_types=(),
             priority=11,
             predicate=lambda _t: _snippets_loaded(),
         )
     )
-
-    # COMMAND - also shown for PATH-classified selections that look like
-    # an executable script ('./build.sh', '~/bin/deploy'), via the
-    # predicate. Lets users run a script with one click instead of having
-    # to switch to a terminal and type the path.
-    from core.classifier import is_runnable_path
-
-    def _can_run(text: str) -> bool:
-        # If classify() already returned COMMAND we wouldn't be here via
-        # the PATH branch - for the COMMAND branch, the plugin's content_types
-        # gate already matched. We only need to gate the PATH case.
-        from core.classifier import classify as _classify
-
-        ct = _classify(text)
-        if ct == ContentType.COMMAND:
-            return True
-        if ct == ContentType.PATH:
-            return is_runnable_path(text)
-        return False
-
     register(
         Plugin(
             name="run-terminal",
@@ -283,8 +249,6 @@ def _register_builtins() -> None:
             predicate=_can_run,
         )
     )
-
-    # URL
     register(
         Plugin(
             name="open-url",
@@ -295,8 +259,6 @@ def _register_builtins() -> None:
             priority=20,
         )
     )
-
-    # EMAIL
     register(
         Plugin(
             name="compose-email",
@@ -307,8 +269,6 @@ def _register_builtins() -> None:
             priority=20,
         )
     )
-
-    # PATH
     register(
         Plugin(
             name="open-path",
@@ -319,8 +279,6 @@ def _register_builtins() -> None:
             priority=20,
         )
     )
-
-    # PLAIN_TEXT: search
     register(
         Plugin(
             name="search-web",
@@ -334,11 +292,11 @@ def _register_builtins() -> None:
 
 
 def _seed_default_plugins() -> None:
-    """First-run only: drop the curated DEFAULT_PLUGIN_SEEDS into the
-    user's plugin dir so a fresh install ships with a useful popup
-    out of the box. Skipped if the seed marker is present OR the dir
-    already has any .py files (a user who curated their own set
-    should not get clobbered)."""
+    """Copy DEFAULT_PLUGIN_SEEDS into the user's plugin dir, once, and not
+    into a dir that already has plugins (pinned by
+    `tests/test_plugins_loader.py::test_a_new_install_gets_the_default_plugins`,
+    `tests/test_plugins_loader.py::test_a_plugin_dir_with_plugins_is_not_seeded`,
+    `tests/test_plugins_loader.py::test_seeding_happens_only_once`)."""
     if _PLUGIN_SEED_MARKER.is_file():
         return
     USER_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
@@ -364,22 +322,20 @@ def _seed_default_plugins() -> None:
     _PLUGIN_SEED_MARKER.touch()
 
 
-# ---- bundled file versions ---------------------------------------------------
-#
-# Installing from the catalogue copies a file out of plugins_repo/, so a later
-# fix there never reaches that copy by itself. Each bundled file carries a
-# version, the same number as its manifest entry: a "# vinopop-plugin-version: N"
-# first line in a .py, a "version" key in a recipe. Bump both when changing a
-# bundled file, and the Plugin Manager offers the newer copy as an Update.
-
+# An installed file is a copy, so a fix in plugins_repo/ reaches it only as a
+# Plugin Manager Update. Each bundled file carries the version of its
+# manifest entry: a "# vinopop-plugin-version: N" first line in a .py, a
+# "version" key in a recipe. Bump both when changing a bundled file (pinned by
+# `tests/test_plugins.py::test_every_catalogue_entry_and_its_file_carry_the_same_version`).
 _PY_VERSION_RE = re.compile(r"\A# vinopop-plugin-version: (\d+)[ \t]*\n")
 RETIRED_FILE = REPO_PLUGIN_DIR / "retired.json"
 
 
 def _read_bundled(path: Path) -> tuple[int, object]:
     """(version, content without the version) of a bundled or installed file.
-    Version 0 means none: a copy installed before files had one. A recipe's
-    "enabled" switch is the user's, not part of what's compared."""
+    Version 0 is a copy from before files had one. A recipe's "enabled"
+    switch is the user's, so it isn't content (pinned by
+    `tests/test_plugins.py::test_a_turned_off_recipe_is_still_current`)."""
     text = path.read_text(encoding="utf-8")
     if path.suffix != ".json":
         m = _PY_VERSION_RE.match(text)
@@ -397,8 +353,12 @@ def _read_bundled(path: Path) -> tuple[int, object]:
 
 def bundled_status(src: Path, dst: Path, version: int) -> str:
     """How the installed copy `dst` of bundled file `src` (at `version`)
-    compares: "missing", "current", "outdated" (an older copy: offer the
-    update) or "changed" (edited by hand, or newer: leave it alone)."""
+    compares: "missing", "current", "outdated" (offer the update) or
+    "changed" (edited by hand, or newer: leave it alone) (pinned by
+    `tests/test_plugins.py::test_a_copy_without_a_version_line_is_outdated`,
+    `tests/test_plugins.py::test_a_copy_at_an_older_version_is_outdated`,
+    `tests/test_plugins.py::test_the_same_code_without_the_version_line_is_current`,
+    `tests/test_plugins.py::test_a_copy_edited_at_the_current_version_is_changed`)."""
     if not dst.is_file():
         return "missing"
     try:
@@ -412,7 +372,8 @@ def bundled_status(src: Path, dst: Path, version: int) -> str:
 
 
 def update_bundled(src: Path, dst: Path) -> None:
-    """Replace `dst` with the bundled `src`, keeping a recipe's on/off switch."""
+    """Replace `dst` with the bundled `src`, keeping a recipe's on/off switch
+    (pinned by `tests/test_plugins.py::test_updating_a_recipe_keeps_its_on_off_switch`)."""
     if src.suffix == ".json":
         enabled = None
         try:
@@ -447,53 +408,46 @@ def _load_user_plugins() -> None:
     if not USER_PLUGIN_DIR.is_dir():
         return
     for path in sorted(USER_PLUGIN_DIR.glob("*.py")):
-        if path.name.startswith("_"):
-            continue
-        mod_name = f"vinopop_user_{path.stem}"
-        try:
-            spec = importlib.util.spec_from_file_location(mod_name, path)
-            if spec is None or spec.loader is None:
-                continue
-            module = importlib.util.module_from_spec(spec)
-            # Register in sys.modules BEFORE exec - Python 3.12 dataclass
-            # introspection needs cls.__module__ to resolve.
-            sys.modules[mod_name] = module
-            spec.loader.exec_module(module)
-            if hasattr(module, "register"):
-                # Buffer what the file registers and commit it only once
-                # its register() returns: one that registers a button and
-                # then raises must not leave that button behind.
-                pending: list[Plugin] = []
-                module.register(pending.append)
-                for plugin in pending:
-                    # Track which source file each plugin came from - the
-                    # Plugin Manager uses this to show a bundle as
-                    # expandable with its sub-plugins underneath, and
-                    # per-action enable/disable.
-                    _SOURCE_BY_NAME[plugin.name] = path.name
-                    register(plugin)
-                print(f"[plugin_loader] loaded user plugin: {path.name}")
-        except KeyboardInterrupt:
-            raise
-        except BaseException:
-            # BaseException: a plugin calling sys.exit() at import or in
-            # register() must not take the daemon down with it.
-            # Roll back the half-initialised module so main.py's
-            # sys.modules.get("vinopop_user_clipboard_history") doesn't
-            # find a broken stub and silently behave as if the plugin
-            # were loaded. Next load_all() then gets a clean re-import.
-            sys.modules.pop(mod_name, None)
-            print(f"[plugin_loader] failed to load {path.name}:")
-            traceback.print_exc()
+        if not path.name.startswith("_"):
+            _load_user_plugin(path)
+
+
+def _load_user_plugin(path: Path) -> None:
+    """Run one plugin file and register its buttons, all or none.
+
+    Anything it raises, sys.exit() included, is logged and its module
+    dropped from sys.modules, so nothing finds a half-loaded plugin (pinned
+    by `tests/test_plugins.py::test_a_plugin_calling_sys_exit_does_not_stop_the_daemon`,
+    `tests/test_plugins.py::test_a_register_that_raises_leaves_no_buttons_behind`)."""
+    mod_name = f"vinopop_user_{path.stem}"
+    try:
+        spec = importlib.util.spec_from_file_location(mod_name, path)
+        if spec is None or spec.loader is None:
+            return
+        module = importlib.util.module_from_spec(spec)
+        # Before exec: dataclasses look their class's module up there
+        sys.modules[mod_name] = module
+        spec.loader.exec_module(module)
+        if hasattr(module, "register"):
+            pending: list[Plugin] = []
+            module.register(pending.append)
+            for plugin in pending:
+                _SOURCE_BY_NAME[plugin.name] = path.name
+                register(plugin)
+            print(f"[plugin_loader] loaded user plugin: {path.name}")
+    except KeyboardInterrupt:
+        raise
+    except BaseException:
+        sys.modules.pop(mod_name, None)
+        print(f"[plugin_loader] failed to load {path.name}:")
+        traceback.print_exc()
 
 
 def _shutdown_user_plugins() -> None:
-    """Let the previous copy of each user plugin stop its background threads
-    before a fresh copy of the file is executed: a plugin with a
-    `shutdown()` function gets it called, so reloading doesn't stack watchers
-    on top of each other. The stale module objects are dropped too, so code
-    that looks a plugin up in sys.modules doesn't find one whose file has
-    since been removed (the fresh copies re-register themselves on load)."""
+    """Call each loaded user plugin's `shutdown()`, if it has one, so a
+    reload doesn't stack its threads, and drop the stale modules from
+    sys.modules (pinned by
+    `tests/test_clipboard_store.py::test_plugin_loader_shuts_down_the_previous_copy_before_reloading`)."""
     for name, module in list(sys.modules.items()):
         if not name.startswith("vinopop_user_"):
             continue
@@ -503,7 +457,7 @@ def _shutdown_user_plugins() -> None:
                 hook()
             except KeyboardInterrupt:
                 raise
-            except BaseException:  # a sys.exit() in shutdown() too
+            except BaseException:
                 print(f"[plugin_loader] shutdown of {name} failed:")
                 traceback.print_exc()
         sys.modules.pop(name, None)

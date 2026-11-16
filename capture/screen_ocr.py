@@ -1,18 +1,11 @@
-"""Screen-region OCR for vinoPop.
+"""Screen-region OCR: the user drags a rectangle and its text lands on the
+clipboard and PRIMARY, so the popup can act on text that can't be selected
+(rasterized PDFs, video frames, editors that don't set PRIMARY).
 
-User holds a hotkey, drags a rectangle, the rectangle's contents land
-on the clipboard as text. Capture uses the overlay selector or the
-desktop's own region tool (spectacle, grim+slurp, maim, gnome-screenshot,
-or the xdg-desktop-portal's Screenshot); recognition is PP-OCR running
-offline on OpenVINO (vino_ai.ocr), on the CPU.
-
-Why this matters beyond a one-off screenshot tool: the vinoPop popup
-runs on X11 PRIMARY selection. Anywhere the user can't make a real
-selection (PDF viewers' rasterized text, video frames, OS chrome,
-CodeMirror / Monaco editors that don't propagate to PRIMARY, error
-dialogs that block selection) becomes unreachable. OCR turns the
-*pixels* into a PRIMARY-equivalent selection - the rest of vinoPop's
-pipeline lights up automatically.
+Capture uses the overlay selector or the desktop's own region tool
+(spectacle, grim+slurp, maim, gnome-screenshot, or the portal's
+Screenshot); recognition is PP-OCR offline on OpenVINO (vino_ai.ocr), on
+the CPU.
 """
 
 from __future__ import annotations
@@ -29,31 +22,47 @@ from platform_backend.base import expect_selection
 
 log = logging.getLogger("vinopop")
 
+_CLIPBOARD_TOOL_TIMEOUT_S = 2.0
+_REGION_PICK_TIMEOUT_S = 60
+_SPECTACLE_TIMEOUT_S = 120
+_GRIM_TIMEOUT_S = 30
+_GTK_STEP_TIMEOUT_S = 5.0
+_OVERLAY_PICK_TIMEOUT_S = 180
+_PREVIEW_CHARS = 120
+
 
 def _stage_text(text: str) -> None:
     """Put `text` on the clipboard (and PRIMARY) with the backend's tool:
     wl-copy on KDE Wayland, xclip on the XWayland backend (GNOME, sway ...).
     Not wl-copy whenever WAYLAND_DISPLAY is set: mutter has no data-control
     protocol, so wl-copy there steals focus or fails silently, while xclip
-    goes through the compositor's X selection bridge (see
-    platform_backend/x11.py's read_selection)."""
+    goes through the compositor's X selection bridge (pinned by
+    `tests/test_screen_ocr.py::test_ocr_text_is_staged_with_the_backends_clipboard_tool`).
+
+    The PRIMARY change is announced with expect_selection(): no gesture
+    is behind it, and the copy-button filter would swallow it otherwise."""
     data = text.encode("utf-8")
-    # No gesture behind this PRIMARY change, and CLIPBOARD gets the same text
-    # first, which the copy-button filter would otherwise swallow.
     expect_selection(text)
     from platform_backend import detect
 
     if detect() == "wayland_kde" and shutil.which("wl-copy"):
         for extra in ([], ["--primary"]):
             try:
-                subprocess.run(["wl-copy", *extra], input=data, check=False, timeout=2.0)
+                subprocess.run(
+                    ["wl-copy", *extra], input=data, check=False, timeout=_CLIPBOARD_TOOL_TIMEOUT_S
+                )
             except (OSError, subprocess.SubprocessError):
                 pass
         return
     if shutil.which("xclip"):
         for sel in ("clipboard", "primary"):
             try:
-                subprocess.run(["xclip", "-selection", sel], input=data, check=False, timeout=2.0)
+                subprocess.run(
+                    ["xclip", "-selection", sel],
+                    input=data,
+                    check=False,
+                    timeout=_CLIPBOARD_TOOL_TIMEOUT_S,
+                )
             except (OSError, subprocess.SubprocessError):
                 pass
 
@@ -63,7 +72,7 @@ def _capture_packages() -> list[str]:
     X11, so on a Wayland session it would grab XWayland windows and black:
     wlroots compositors get grim + slurp, KDE spectacle, GNOME
     gnome-screenshot (allowed to use GNOME Shell's screenshot API)."""
-    if not os.environ.get("WAYLAND_DISPLAY"):
+    if not _wayland():
         return ["maim"]
     desktops = {d.strip().upper() for d in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")}
     if "KDE" in desktops:
@@ -80,8 +89,6 @@ def install_command() -> str:
 
 
 def _wayland() -> bool:
-    import os
-
     return bool(os.environ.get("WAYLAND_DISPLAY"))
 
 
@@ -97,7 +104,9 @@ def _portal_available() -> bool:
 def _has_capture_tool() -> bool:
     """True if a supported region-capture tool is available: one on PATH
     (maim only outside Wayland, where it sees just XWayland's windows), or
-    the desktop portal's Screenshot (GNOME has nothing else)."""
+    the desktop portal's Screenshot (GNOME has nothing else) (pinned by
+    `tests/test_screen_ocr.py::test_maim_does_not_count_on_wayland`,
+    `tests/test_screen_ocr.py::test_the_portal_alone_is_enough`)."""
     return bool(
         shutil.which("spectacle")
         or shutil.which("grim")
@@ -108,10 +117,8 @@ def _has_capture_tool() -> bool:
 
 
 def is_supported() -> tuple[bool, str]:
-    """Return (ok, reason). ok=False means we can't run OCR right now;
-    the reason is a SHORT human label of what's missing (the Settings row
-    pairs it with an Install button, so it doesn't need to spell out a
-    command)."""
+    """(ok, reason): the reason is a short label of what's missing, which
+    the Settings row pairs with an Install button."""
     if not _has_capture_tool():
         return False, "screen-capture tool not installed"
     try:
@@ -123,11 +130,10 @@ def is_supported() -> tuple[bool, str]:
 
 
 def install_argv() -> list[str] | None:
-    """A pkexec argv that installs a capture tool when none is present
-    (pkexec shows a graphical auth prompt). Returns None when nothing
-    installable is missing, the package manager is unknown, or /usr is
-    read-only (Fedora Atomic, openSUSE Aeon: see core.distro). The OCR
-    engine itself comes from pip (`vinopop[ai]`), not the distro."""
+    """A pkexec argv that installs a capture tool when none is present, or
+    None when nothing is missing, the package manager is unknown, or /usr is
+    read-only (see core.distro). The OCR engine comes from pip
+    (`vinopop[ai]`), not the distro."""
     if _has_capture_tool():
         return None
     return distro.install_argv(_capture_packages())
@@ -143,69 +149,82 @@ def _has_image(path: Path) -> bool:
 
 
 def _capture_region(out_path: Path) -> bool:
-    """Use whichever region-capture tool is installed to grab a user-
-    drawn rectangle and write it as a PNG. Returns False if the user
-    cancelled or the tool errored out."""
+    """Have the first installed region tool write a user-drawn rectangle to
+    `out_path` as a PNG, ending with the portal's picker; False if the user
+    cancelled or the tool failed (pinned by
+    `tests/test_screen_ocr.py::test_region_falls_back_to_the_portal_picker`)."""
     if shutil.which("spectacle"):
-        # KDE's capture tool. Its rectangular-region selector works
-        # natively on Wayland (maim is X11-only and grim needs wlroots),
-        # so it's the right default on KWin. -r region, -b background (no
-        # GUI window), -n no notification, -o write to file.
-        try:
-            subprocess.run(
-                ["spectacle", "-r", "-b", "-n", "-o", str(out_path)],
-                capture_output=True,
-                timeout=120,
-            )
-            return _has_image(out_path)
-        except subprocess.TimeoutExpired:
-            log.warning("[ocr] spectacle timed out")
-            return False
+        return _capture_with_spectacle(out_path)
     if shutil.which("grim") and shutil.which("slurp"):
-        # wlroots compositors (sway, Hyprland): slurp picks the region,
-        # grim captures it.
-        try:
-            geom = subprocess.run(["slurp"], capture_output=True, timeout=60, text=True)
-            if geom.returncode != 0 or not geom.stdout.strip():
-                return False
-            res = subprocess.run(
-                ["grim", "-g", geom.stdout.strip(), str(out_path)],
-                capture_output=True,
-                timeout=30,
-            )
-            return res.returncode == 0 and _has_image(out_path)
-        except subprocess.TimeoutExpired:
-            return False
+        return _capture_with_slurp_and_grim(out_path)
     if shutil.which("maim") and not _wayland():
-        # `-s` puts maim in interactive region-select mode; output goes
-        # to stdout if we don't pass a filename. We use a filename so
-        # the OCR step can read it back.
-        try:
-            res = subprocess.run(
-                ["maim", "-s", str(out_path)],
-                capture_output=True,
-                timeout=60,
-            )
-            if res.returncode != 0:
-                log.info("[ocr] maim exited %d (user cancelled?)", res.returncode)
-                return False
-            return _has_image(out_path)
-        except subprocess.TimeoutExpired:
-            log.warning("[ocr] maim timed out after 60 s")
-            return False
+        return _capture_with_maim(out_path)
     if shutil.which("gnome-screenshot"):
-        # gnome-screenshot --area is interactive too. Older versions
-        # don't accept a target path on stdout, so use --file.
-        try:
-            res = subprocess.run(
-                ["gnome-screenshot", "--area", "--file", str(out_path)],
-                capture_output=True,
-                timeout=60,
-            )
-            return res.returncode == 0 and _has_image(out_path)
-        except subprocess.TimeoutExpired:
+        return _capture_with_gnome_screenshot(out_path)
+    return _capture_with_portal(out_path)
+
+
+def _capture_with_spectacle(out_path: Path) -> bool:
+    """KDE's tool: -r region, -b no window, -n no notification, -o file."""
+    try:
+        subprocess.run(
+            ["spectacle", "-r", "-b", "-n", "-o", str(out_path)],
+            capture_output=True,
+            timeout=_SPECTACLE_TIMEOUT_S,
+        )
+        return _has_image(out_path)
+    except subprocess.TimeoutExpired:
+        log.warning("[ocr] spectacle timed out")
+        return False
+
+
+def _capture_with_slurp_and_grim(out_path: Path) -> bool:
+    """wlroots compositors (sway, Hyprland): slurp picks, grim captures."""
+    try:
+        geom = subprocess.run(
+            ["slurp"], capture_output=True, timeout=_REGION_PICK_TIMEOUT_S, text=True
+        )
+        if geom.returncode != 0 or not geom.stdout.strip():
             return False
-    # Last: the desktop's own picker through the portal (GNOME's region UI).
+        res = subprocess.run(
+            ["grim", "-g", geom.stdout.strip(), str(out_path)],
+            capture_output=True,
+            timeout=_GRIM_TIMEOUT_S,
+        )
+        return res.returncode == 0 and _has_image(out_path)
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _capture_with_maim(out_path: Path) -> bool:
+    try:
+        res = subprocess.run(
+            ["maim", "-s", str(out_path)],
+            capture_output=True,
+            timeout=_REGION_PICK_TIMEOUT_S,
+        )
+        if res.returncode != 0:
+            log.info("[ocr] maim exited %d (user cancelled?)", res.returncode)
+            return False
+        return _has_image(out_path)
+    except subprocess.TimeoutExpired:
+        log.warning("[ocr] maim timed out after 60 s")
+        return False
+
+
+def _capture_with_gnome_screenshot(out_path: Path) -> bool:
+    try:
+        res = subprocess.run(
+            ["gnome-screenshot", "--area", "--file", str(out_path)],
+            capture_output=True,
+            timeout=_REGION_PICK_TIMEOUT_S,
+        )
+        return res.returncode == 0 and _has_image(out_path)
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _capture_with_portal(out_path: Path) -> bool:
     shot = _portal_region()
     if shot is None:
         return False
@@ -253,9 +272,8 @@ def _unlink(path: Path) -> None:
 def _capture_image() -> tuple[Path | None, str | None]:
     """Let the user drag a region and return (png, None); (None, None) when
     they cancelled the overlay, or (None, message) when the fallback tool
-    captured nothing. The caller owns (and deletes) the png."""
-    # Prefer the frictionless overlay selector (drag -> done, no Accept step).
-    # Fall back to the desktop's region tool if it isn't available.
+    captured nothing. The caller owns (and deletes) the png. The overlay
+    selector comes first (no Accept step), the desktop's region tool after."""
     try:
         from capture import ocr_selector
 
@@ -263,8 +281,6 @@ def _capture_image() -> tuple[Path | None, str | None]:
             crop = _capture_via_overlay()
             return (Path(crop) if crop else None), None
     except Exception as exc:  # noqa: BLE001
-        # The desktop's own tool shows its UI (spectacle's region picker with
-        # an Accept step), so say why the overlay didn't come up.
         log.warning("[ocr] overlay selector failed, using the desktop's region tool: %s", exc)
     with tempfile.NamedTemporaryFile(suffix=".png", prefix="vinopop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
@@ -335,9 +351,9 @@ def _offer_describe(title: str, body: str, image: Path, ocr_text: str) -> None:
 
 def _on_gtk_thread(fn, timeout_s: float, idle_add=None):
     """Run fn() on the GTK main loop from a worker thread and hand back its
-    result, re-raising what it raised (GLib would otherwise swallow it and
-    we'd wait for a callback that never comes). TimeoutError when the loop
-    didn't get to it in time."""
+    result, re-raising what it raised (GLib would swallow it, leaving the
+    caller waiting). TimeoutError when the loop didn't get to it in time
+    (pinned by `tests/test_screen_ocr.py::test_a_frozen_gtk_loop_is_a_timeout_not_a_hang`)."""
     import threading
 
     if idle_add is None:
@@ -354,7 +370,7 @@ def _on_gtk_thread(fn, timeout_s: float, idle_add=None):
             box["error"] = exc
         finally:
             done.set()
-        return False  # idle_add: run once
+        return False
 
     idle_add(_run)
     if not done.wait(timeout_s):
@@ -367,19 +383,20 @@ def _on_gtk_thread(fn, timeout_s: float, idle_add=None):
 def _capture_via_overlay(selector=None, idle_add=None) -> str | None:
     """Drive the overlay selector from a worker thread and return the cropped
     PNG path (None if the user cancelled). Only the GTK steps hop to the main
-    thread; the screen grab, a spectacle / grim / maim run that takes a good
-    part of a second, stays here, so the daemon's main loop and the popup
-    keep responding while it runs (#74). `selector` and `idle_add` are for
-    the tests."""
+    thread; the screen grab, a tool run that takes a good part of a second,
+    stays here so the main loop keeps responding (pinned by
+    `tests/test_screen_ocr.py::test_overlay_grabs_on_the_worker_and_shows_on_the_gtk_thread`,
+    `tests/test_screen_ocr.py::test_overlay_asks_the_pointer_off_the_gtk_thread_with_several_monitors`).
+    `selector` and `idle_add` are for the tests."""
     import threading
 
     if selector is None:
         from capture import ocr_selector as selector  # type: ignore[no-redef]
 
     pointer = None
-    if _on_gtk_thread(selector.monitor_count, 5.0, idle_add) > 1:
+    if _on_gtk_thread(selector.monitor_count, _GTK_STEP_TIMEOUT_S, idle_add) > 1:
         pointer = selector.pointer_hint()
-    monitor = _on_gtk_thread(lambda: selector.pick_monitor(pointer), 5.0, idle_add)
+    monitor = _on_gtk_thread(lambda: selector.pick_monitor(pointer), _GTK_STEP_TIMEOUT_S, idle_add)
     shot = selector.grab(monitor)
     if not shot:
         raise RuntimeError("could not grab the screen for the overlay")
@@ -391,24 +408,24 @@ def _capture_via_overlay(selector=None, idle_add=None) -> str | None:
         done.set()
 
     try:
-        _on_gtk_thread(lambda: selector.show(shot, _cb, monitor), 5.0, idle_add)
+        _on_gtk_thread(lambda: selector.show(shot, _cb, monitor), _GTK_STEP_TIMEOUT_S, idle_add)
     except Exception:
         _unlink(Path(shot))
         raise
-    if not done.wait(180):
+    if not done.wait(_OVERLAY_PICK_TIMEOUT_S):
         return None
     return holder.get("path")
 
 
 def run_ocr_to_clipboard() -> None:
-    """User-facing entry point. Triggered by the OCR hotkey or by the
-    tray menu. Captures a region, OCRs it, puts the result on the
-    clipboard, and shows the result text in the popup (so it lands as
-    a selection the rest of vinoPop's actions can pick up).
-
-    With `ocr_describe_images` on, the AI model can also describe the
-    capture: a button on the notification when there was text, and
-    straight away when there wasn't (otherwise a dead end)."""
+    """The OCR hotkey and tray entry: capture a region, OCR it and stage the
+    text as clipboard and PRIMARY. With `ocr_describe_images` on, the AI
+    model can describe the capture: from a notification button when there
+    was text, straight away when there wasn't (pinned by
+    `tests/test_screen_ocr.py::test_text_goes_to_the_clipboard_and_the_image_is_deleted`,
+    `tests/test_screen_ocr.py::test_no_text_without_describe_says_so`,
+    `tests/test_screen_ocr.py::test_no_text_with_describe_describes_straight_away`,
+    `tests/test_screen_ocr.py::test_text_with_describe_offers_the_button`)."""
     ok_sup, reason = is_supported()
     if not ok_sup:
         _notify("vinoPop OCR", reason, ms=4000)
@@ -418,7 +435,7 @@ def run_ocr_to_clipboard() -> None:
     if image is None:
         if message:
             _notify("vinoPop OCR", message, ms=4000)
-        return  # user cancelled (Esc / zero-size drag)
+        return
     kept = False
     try:
         text = _recognize(image)
@@ -430,12 +447,8 @@ def run_ocr_to_clipboard() -> None:
             else:
                 _notify("vinoPop OCR", "No text found in the selection.")
             return
-        # Park the text on the clipboard (and PRIMARY) so it's usable everywhere
-        # and the popup can act on it like a real selection.
         _stage_text(text)
-        # Friendly confirmation - tail the recognised text so the user knows
-        # OCR ran and roughly what came out.
-        preview = text.replace("\n", " ")[:120]
+        preview = text.replace("\n", " ")[:_PREVIEW_CHARS]
         body = f"{len(text)} chars on clipboard - “{preview}”"
         if describe:
             _offer_describe("OCR captured", body, image, text)

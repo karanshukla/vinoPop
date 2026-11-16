@@ -1,19 +1,13 @@
-"""GTK 4 + libadwaita preferences window for vinoPop.
-
-One Adw.PreferencesPage per topic in a sidebar (ui/sidebar_window), each
-with grouped boxed-list rows (Adw.SwitchRow, Adw.ComboRow, Adw.SpinRow,
-Adw.EntryRow) - the GNOME-Settings-style UI that libhandy used to provide
-on GTK3.
-
-Apply-on-change semantics: edits save immediately, no Save/Cancel buttons.
-"""
+"""vinoPop's preferences window: one Adw.PreferencesPage per topic in a
+sidebar (ui/sidebar_window). Edits save as they are made; there is no Save
+button."""
 
 from __future__ import annotations
 
 import subprocess
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import gi
 
@@ -45,14 +39,8 @@ def _open_text_editor_modal(
     placeholder_text: str,
     on_done: Callable[[str | None], None],
 ) -> None:
-    """Pop a modal editor with a big multi-line TextView, Save / Cancel.
-    Calls on_done(new_text) on Save, on_done(None) on Cancel. Used for
-    blocklists, snippet variables - things that need a whole textarea but
-    shouldn't occupy permanent space in the Settings page when empty.
-
-    GTK 4 has no blocking Gtk.Dialog.run(), so the result is delivered
-    through a callback instead of a return value. An Adw.Dialog, so it
-    attaches to the Settings window the way GNOME apps' dialogs do."""
+    """A modal multi-line editor with Save / Cancel. Calls on_done(new_text)
+    on Save and on_done(None) on Cancel, Escape or close."""
     dlg = Adw.Dialog()
     dlg.set_title(title)
     dlg.set_content_width(580)
@@ -119,24 +107,19 @@ def _open_text_editor_modal(
 
     cancel_btn.connect("clicked", lambda *_: _finish(False))
     save_btn.connect("clicked", lambda *_: _finish(True))
-    # Escape and the close gesture both mean Cancel (Adw.Dialog handles
-    # Escape itself and emits closed).
     gtk4_app.present_dialog(dlg, parent, lambda *_: _finish(False))
 
 
 def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> None:
-    """Give a Gtk.TextView the placeholder-text behaviour that Gtk.Entry
-    has built-in. When the buffer is empty the placeholder shows in
-    grey italics; focus or any typing wipes it. Empty state is restored
-    on focus-out so the user always sees the hint when the field is blank.
-
-    Save handlers MUST check view._placeholder_active and treat the
-    placeholder text as "no value" - otherwise the placeholder string
-    would be persisted as data.
-    """
+    """Gtk.Entry's placeholder text for a TextView: a dimmed hint while the
+    buffer is blank. A key that types a character clears it, focus alone
+    doesn't, and leaving the field blank brings it back (pinned by
+    `tests/test_windows_settings_rows.py::test_a_typed_character_clears_the_placeholder`,
+    `tests/test_windows_settings_rows.py::test_a_modifier_or_arrow_key_keeps_the_placeholder`,
+    `tests/test_windows_settings_rows.py::test_leaving_the_field_blank_restores_the_placeholder`).
+    While `view._placeholder_active`, the buffer holds no value: savers
+    must not store the hint."""
     buf = view.get_buffer()
-    # Per-view tag so callers can have multiple placeholders without
-    # name collisions in the buffer's tag table.
     tag = buf.create_tag(
         f"lp-placeholder-{id(view)}",
         style=Pango.Style.ITALIC,
@@ -144,11 +127,7 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
     view._placeholder_active = False
 
     def _set_placeholder() -> None:
-        # Suppress the 'changed' signal during the placeholder swap so
-        # debounced save handlers don't fire on what is really UI chrome.
-        view._setting_placeholder = True
-        # The view's own text colour, dimmed like Adwaita's dim-label; a
-        # fixed grey can't hold contrast on both light and dark.
+        # The view's own colour, dimmed: a fixed grey fails contrast in light or dark
         from ui.theme import PLACEHOLDER_ALPHA
 
         color = view.get_color()
@@ -158,7 +137,6 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
         s, e = buf.get_bounds()
         buf.apply_tag(tag, s, e)
         view._placeholder_active = True
-        view._setting_placeholder = False
 
     s, e = buf.get_bounds()
     if not buf.get_text(s, e, True):
@@ -166,21 +144,12 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
 
     def _clear_placeholder() -> None:
         if view._placeholder_active:
-            view._setting_placeholder = True
             buf.set_text("")
             view._placeholder_active = False
-            view._setting_placeholder = False
 
     def _on_key_press(_ctrl, keyval, _keycode, _state):
-        # Clear the hint the moment the user types something that produces
-        # text (letters, digits, space, Ctrl+V...), but keep it for pure
-        # navigation/modifier keys - and, crucially, while the field is
-        # merely focused. Clearing on focus-in used to wipe the hint the
-        # instant the dialog opened (the TextView grabs focus on show), so
-        # the example only reappeared after a focus-out/in cycle such as a
-        # right-click. keyval_to_unicode is non-zero exactly for the keys
-        # that put a character in the buffer.
-        if view._placeholder_active and Gdk.keyval_to_unicode(keyval):
+        types_a_character = bool(Gdk.keyval_to_unicode(keyval))
+        if view._placeholder_active and types_a_character:
             _clear_placeholder()
         return False
 
@@ -189,8 +158,7 @@ def _attach_textarea_placeholder(view: Gtk.TextView, placeholder_text: str) -> N
         if not buf.get_text(s, e, True).strip():
             _set_placeholder()
 
-    # Capture phase: run before the TextView's own key handler inserts the
-    # character, so it lands in an emptied buffer rather than the hint.
+    # Capture phase, so the typed character lands in the emptied buffer
     keys = Gtk.EventControllerKey()
     keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
     keys.connect("key-pressed", _on_key_press)
@@ -336,9 +304,19 @@ def _combo_to_accel(combo: str) -> str:
     parts = [p for p in combo.lower().split("+") if p]
     if not parts or any(p not in mods for p in parts[:-1]):
         return ""
-    # Saved key names are lowercased; GDK's are case-sensitive ("F9", "y")
     key = parts[-1]
-    keyval = next(
+    keyval = _keyval_from_saved_name(key)
+    if not keyval:
+        return ""
+    accel = "".join(mods[p] for p in parts[:-1]) + (Gdk.keyval_name(keyval) or key)
+    ok, parsed, _mods = Gtk.accelerator_parse(accel)
+    return accel if ok and parsed else ""
+
+
+def _keyval_from_saved_name(key: str) -> int:
+    """The keyval for a lowercased saved key name: GDK's names are
+    case-sensitive ("F9", "y"). 0 if there's none."""
+    return next(
         (
             v
             for v in (Gdk.keyval_from_name(n) for n in (key, key.capitalize(), key.upper()))
@@ -346,11 +324,6 @@ def _combo_to_accel(combo: str) -> str:
         ),
         0,
     )
-    if not keyval:
-        return ""
-    accel = "".join(mods[p] for p in parts[:-1]) + (Gdk.keyval_name(keyval) or key)
-    ok, parsed, _mods = Gtk.accelerator_parse(accel)
-    return accel if ok and parsed else ""
 
 
 def _pretty_combo(combo: str) -> str:
@@ -368,7 +341,6 @@ _POPUP_BUTTON_PX = (16, 32)
 # Fewer than 4 makes the popup feel broken; past 40 the +N chip does the job
 _MAX_POPUP_BUTTONS = (4, 40)
 
-# What _open_text_editor_modal shows for each list a row edits
 _TRIGGER_BLOCKLIST_EDITOR = {
     "title": "Edit trigger blocklist",
     "subtitle": "Apps and sites where snippet triggers should NEVER "
@@ -473,6 +445,44 @@ def _run_ocr_install(argv: list[str]) -> tuple[bool, str]:
         return False, str(exc)
 
 
+# What the Updates button does on its next click
+NEXT_CHECK = "check"
+NEXT_INSTALL = "install"
+NEXT_RESTART = "restart"
+NEXT_PAGE = "page"
+
+
+class UpdateOffer(NamedTuple):
+    subtitle: str
+    label: str | None
+    next: str
+    suggested: bool = False
+
+
+def _update_offer(
+    current: str, tag: str | None, error: str | None, can_upgrade: bool
+) -> UpdateOffer:
+    """What the Updates row shows after a check. A development build (a
+    version past a tag, e.g. "1.3.0-5-gabc123") is never offered the release
+    (pinned by `tests/test_windows_settings_update.py::test_a_development_build_is_not_offered_the_release`,
+    `tests/test_windows_settings_update.py::test_an_older_release_is_offered_the_update`)."""
+    from core import update
+
+    if error is not None:
+        return UpdateOffer(error, "Try again", NEXT_CHECK)
+    if tag is not None and update.is_newer(current, tag):
+        if can_upgrade:
+            return UpdateOffer(f"{tag} is out.", f"Update to {tag}", NEXT_INSTALL, True)
+        return UpdateOffer(
+            f"{tag} is out. Its release page says how to update.", "Open release page", NEXT_PAGE
+        )
+    if tag is not None and update.version_parts(current) is None:
+        return UpdateOffer(
+            f"This is a development build. The newest release is {tag}.", "Check again", NEXT_CHECK
+        )
+    return UpdateOffer(f"vinoPop {current} is the newest release.", "Check again", NEXT_CHECK)
+
+
 class HotkeyRecorder(Gtk.Button):
     """Compact button that captures a keypress combo when clicked."""
 
@@ -483,21 +493,18 @@ class HotkeyRecorder(Gtk.Button):
         name: str = "",
     ) -> None:
         super().__init__()
-        # What the hotkey is for ("Popup hotkey"), so a screen reader says
-        # more than the bare combo; the row title isn't linked to a suffix.
+        # Read out with the combo: the row title doesn't name a suffix widget
         self._name = name
         self._value = initial
         self._recording = False
         self._rejected = ""
         self._on_changed = on_changed
         self.set_valign(Gtk.Align.CENTER)
-        # Flat keycaps sit in the row like GNOME Settings' shortcut rows
         self.add_css_class("flat")
         self._update_label()
         self.connect("clicked", self._on_clicked)
         keys = Gtk.EventControllerKey()
-        # Capture phase so the window's own shortcuts (Escape, Ctrl+W ...)
-        # don't get the combo before we can record it.
+        # Capture phase, before the window's own shortcuts (Escape, Ctrl+W)
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key_press)
         self.add_controller(keys)
@@ -528,7 +535,6 @@ class HotkeyRecorder(Gtk.Button):
             text = _pretty_combo(self._value)
             self.set_tooltip_text("Click to change")
             accel = _combo_to_accel(self._value)
-            # Keycaps, like GNOME Settings' Keyboard Shortcuts page
             self.set_child(Gtk.ShortcutLabel(accelerator=accel) if accel else Gtk.Label(label=text))
         else:
             text = "Disabled"
@@ -608,13 +614,10 @@ class SettingsDialog:
         self._on_changed = on_changed
         self._on_restart = on_restart
         self._on_open_plugins = on_open_plugins
-        # Only used when there's no on_open_plugins (standalone runs).
         self._plugin_dialog: PluginManagerDialog | None = None
-        # Runs the doctor the first time the Debug page is opened.
         self._debug_refresh: Callable[[], None] | None = None
         self._settings = get_settings()
         self._window: Adw.Window | None = None
-        # Kept across a rebuild (Reset to defaults) so the user stays put.
         self._page_name = "activation"
 
     def show(self) -> None:
@@ -629,25 +632,15 @@ class SettingsDialog:
         win.set_icon_name("vinopop")
         win.set_modal(False)
         win.connect("destroy", self._on_destroy)
-        # GTK 4 may keep the destroyed window alive while Python holds a
-        # ref, so drop our references on close-request as well.
+        # GTK 4 can keep a destroyed window alive while Python holds a ref
         win.connect("close-request", lambda w: (self._on_destroy(w), False)[1])
-        # Set before the groups are built: their modal editors use it as
-        # their parent.
+        # Before the groups: their modal editors use it as parent
         self._window = win
 
-        # One page per topic in a sidebar (like vinoWhisper's settings),
-        # instead of every group stacked in one long scroll.
-        pages: list[tuple[str, str, str, Gtk.Widget]] = []
-        for name, title, icon, builders in self._pages():
-            page = Adw.PreferencesPage()
-            for build in builders:
-                group = build()
-                # The header already names the page.
-                if group.get_title() == title:
-                    group.set_title("")
-                page.add(group)
-            pages.append((name, title, icon, page))
+        pages: list[tuple[str, str, str, Gtk.Widget]] = [
+            (name, title, icon, self._build_page(title, builders))
+            for name, title, icon, builders in self._pages()
+        ]
 
         def _on_show(name: str) -> None:
             self._page_name = name
@@ -657,6 +650,18 @@ class SettingsDialog:
 
         sidebar_window.build(win, "Settings", pages, self._page_name, _on_show)
         _force_to_front(win)
+
+    @staticmethod
+    def _build_page(
+        title: str, builders: list[Callable[[], Adw.PreferencesGroup]]
+    ) -> Adw.PreferencesPage:
+        page = Adw.PreferencesPage()
+        for build in builders:
+            group = build()
+            if group.get_title() == title:
+                group.set_title("")
+            page.add(group)
+        return page
 
     def _pages(self) -> list[tuple[str, str, str, list[Callable[[], Adw.PreferencesGroup]]]]:
         """(id, sidebar title, icon, group builders) for each Settings page."""
@@ -716,7 +721,6 @@ class SettingsDialog:
         ]
 
     def _on_destroy(self, win=None, *_):
-        # Ignore a late signal from a window we already replaced.
         if win is not None and self._window is not None and win is not self._window:
             return
         self._window = None
@@ -736,15 +740,16 @@ class SettingsDialog:
         current: str | None,
         on_change: Callable[[str], None],
     ) -> Adw.ComboRow:
-        """An Adw.ComboRow over (id, label) pairs. on_change gets the
-        selected id."""
+        """An Adw.ComboRow over (id, label) pairs; on_change gets the selected
+        id. An unknown `current` shows the first option and saves nothing
+        until the user picks (pinned by
+        `tests/test_windows_settings_rows.py::test_an_unknown_combo_id_shows_the_first_option_unsaved`,
+        `tests/test_windows_settings_rows.py::test_a_known_combo_id_is_selected`)."""
         row = _plain(Adw.ComboRow())
         row.set_title(title)
         row.set_subtitle(subtitle)
         ids = [key for key, _label in options]
         row.set_model(Gtk.StringList.new([label for _key, label in options]))
-        # An unknown id shows the first option; nothing is saved until the
-        # user picks
         row.set_selected(ids.index(current) if current in ids else 0)
 
         def _on_selected(r, _pspec) -> None:
@@ -843,7 +848,6 @@ class SettingsDialog:
     def _popup_button_size_row(self) -> Adw.SpinRow:
         def on_size_changed(spin: Adw.SpinRow, _pspec) -> None:
             self._save_key("popup_button_size", int(spin.get_value()))
-            # The popup's CSS carries the size; the next show_for() uses it
             try:
                 from ui import popup as _popup
 
@@ -1504,7 +1508,6 @@ class SettingsDialog:
                 alert.add_response("close", "Close")
                 alert.present(self._window)
             elif prefetch_row.get_active():
-                # Left on, the next start would download it straight back.
                 prefetch_row.set_active(False)
             return False
 
@@ -1547,8 +1550,9 @@ class SettingsDialog:
         return row
 
     def _on_prefetch_switch(self, switch: Adw.SwitchRow, _param) -> None:
-        # Flipping it is an answer, so a stored True now counts as a yes
-        # (see vino_ai.models.prefetch_consented).
+        """Flipping it is an answer, so a stored True counts as consent (pinned by
+        `tests/test_prefetch_consent.py::test_yes_from_onboarding_or_settings_downloads`,
+        `tests/test_prefetch_consent.py::test_old_default_true_is_not_consent`)."""
         self._settings.set("ai_prefetch_asked", True)
         self._save_key("ai_prefetch_model", bool(switch.get_active()))
 
@@ -1566,8 +1570,7 @@ class SettingsDialog:
         row.add_suffix(btn)
         row.set_activatable_widget(btn)
         group.add(row)
-        # What the button does next: check, install, restart or open the page.
-        state: dict[str, object] = {"next": "check", "tag": None}
+        state: dict[str, object] = {"next": NEXT_CHECK, "tag": None}
 
         def _show(subtitle: str, label: str | None, nxt: str, *, suggested: bool = False) -> None:
             row.set_subtitle(subtitle)
@@ -1586,42 +1589,25 @@ class SettingsDialog:
             btn.set_sensitive(False)
 
         def _checked(tag: str | None, error: str | None) -> bool:
-            if error is not None:
-                _show(error, "Try again", "check")
-            elif tag is not None and update.is_newer(__version__, tag):
+            offer = _update_offer(__version__, tag, error, update.upgrade_command() is not None)
+            if offer.next in (NEXT_INSTALL, NEXT_PAGE):
                 state["tag"] = tag
-                if update.upgrade_command() is not None:
-                    _show(f"{tag} is out.", f"Update to {tag}", "install", suggested=True)
-                else:
-                    _show(
-                        f"{tag} is out. Its release page says how to update.",
-                        "Open release page",
-                        "page",
-                    )
-            elif tag is not None and update.version_parts(__version__) is None:
-                # A git clone past a tag ("1.3.0-5-gabc123"): never offered one.
-                _show(
-                    f"This is a development build. The newest release is {tag}.",
-                    "Check again",
-                    "check",
-                )
-            else:
-                _show(f"vinoPop {__version__} is the newest release.", "Check again", "check")
+            _show(offer.subtitle, offer.label, offer.next, suggested=offer.suggested)
             return False
 
         def _installed(error: str | None) -> bool:
             tag = state["tag"]
             if error is not None:
-                _show(error, "Try again", "install")
+                _show(error, "Try again", NEXT_INSTALL)
             elif self._on_restart is not None:
-                _show(f"Restart vinoPop to use {tag}.", "Restart", "restart", suggested=True)
+                _show(f"Restart vinoPop to use {tag}.", "Restart", NEXT_RESTART, suggested=True)
             else:
-                _show(f"Restart vinoPop to use {tag}.", None, "check")
+                _show(f"Restart vinoPop to use {tag}.", None, NEXT_CHECK)
             return False
 
         def _clicked(*_) -> None:
             nxt = state["next"]
-            if nxt == "check":
+            if nxt == NEXT_CHECK:
                 _busy("Checking GitHub for a newer release.")
 
                 def _worker() -> None:
@@ -1631,7 +1617,7 @@ class SettingsDialog:
                         GLib.idle_add(_checked, None, str(exc))
 
                 threading.Thread(target=_worker, daemon=True, name="update-check").start()
-            elif nxt == "install":
+            elif nxt == NEXT_INSTALL:
                 tag, upgrade = state["tag"], update.upgrade_command()
                 if not isinstance(tag, str) or upgrade is None:
                     return
@@ -1645,16 +1631,18 @@ class SettingsDialog:
                         GLib.idle_add(_installed, str(exc))
 
                 threading.Thread(target=_install, daemon=True, name="update-install").start()
-            elif nxt == "restart" and self._on_restart is not None:
+            elif nxt == NEXT_RESTART and self._on_restart is not None:
                 self._on_restart()
-            elif nxt == "page":
+            elif nxt == NEXT_PAGE:
                 Gtk.UriLauncher.new(f"{update.RELEASES_URL}/tag/{state['tag']}").launch(
                     self._window, None, None
                 )
 
         btn.connect("clicked", _clicked)
         _show(
-            "Checks GitHub for a newer release. Nothing else is sent.", "Check for updates", "check"
+            "Checks GitHub for a newer release. Nothing else is sent.",
+            "Check for updates",
+            NEXT_CHECK,
         )
         return group
 
@@ -1721,8 +1709,7 @@ class SettingsDialog:
             err.add_response("close", "Close")
             err.present(self._window)
             return
-        # The theme is applied here, not by the daemon, as when it is changed
-        # by hand
+        # Applied here, not by the daemon, as for a change by hand
         _apply_theme(self._settings.get("theme") or "dark")
         if self._on_changed is not None:
             try:
@@ -1730,8 +1717,7 @@ class SettingsDialog:
             except Exception:
                 pass
 
-        # From idle: the alert is still emitting its response inside the
-        # window this destroys
+        # From idle: the alert is still emitting its response inside this window
         def _rebuild() -> bool:
             old = self._window
             if old is not None:
