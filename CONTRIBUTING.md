@@ -187,6 +187,11 @@ field with `label.set_mnemonic_widget(field)`.
   a test
 - Commits are conventional (`feat:`, `fix:`, `docs:`, ...), checked by CI;
   the changelog is generated from them with git-cliff (`cliff.toml`)
+- Comments are the last resort: extract, name, or pin a rule with a test
+  pair first, and cite the test from the code it governs as
+  ``(pinned by `tests/test_x.py::test_name`)``. See
+  [docs/comment-style.md](docs/comment-style.md); `tests/test_doc_links.py`
+  checks the citations. Measured claims carry a date
 - Don't add user-facing strings in languages other than English
 - For new top-level features, update README.md
 

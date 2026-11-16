@@ -17,6 +17,6 @@ CI has no display, no GTK and no OpenVINO. Say which of these applies:
 
 ## Checklist
 
-- [ ] Comments explain *why*, not what, and any measured claim carries a date
+- [ ] Comments follow [docs/comment-style.md](../docs/comment-style.md): a rule is a cited test pair, prose only for hidden constraints, measured claims dated
 - [ ] README / CONTRIBUTING updated if behaviour or setup changed
 - [ ] No secrets, tokens or machine-specific paths committed
