@@ -72,6 +72,15 @@ jobs:
           --cov-fail-under=53
         env:
           VINOPOP_ATSPI_TEST: "1"
+      # The tarball the way release.yml builds it says its version; the
+      # checkout above says dev
+      - name: vinopop --version, checkout and release tarball
+        run: |
+          test "$(xvfb-run -a .venv/bin/python vinopop --version)" = "vinopop dev"
+          rel="$(mktemp -d)"
+          git archive --format=tar --prefix=vinopop-v9.9.9/ \
+            --add-virtual-file=vinopop-v9.9.9/VERSION:v9.9.9 HEAD | tar -x -C "$rel"
+          test "$(cd "$rel/vinopop-v9.9.9" && xvfb-run -a "$GITHUB_WORKSPACE/.venv/bin/python" vinopop --version)" = "vinopop 9.9.9"
       - name: Coverage summary
         if: ${{ !cancelled() && hashFiles('coverage.xml') != '' }}
         run: |

@@ -212,4 +212,5 @@ field with `label.set_mnemonic_widget(field)`.
    `.github/workflows/release.yml` creates the GitHub release with the
    `## [X.Y.Z]` section as its notes, plus install steps and a compare link.
    It fails if CHANGELOG.md has no section for the tag. The app reads its
-   version from the tag (`core/version.py`), so there's nothing to bump.
+   version from the VERSION file the release tarball carries (`core/version.py`), so
+   there's nothing to bump. A checkout has none and reports `dev`.

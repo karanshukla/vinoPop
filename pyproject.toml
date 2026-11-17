@@ -1,7 +1,7 @@
 [project]
 name = "vinopop"
 # Placeholder: nothing builds a wheel (tool.uv.package = false), and the app
-# reads its version from the git tag (core/version.py)
+# reads its version from the release tarball's VERSION file (core/version.py)
 version = "0.0.0"
 description = "A PopClip-style action popup for Linux, with offline AI on OpenVINO"
 readme = "README.md"

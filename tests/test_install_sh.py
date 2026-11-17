@@ -79,7 +79,7 @@ def test_sh_launcher_runs_from_the_odd_path(installed):
         capture_output=True,
         text=True,
     )
-    assert out.stdout.startswith("vinoPop ")
+    assert out.stdout.startswith("vinopop ")
 
 
 def test_uninstall_purge_leaves_nothing_behind(installed):

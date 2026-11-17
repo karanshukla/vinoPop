@@ -986,7 +986,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         prog="vinopop",
         description="PopClip-inspired floating action popup for Linux (X11 + KDE Wayland).",
     )
-    p.add_argument("--version", action="version", version=f"vinoPop {__version__}")
+    p.add_argument("--version", action="version", version=f"vinopop {__version__}")
     p.add_argument(
         "--no-tray", action="store_true", help="Run without the tray icon (selection + hotkey only)"
     )
