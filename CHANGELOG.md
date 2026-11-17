@@ -10,6 +10,12 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-17
+
+### ✨ Features
+
+- `vinopop --version` prints `vinopop dev` when run from a git checkout, and the release's version when installed from a release. The About and Updates rows follow, and a checkout is never offered an update. vinoPilot reads this to tell a release from a source install.
+
 ## [1.7.0] - 2026-11-11
 
 ### ✨ Features
@@ -310,7 +316,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/karanshukla/vinoPop/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/karanshukla/vinoPop/compare/v1.4.1...v1.6.0
 [1.4.1]: https://github.com/karanshukla/vinoPop/compare/v1.4.0...v1.4.1
