@@ -1,47 +1,29 @@
-"""Resolve vinoPop's version: its git tag in a checkout, else the VERSION file a
-release tarball carries (get.sh installs those)."""
+"""Whether this is a release or a source build.
+
+Release CI adds a VERSION file to the tarball get.sh unpacks; a git checkout
+has none. So a VERSION file means a release and its absence means `dev`.
+"""
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent.parent
 
 
-def _from_git() -> str | None:
-    if not (_HERE / ".git").exists():
-        return None
-    try:
-        out = subprocess.run(
-            ["git", "describe", "--tags", "--always", "--dirty"],
-            cwd=_HERE,
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-    except Exception:
-        return None
-    if out.returncode != 0:
-        return None
-    tag = out.stdout.strip()
-    if not tag:
-        return None
-    return tag[1:] if tag.startswith("v") else tag
-
-
-def _from_file() -> str | None:
-    try:
-        text = (_HERE / "VERSION").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    return text[1:] if text.startswith("v") else text
+def version_of(stamp: str | None) -> str:
+    """The release version (no leading `v`) from the VERSION file's text, or
+    `dev` without one (pinned by `tests/test_update.py::test_a_release_build_reports_its_version`)."""
+    text = (stamp or "").strip().removeprefix("v")
+    return text or "dev"
 
 
 def get_version() -> str:
-    return _from_git() or _from_file() or "0.0.0"
+    try:
+        stamp = (_HERE / "VERSION").read_text(encoding="utf-8")
+    except OSError:
+        stamp = None
+    return version_of(stamp)
 
 
 __version__ = get_version()

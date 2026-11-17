@@ -56,10 +56,19 @@ def test_a_failed_install_says_the_installers_reason(tmp_path):
         update.install("v1.4.0", script)
 
 
-def test_version_falls_back_to_the_release_tarballs_file(tmp_path, monkeypatch):
+def test_a_release_build_reports_its_version(tmp_path, monkeypatch):
     from core import version
 
     monkeypatch.setattr(version, "_HERE", tmp_path)
-    assert version.get_version() == "0.0.0"
     (tmp_path / "VERSION").write_text("v1.4.0\n")
     assert version.get_version() == "1.4.0"
+
+
+def test_an_unstamped_build_reports_dev(tmp_path, monkeypatch):
+    from core import version
+
+    monkeypatch.setattr(version, "_HERE", tmp_path)
+    assert version.get_version() == "dev"
+    (tmp_path / "VERSION").write_text("\n")
+    assert version.get_version() == "dev"
+    assert not update.is_newer("dev", "v9.9.9")

@@ -2,7 +2,7 @@ name: Release
 
 # Runs on a pushed v* tag. vinoPop is Python run from its source tree, so a
 # release is the tag's tree as a tarball (with a VERSION file, which
-# core/version.py reads where there's no .git), get.sh (the one-line
+# core/version.py reads: a checkout has none and says `dev`), get.sh (the one-line
 # installer, which unpacks it) and SHA256SUMS over both. Nothing is built.
 
 on:
@@ -48,6 +48,10 @@ jobs:
           git archive --format=tar.gz --prefix="vinopop-${GITHUB_REF_NAME}/" \
             --add-virtual-file="vinopop-${GITHUB_REF_NAME}/VERSION:${GITHUB_REF_NAME}" \
             -o "dist/vinopop-${GITHUB_REF_NAME}.tar.gz" HEAD
+          # The unpacked tarball must report the tag, never dev
+          check="$(mktemp -d)"
+          tar -xzf "dist/vinopop-${GITHUB_REF_NAME}.tar.gz" -C "$check" --strip-components=1
+          test "$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from core.version import __version__ as v; print(v)' "$check")" = "${GITHUB_REF_NAME#v}"
           cp get.sh dist/get.sh
           (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
