@@ -2,61 +2,32 @@
 
 ## What vinoPop does with your text
 
-Your selections, clipboard history and snippets stay on your machine. There
-is no telemetry and no account.
+Your selections, clipboard history, and snippets remain on your machine. vinoPop requires no account and collects no telemetry.
 
-The only network traffic is something you click that is plainly online:
+Network requests only happen for explicit online actions:
 
-- web search and recipe buttons open a URL in your browser
-- opening a link you selected
-- the one-time AI model download from Hugging Face: the first time you use an
-  AI action, or in the background at startup if you chose "Download now" in
-  onboarding or turned it on in Settings → Advanced
+- Web search and recipe buttons that open a URL in your browser.
+- Opening a URL you selected.
+- The one-time AI model download from Hugging Face, triggered either on your first AI action or at startup if you enabled "Download now" in onboarding or under **Settings → Advanced**.
 
-Only `http`, `https`, `ftp` and `mailto` links are handed to your browser or
-mail app. A web page decides what you select, so other schemes (custom app
-handlers like `steam:` or `vscode:`) are refused, and a selected `file://` link
-opens its folder rather than the file, which could otherwise run a downloaded
-program through its file-type handler.
+Only `http`, `https`, `ftp`, and `mailto` links are forwarded to your browser or mail client. Because web pages can control selectable text, custom URI schemes (such as `steam:` or `vscode:`) are rejected, and selecting a `file://` link opens its containing folder rather than executing the file through its MIME handler.
 
-OCR, summarize, rewrite, explain and translate run on the local OpenVINO
-models; the selected text never leaves the machine.
+OCR, summarize, rewrite, explain, and translate all run on local OpenVINO models; your selected text never leaves your machine.
 
-OpenVINO ships Intel's own usage telemetry (Google Analytics), which is on
-unless you opt out. vinoPop never loads it: before OpenVINO is imported,
-its `openvino_telemetry` module is blocked for the vinoPop process, so
-OpenVINO falls back to a no-op stub. There is no setting to turn it on.
-Your `~/intel/openvino_telemetry` consent file is left alone and still
-applies to other OpenVINO tools you run.
+OpenVINO includes Intel's usage telemetry package (Google Analytics), which is enabled by default unless opted out. Before importing OpenVINO, vinoPop blocks its `openvino_telemetry` module for the vinoPop process so OpenVINO falls back to a no-op stub, with no option to enable it. Your `~/intel/openvino_telemetry` consent file is left untouched for any other OpenVINO tools you use.
 
 ## Clipboard history
 
-Clipboard history is stored in plain JSON at
-`~/.cache/vinopop/clipboard/history.json`, with copied images next to it in
-`images/`. Snippets and settings live in `~/.config/vinopop/`. These files are
-written `0600` in `0700` folders, so only your user can read them even if your
-home folder is world-readable; files from older versions are tightened the next
-time vinoPop starts. They aren't encrypted: treat them as sensitive as whatever
-you copy.
+Clipboard history is stored as plain JSON at `~/.cache/vinopop/clipboard/history.json`, with copied images saved alongside it in `images/`. Snippets and settings are stored in `~/.config/vinopop/`. These files are created with mode `0600` inside `0700` directories so other local users cannot read them even if your home directory is world-readable; files created by older versions have their permissions tightened on next startup. Because these files are not encrypted, treat them with the same sensitivity as the data you copy.
 
-Some copies are never stored:
+Certain clipboard entries are never recorded:
 
-- copies a password manager marks as secret. KeePassXC, KWallet and Plasma
-  offer an `x-kde-passwordManagerHint` type with the value `secret`; some apps
-  use `application/x-nspasteboard-concealed-type`. vinoPop checks the offered
-  types (`wl-paste --list-types` on Wayland, `TARGETS` on X11) and skips those
-  copies. A password manager that sets neither isn't detected
-- copies made while the focused window matches your popup blocklist
-  (`blocklist_patterns`). On Wayland the focused window comes from KWin, so
-  this works on Plasma but not other Wayland desktops
-- copies over 1 MB of text or 20 MB of image (`clipboard_history_max_text_kb`,
-  `clipboard_history_max_image_mb`)
+- **Password-manager secrets:** KeePassXC, KWallet, and Plasma attach an `x-kde-passwordManagerHint` MIME type set to `secret`, and some applications advertise `application/x-nspasteboard-concealed-type`. vinoPop inspects offered MIME types (`wl-paste --list-types` on Wayland, `TARGETS` on X11) and skips matching copies. Password managers that set neither hint cannot be detected automatically.
+- **Blocked windows:** Copies made while the focused window matches your popup blocklist (`blocklist_patterns`). On Wayland, active-window metadata comes from KWin, so this filter works on Plasma but not on other Wayland compositors.
+- **Oversized entries:** Copies exceeding 1 MB of text or 20 MB of image data (configurable via `clipboard_history_max_text_kb` and `clipboard_history_max_image_mb`).
 
-To remove something you've already copied, open the picker, select the entry in
-Recent and press Delete (or click the bin). The entry is removed from disk
-straight away, along with its image unless you've pinned it as a snippet.
+To delete an existing entry, open the clipboard picker, select the item under **Recent**, and press `Delete` (or click the trash button). The entry and its image file are deleted from disk immediately unless the image is pinned as a snippet.
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting on this repository
-(Security tab → Report a vulnerability) rather than a public issue.
+Please report security issues privately using GitHub's private vulnerability reporting (**Security** tab → **Report a vulnerability**) rather than opening a public issue.
