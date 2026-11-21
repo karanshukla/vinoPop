@@ -346,6 +346,16 @@ def _shell_contexts(skeleton: str) -> list[str]:
         elif top == "dq":
             if c == '"':
                 stack.pop()
+        elif (
+            c == "#"
+            and top in ("plain", "cmd", "bt")
+            and (i == 0 or skeleton[i - 1] in " \t\n;&|(")
+        ):
+            end = skeleton.find("\n", i)
+            end = n if end == -1 else end
+            contexts += ["comment"] * skeleton[i:end].count("\x00")
+            i = end
+            continue
         elif c == "'":
             stack.append("sq")
         elif c == '"':
@@ -478,7 +488,7 @@ def _command_parts(template: str, text: str, preview: bool = False) -> tuple[str
             out.append({"dq": ref, "sq": f"'\"{ref}\"'"}.get(context, f'"{ref}"'))
         out.append(literal)
     if args and not preview:
-        out.insert(0, " ".join(f"vinopop_{k}=${k}" for k in range(1, len(args) + 1)) + "; ")
+        out.insert(0, " ".join(f'vinopop_{k}="${{{k}}}"' for k in range(1, len(args) + 1)) + "; ")
     return "".join(out), args
 
 

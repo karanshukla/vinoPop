@@ -324,6 +324,24 @@ def test_keysym_names():
     assert keyinject.parse_chord("hyper+v") is None
 
 
+def test_keysym_for_char_rejects_c0_and_del_except_newline_and_tab():
+    assert xkb.keysym_for_char("\n") == 0xFF0D
+    assert xkb.keysym_for_char("\t") == 0xFF09
+    assert xkb.keysym_for_char("A") == ord("A")
+    for ch in ("\r", "\x00", "\x03", "\x1b", "\x1f", "\x7f"):
+        assert xkb.keysym_for_char(ch) == 0
+
+
+def test_wtype_text_passes_double_dash(monkeypatch):
+    ran = []
+    monkeypatch.setattr(keyinject.shutil, "which", lambda name: None)
+    monkeypatch.setattr(keyinject, "wtype_usable", lambda: True)
+    monkeypatch.setattr(keyinject, "_wtype_run", lambda argv: ran.append(argv) or True)
+    inj = keyinject.KeyInjector(portal_available=lambda: False)
+    assert inj.deliver("text", "-k Return") is True
+    assert ran == [["--", "-k Return"]]
+
+
 def test_kxkbrc_layout_wins_over_localectl(tmp_path, monkeypatch):
     cfg = tmp_path / ".config"
     cfg.mkdir()

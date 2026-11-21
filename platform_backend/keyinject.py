@@ -676,13 +676,14 @@ class KeyInjector:
             seq: list[tuple[int, int]] = []
             for ch in text:
                 ks = xkb.keysym_for_char(ch)
-                seq += [(ks, PRESSED), (ks, RELEASED)]
+                if ks:  # 0: a control character, never typed as a key
+                    seq += [(ks, PRESSED), (ks, RELEASED)]
             if self._get_portal().send(seq):
                 return True
         # ydotool types through its own US table, so only ASCII on QWERTY is right.
         if shutil.which("ydotool") and _ydotool_run(["type", "--", text]):
             return True
-        return wtype_usable() and _wtype_run([text])
+        return wtype_usable() and _wtype_run(["--", text])
 
     def _report_failure(self, what: str) -> None:
         print(f"[keys] no key-injection backend worked for {what!r}")

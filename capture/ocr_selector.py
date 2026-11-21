@@ -28,6 +28,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 import gi
 
@@ -36,6 +37,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
 
+from core.xdg_paths import make_private  # noqa: E402
 from platform_backend.monitors import monitor_at  # noqa: E402
 
 
@@ -185,6 +187,9 @@ def _grab_with(tool: str, monitor) -> str | None:
     try:
         subprocess.run(argv, capture_output=True, timeout=15)
         if os.path.exists(path) and os.path.getsize(path) > 0:
+            # Some tools replace the file rather than write into it, which
+            # leaves it at the umask's mode in a shared /tmp.
+            make_private(Path(path))
             return path
     except (OSError, subprocess.SubprocessError):
         pass

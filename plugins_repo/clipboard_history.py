@@ -234,10 +234,11 @@ class Entry:
         walked in full (pinned by
         `tests/test_clipboard_store.py::test_long_preview_matches_the_short_one`)."""
         if self.name:
-            return self.name
+            return "".join(c for c in self.name if ord(c) >= 0x20 and ord(c) != 0x7F)
         if self.kind == "image":
             return f"🖼  Image - {Path(self.image_path).name}"
         shown = self.text[: max_len + 1].replace("\n", "↵").replace("\t", "  ")
+        shown = "".join(c for c in shown if ord(c) >= 0x20 and ord(c) != 0x7F)
         return shown[:max_len] + "…" if len(shown) > max_len else shown
 
     def search_haystack(self) -> str:
@@ -449,6 +450,7 @@ def _pin_entry(
         trigger=trigger.strip(),
         category=category.strip(),
         image_hash=entry.image_hash,
+        literal=True,
     )
     with _snippets_lock:
         _snippets.insert(0, snippet)
@@ -1867,10 +1869,11 @@ def _paste_into_window(entry: Entry, target_window: str | None, cursor_left: int
 
     A short single line is typed, since Electron editors drop a synthetic
     Ctrl+V and a terminal's bracketed paste gets out of step; anything
-    longer or with a newline is pasted, as typed lines would each run in a
-    shell (pinned by `tests/test_clipboard_paste.py::test_a_short_line_is_typed_not_pasted`,
+    longer or with a newline or other control character is pasted, as typed
+    lines would each run in a shell (pinned by `tests/test_clipboard_paste.py::test_a_short_line_is_typed_not_pasted`,
     `tests/test_clipboard_paste.py::test_text_at_the_typing_limit_is_typed_and_one_over_is_pasted`,
-    `tests/test_clipboard_paste.py::test_several_lines_are_pasted_so_a_shell_does_not_run_each`)."""
+    `tests/test_clipboard_paste.py::test_several_lines_are_pasted_so_a_shell_does_not_run_each`,
+    `tests/test_clipboard_paste.py::test_control_chars_fall_back_to_clipboard_paste`)."""
     if not (target_window and _x_can_inject()):
         _log.warning("[clipboard.paste] skipped - no target, or no XTEST")
         return
@@ -1894,7 +1897,7 @@ def _paste_into_window(entry: Entry, target_window: str | None, cursor_left: int
     x11 = _x11()
     types_it = (
         entry.kind == "text"
-        and "\n" not in entry.text
+        and not any(ord(c) < 0x20 or ord(c) == 0x7F for c in entry.text)
         and len(entry.text) <= _MAX_TYPED_CHARS
         and x11 is not None
     )

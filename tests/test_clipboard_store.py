@@ -319,6 +319,24 @@ def test_long_preview_matches_the_short_one(store):
     assert store.Entry(id="q", timestamp=1.0, kind="text", text="short").preview() == "short"
 
 
+def test_preview_strips_c0_and_del_control_chars(store):
+    e = store.Entry(
+        id="c",
+        timestamp=1.0,
+        kind="text",
+        text="hello\r\x1b[31mworld\x00\x7f!",
+    )
+    assert e.preview() == "hello[31mworld!"
+    named = store.Entry(
+        id="n",
+        timestamp=1.0,
+        kind="text",
+        name="bad\r\x1bname\x7f",
+        text="body",
+    )
+    assert named.preview() == "badname"
+
+
 # ----- issue #39 ---------------------------------------------------------------
 
 
@@ -435,7 +453,13 @@ def test_pin_keeps_the_edited_body_trigger_and_category(store, picker, monkeypat
     )
     picker._on_pin_clicked(None, entry)
     [s] = store._snippets
-    assert (s.name, s.trigger, s.category, s.text) == ("Sig", ";sig", "Email", "Regards, K")
+    assert (s.name, s.trigger, s.category, s.text, s.literal) == (
+        "Sig",
+        ";sig",
+        "Email",
+        "Regards, K",
+        True,
+    )
     assert store._trigger_index[";sig"] is s
     assert entry.text == "draft"  # the history entry is left alone
 

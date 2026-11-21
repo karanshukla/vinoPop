@@ -86,6 +86,15 @@ def test_several_lines_are_pasted_so_a_shell_does_not_run_each(ch, desk):
     assert desk.keys == [("ctrl+v", 1)]
 
 
+@pytest.mark.parametrize(
+    "payload", ["ls\rrm -rf x", "a\tb", "echo \x1b[2J", "hi\x7fthere", "a\x03b"]
+)
+def test_control_chars_fall_back_to_clipboard_paste(ch, desk, payload):
+    ch._paste_to_window(_text(ch, payload), "42")
+    assert desk.typed == []
+    assert desk.keys[-1] == ("ctrl+v", 1)
+
+
 def test_failed_typing_falls_back_to_the_paste_key(ch, desk):
     desk.typing_works = False
     ch._paste_to_window(_text(ch, "hello"), "42")
