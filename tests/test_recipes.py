@@ -220,7 +220,7 @@ def test_command_argv_keeps_the_values_out_of_the_script():
     assert argv == [
         "bash",
         "-c",
-        'vinopop_1=$1 vinopop_2=$2 vinopop_3=$3; echo "${vinopop_1}" "${vinopop_2}" "${vinopop_3}"',
+        'vinopop_1="${1}" vinopop_2="${2}" vinopop_3="${3}"; echo "${vinopop_1}" "${vinopop_2}" "${vinopop_3}"',
         "vinopop",
         "a;b",
         "a;b",
@@ -230,10 +230,34 @@ def test_command_argv_keeps_the_values_out_of_the_script():
 
 def test_the_same_placeholder_twice_is_one_argument():
     assert recipe_loader._command_argv("echo {text}{text}", "a")[2:] == [
-        'vinopop_1=$1; echo "${vinopop_1}""${vinopop_1}"',
+        'vinopop_1="${1}"; echo "${vinopop_1}""${vinopop_1}"',
         "vinopop",
         "a",
     ]
+
+
+def test_ten_or_more_distinct_placeholders_use_braced_positional_parameters():
+    tpl = " ".join(
+        [
+            "{text}",
+            "{text_url}",
+            "{text_shell}",
+            "{text_upper}",
+            "{text_lower}",
+            "{text_strip}",
+            "{text_mock}",
+            "{text_json}",
+            "{text_json_min}",
+            "{text_b64}",
+        ]
+    )
+    script = recipe_loader._command_argv(tpl, "hi")[2]
+    assert 'vinopop_10="${10}"' in script
+
+
+def test_unquoted_comment_with_apostrophe_does_not_corrupt_following_line_context():
+    tpl = "# caller's note\n(( {text} > 0 )) && echo ok"
+    assert recipe_loader.safety_errors(_run(tpl))
 
 
 def test_a_function_or_set_in_the_template_cant_shadow_the_value(fake_desktop):

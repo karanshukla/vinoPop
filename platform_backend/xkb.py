@@ -179,6 +179,8 @@ def keysym_for_char(ch: str) -> int:
         return 0xFF0D
     if ch == "\t":
         return 0xFF09
+    if cp < 0x20 or cp == 0x7F:
+        return 0
     if 0x20 <= cp <= 0x7E or 0xA0 <= cp <= 0xFF:
         return cp
     x = lib()

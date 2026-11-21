@@ -17,9 +17,12 @@ import os
 import secrets
 import shutil
 import tempfile
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from gi.repository import Gio, GLib
+
+from core.xdg_paths import make_private
 
 _BUS = "org.freedesktop.portal.Desktop"
 _PATH = "/org/freedesktop/portal/desktop"
@@ -136,6 +139,7 @@ def _take(uri: str) -> str | None:
     os.close(fd)
     try:
         shutil.move(src, dst)
+        make_private(Path(dst))  # a rename keeps the backend's mode
     except OSError as exc:
         print(f"[portal] could not take {src}: {exc}")
         try:

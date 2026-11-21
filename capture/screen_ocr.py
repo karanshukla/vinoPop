@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 from core import distro
+from core.xdg_paths import make_private
 from platform_backend.base import expect_selection
 
 log = logging.getLogger("vinopop")
@@ -285,6 +286,7 @@ def _capture_image() -> tuple[Path | None, str | None]:
     with tempfile.NamedTemporaryFile(suffix=".png", prefix="vinopop-ocr-", delete=False) as tmp:
         png_path = Path(tmp.name)
     if _capture_region(png_path):
+        make_private(png_path)  # the region tool may have replaced the file
         return png_path, None
     _unlink(png_path)
     return None, "Region capture cancelled."
