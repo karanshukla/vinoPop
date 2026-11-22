@@ -40,7 +40,7 @@ _ACTIONS = [
         key="run_command",
         title="Run a command",
         icon="utilities-terminal-symbolic",
-        blurb="Open a folder, run a script, anything you'd type in a terminal.",
+        blurb="Open a folder, run a script, or execute any terminal command.",
         example="Open the selected file path in VS Code.",
         detail_prompt="What command should run?",
         # Unquoted on purpose: a command gets each placeholder as one argument
@@ -66,7 +66,7 @@ _ACTIONS = [
         key="notify",
         title="Show a notification",
         icon="dialog-information-symbolic",
-        blurb="Pop a short message on your desktop. Handy for confirmations.",
+        blurb="Show a short desktop notification.",
         example="Show how many characters you've selected.",
         detail_prompt="What should the notification say?",
         detail_placeholder="Selected: {text}",
@@ -86,7 +86,7 @@ _ACTIONS = [
         key="copy_transformed",
         title="Transform and copy",
         icon="edit-copy-symbolic",
-        blurb="Make a tweaked copy of the text - wrap it, change its case, encode it.",
+        blurb="Modify the selected text (wrap, change case, or encode) and copy it.",
         example="Wrap the selection in markdown highlight: ==text==",
         detail_prompt="How should the copied text look?",
         detail_placeholder="=={text}==",
@@ -159,8 +159,8 @@ _DYNAMIC_VALUES = [
     ("{weekday}", "{weekday}", "Name of the day"),
     ("{date:+7d}", "{date:+7d}", "Date math: +7d, -1w, +3m, +2y"),
     ("{name}", "{name}", "Your full name (from your user account)"),
-    ("{clipboard}", "{clipboard}", "Whatever's on your clipboard when the button runs"),
-    ("{selection}", "{selection}", "Whatever text is highlighted on screen"),
+    ("{clipboard}", "{clipboard}", "Current clipboard contents when the button runs"),
+    ("{selection}", "{selection}", "Currently selected text"),
 ]
 
 # (icon, tooltip) of the built-in buttons beside the new one in the mockup
@@ -176,13 +176,13 @@ _INTRO_STEPS = [
         2,
         "input-mouse-symbolic",
         "Click",
-        "The vinoPop popup\nshows up. Pick your\nnew button.",
+        "The vinoPop popup\nappears. Click your\ncustom button.",
     ),
     (
         3,
         "starred-symbolic",
         "Done",
-        "Whatever you set up\nhappens. Open a URL,\nrun a command: you choose.",
+        "Your configured action\nruns: open a URL, run\na command, and more.",
     ),
 ]
 
@@ -441,11 +441,11 @@ class RecipeWizard:
         page.set_margin_top(24)
         page.set_margin_bottom(24)
 
-        page.append(_label("Make your own vinoPop button", "title-1", wrap=True))
+        page.append(_label("Create a custom vinoPop button", "title-1", wrap=True))
         page.append(
             _label(
-                "Custom buttons turn any text you select into an action. We'll "
-                "set yours up in a few short steps, no coding needed.",
+                "Custom buttons turn selected text into an action. Follow these "
+                "steps to set one up without writing code.",
                 wrap=True,
             )
         )
@@ -457,7 +457,7 @@ class RecipeWizard:
         page.append(flow)
 
         hint = _label(
-            "Click <b>Next</b> when you're ready. You can go back at any point.",
+            "Click <b>Next</b> to continue. You can go back at any time.",
             "caption",
             markup=True,
         )
@@ -490,7 +490,7 @@ class RecipeWizard:
         page.append(_label("What should your button do?", "title-2", wrap=True))
         page.append(
             _label(
-                "Pick one. You can change it later if you want to try something else.",
+                "Choose an action type. You can change it later.",
                 wrap=True,
             )
         )
@@ -556,15 +556,15 @@ class RecipeWizard:
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         left.set_hexpand(True)
 
-        left.append(_label("Name it and pick an icon", "title-2", wrap=True))
+        left.append(_label("Name and icon", "title-2", wrap=True))
         left.append(
             _label(
-                "The icon is what shows up in the popup. The label is the tooltip when you hover.",
+                "The icon appears in the popup bar, and the name is shown as its tooltip.",
                 wrap=True,
             )
         )
 
-        name_lbl = _label("What's the button called?", "heading")
+        name_lbl = _label("Button name", "heading")
         left.append(name_lbl)
 
         self._tooltip_entry = Gtk.Entry()
@@ -610,8 +610,8 @@ class RecipeWizard:
         right.append(_label("Live preview", "heading"))
         right.append(
             _label(
-                "This is roughly how your button will appear in the vinoPop popup, "
-                "next to the built-in ones.",
+                "Preview of how your button will appear in the popup bar "
+                "alongside built-in actions.",
                 "dim-label",
                 "caption",
                 wrap=True,
@@ -713,7 +713,7 @@ class RecipeWizard:
         if spec.get("warning"):
             box.append(
                 _label(
-                    "<b>Heads up:</b> " + GLib.markup_escape_text(spec["warning"]),
+                    "<b>Warning:</b> " + GLib.markup_escape_text(spec["warning"]),
                     "lp-warning",
                     markup=True,
                     wrap=True,
@@ -790,7 +790,7 @@ class RecipeWizard:
             inserter_row.set_row_spacing(8)
             for label, token in _TRANSFORM_INSERTERS:
                 btn = Gtk.Button(label=f"Insert {label}")
-                btn.set_tooltip_text("Click to drop this into your template at the cursor.")
+                btn.set_tooltip_text("Insert this placeholder at the cursor.")
                 btn.connect("clicked", self._on_insert, token)
                 inserter_row.append(btn)
             return inserter_row
@@ -798,7 +798,9 @@ class RecipeWizard:
         btn = Gtk.Button(label=spec["insert_label"])
         btn.add_css_class("suggested-action")
         target = _INSERT_TARGET.get(spec["key"], _INSERT_TARGET_FALLBACK)
-        btn.set_tooltip_text(f"Click to drop the selected text into your {target} at the cursor.")
+        btn.set_tooltip_text(
+            f"Insert the selected text placeholder into your {target} at the cursor."
+        )
         btn.connect("clicked", self._on_insert, spec["insert_text"])
         row.append(btn)
         return row
@@ -827,7 +829,9 @@ class RecipeWizard:
         examples = spec.get("examples") or []
         if not examples:
             return []
-        ex_label = _label("Try one of these - click to fill the box above:", "caption", wrap=True)
+        ex_label = _label(
+            "Or start from an example (click to fill the box above):", "caption", wrap=True
+        )
         ex_label.set_margin_top(4)
         ex_flow = Gtk.FlowBox()
         ex_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -925,10 +929,9 @@ class RecipeWizard:
         rendered = recipe_loader._render(self._state.get("template") or "", _SAMPLE_SELECTION)
         if not rendered.strip():
             hint = (
-                "(the grey text above is just an example - type "
-                "your own or click one of the chips to set it)"
+                "(example placeholder shown above; type your own or select a chip)"
                 if self._sample_showing
-                else "(nothing yet - pick a template above)"
+                else "(empty; enter a template above)"
             )
             self._preview_result.set_text(hint)
         elif self._state["action_type"] == "run_command":
@@ -939,13 +942,18 @@ class RecipeWizard:
     def _add_filter_page(self):
         page = self._page_box(12)
 
-        page.append(_label("When should it show up?", "title-2", wrap=True))
-        page.append(_label("You can leave this as 'always'. Most people do.", wrap=True))
+        page.append(_label("When should this button appear?", "title-2", wrap=True))
+        page.append(
+            _label(
+                "Leave this set to 'Always' unless you want to restrict it to specific text types.",
+                wrap=True,
+            )
+        )
 
-        self._always_radio = Gtk.CheckButton(label="Always: show on any selected text")
+        self._always_radio = Gtk.CheckButton(label="Always (show for any selected text)")
         page.append(self._always_radio)
 
-        self._only_radio = Gtk.CheckButton(label="Only when I've selected one of these:")
+        self._only_radio = Gtk.CheckButton(label="Only for specific content types:")
         self._only_radio.set_group(self._always_radio)
         page.append(self._only_radio)
         if self._state["content_types"]:
@@ -992,11 +1000,11 @@ class RecipeWizard:
             return
         _clear(box)
 
-        box.append(_label("Looks good?", "title-2"))
+        box.append(_label("Review your custom button", "title-2"))
         box.append(
             _label(
-                "Press <b>Apply</b> to save. You can edit or delete this "
-                "button later from the Plugin Manager.",
+                "Click <b>Apply</b> to save. You can edit or delete this "
+                "button later in the Plugin Manager.",
                 markup=True,
                 wrap=True,
             )
@@ -1007,7 +1015,7 @@ class RecipeWizard:
         if errors:
             box.append(
                 _label(
-                    "<b>One more thing:</b> " + GLib.markup_escape_text(errors[0]),
+                    "<b>Validation error:</b> " + GLib.markup_escape_text(errors[0]),
                     "lp-warning",
                     markup=True,
                     wrap=True,
@@ -1078,7 +1086,7 @@ class RecipeWizard:
         recipe = self._build_recipe_dict()
         errors = self._recipe_errors(recipe)
         if errors:
-            msg = Adw.AlertDialog(heading="Couldn't save just yet", body="\n".join(errors))
+            msg = Adw.AlertDialog(heading="Cannot save button", body="\n".join(errors))
             msg.add_response("ok", "OK")
             msg.set_default_response("ok")
             msg.present(self._window)

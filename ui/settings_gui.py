@@ -343,58 +343,44 @@ _MAX_POPUP_BUTTONS = (4, 40)
 
 _TRIGGER_BLOCKLIST_EDITOR = {
     "title": "Edit trigger blocklist",
-    "subtitle": "Apps and sites where snippet triggers should NEVER "
-    "auto-expand. Useful for password managers, terminals, "
-    "and banking sites - places where typing 'rraak' is "
-    "supposed to stay 'rraak'.",
-    "placeholder_text": "Type one app or site per line. Each line is matched "
-    "(case-insensitive) against the focused window's "
-    "title and class - if any line is a substring of "
-    "either, expansion is skipped for that window.\n\n"
-    "Try things like:\n"
-    "  KeePassXC        - the password manager\n"
-    "  gnome-terminal   - any terminal you use\n"
-    "  bank.no          - matches whatever your bank's\n"
-    "                     site name shows in the title\n"
+    "subtitle": "Apps and sites where snippet triggers should never "
+    "auto-expand, such as password managers, terminals, and banking sites.",
+    "placeholder_text": "Enter one app or site per line. Each line is matched "
+    "(case-insensitive) against the focused window's title and class. "
+    "If any line matches as a substring, expansion is skipped for that window.\n\n"
+    "Examples:\n"
+    "  KeePassXC\n"
+    "  gnome-terminal\n"
+    "  bank.example.com\n"
     "  1Password\n"
     "  Bitwarden",
 }
 _SNIPPET_VARIABLES_EDITOR = {
     "title": "Edit snippet variables",
-    "subtitle": "Reusable values that any snippet can pull in. "
-    "Define a value once here, then write {var:name} "
-    "in any snippet to drop it in. Change the value "
-    "later and every snippet that uses it updates "
-    "automatically.",
-    "placeholder_text": "Type one variable per line in the form\n"
+    "subtitle": "Reusable values that any snippet can reference. "
+    "Define a value once here, then write {var:name} in any snippet. "
+    "Updating a value here updates every snippet that uses it.",
+    "placeholder_text": "Enter one variable per line in the format:\n"
     "    name = value\n\n"
-    "Then write {var:name} in your snippets to pull the "
-    "value in. Common ones to start with:\n\n"
+    "Reference variables in snippets using {var:name}. Examples:\n\n"
     "  email     = you@example.com\n"
     "  signature = Best,\\nAlex\n"
-    "  phone     = +47 555 1234\n"
-    "  company   = Acme AS\n"
-    "  address   = Karl Johans gate 1, 0154 Oslo\n\n"
-    "Names can be anything you'd recognise later -\n"
-    "letters, digits, underscores, hyphens.",
+    "  phone     = +1 555 0100\n"
+    "  company   = Acme Corp\n\n"
+    "Names can use letters, digits, underscores, and hyphens.",
 }
 _POPUP_BLOCKLIST_EDITOR = {
     "title": "Edit popup blocklist",
-    "subtitle": "Apps and pages where the popup should never appear. "
-    "Useful for password managers, banking sites, and any "
-    "other context where a floating menu would be in "
-    "the way.",
-    "placeholder_text": "Type one app or site per line. Each line is matched "
-    "(case-insensitive) against the focused window's "
-    "title and class - if any line is a substring of "
-    "either, the popup stays hidden for that window.\n\n"
-    "Try things like:\n"
+    "subtitle": "Apps and pages where the popup should never appear, "
+    "such as password managers and banking sites.",
+    "placeholder_text": "Enter one app or site per line. Each line is matched "
+    "(case-insensitive) against the focused window's title and class. "
+    "If any line matches as a substring, the popup stays hidden for that window.\n\n"
+    "Examples:\n"
     "  KeePassXC\n"
     "  1Password\n"
     "  Bitwarden\n"
-    "  Mozilla Firefox - DNB     - just the bank tab\n"
-    "  - kjøp                    - any browser tab whose\n"
-    "                              title contains this",
+    "  Mozilla Firefox - My Bank",
 }
 
 
@@ -472,15 +458,17 @@ def _update_offer(
         return UpdateOffer(error, "Try again", NEXT_CHECK)
     if tag is not None and update.is_newer(current, tag):
         if can_upgrade:
-            return UpdateOffer(f"{tag} is out.", f"Update to {tag}", NEXT_INSTALL, True)
+            return UpdateOffer(f"{tag} is available.", f"Update to {tag}", NEXT_INSTALL, True)
         return UpdateOffer(
-            f"{tag} is out. Its release page says how to update.", "Open release page", NEXT_PAGE
+            f"{tag} is available. See the release page for update instructions.",
+            "Open release page",
+            NEXT_PAGE,
         )
     if tag is not None and update.version_parts(current) is None:
         return UpdateOffer(
-            f"This is a development build. The newest release is {tag}.", "Check again", NEXT_CHECK
+            f"This is a development build. The latest release is {tag}.", "Check again", NEXT_CHECK
         )
-    return UpdateOffer(f"vinoPop {current} is the newest release.", "Check again", NEXT_CHECK)
+    return UpdateOffer(f"vinoPop {current} is up to date.", "Check again", NEXT_CHECK)
 
 
 class HotkeyRecorder(Gtk.Button):
@@ -524,7 +512,7 @@ class HotkeyRecorder(Gtk.Button):
 
     def _update_label(self) -> None:
         if self._recording and self._rejected:
-            text = f"Can't bind {_pretty_combo(self._rejected)}, try another"
+            text = f"Cannot bind {_pretty_combo(self._rejected)}; try another"
             self.set_tooltip_text("Press Esc to cancel")
             self.set_child(Gtk.Label(label=text))
         elif self._recording:
@@ -582,22 +570,22 @@ class HotkeyRecorder(Gtk.Button):
 _PLUGIN_LINKS = [
     (
         "Plugin Manager",
-        "Browse the catalogue and install the actions you want in the popup.",
+        "Browse the catalog and install actions for the popup.",
         "available",
     ),
     (
         "Installed plugins",
-        "Update or remove plugins, and switch off single actions in a bundle.",
+        "Update or remove plugins, or toggle individual actions inside a bundle.",
         "installed",
     ),
     (
         "Custom actions",
-        "Make your own popup buttons without writing code.",
+        "Create custom popup buttons without writing code.",
         "custom",
     ),
     (
         "Popup button order",
-        "Choose which buttons come first in the popup.",
+        "Set the order of buttons shown in the popup.",
         "order",
     ),
 ]
@@ -792,8 +780,8 @@ class SettingsDialog:
         group.add(
             self._spin_row(
                 "Hide tray icon after (minutes)",
-                "Minutes without vinoPop popping up before the tray icon hides. "
-                "The next popup brings it back. 0 keeps it shown.",
+                "Minutes of inactivity before hiding the tray icon. "
+                "It reappears the next time the popup opens. Set to 0 to keep it always visible.",
                 "tray_idle_minutes",
                 0,
                 1440,
@@ -812,7 +800,7 @@ class SettingsDialog:
 
         return self._combo_row(
             "Theme",
-            "'Follow system' matches your desktop's light or dark setting.",
+            "'Follow system' matches your desktop's light or dark theme.",
             [
                 ("dark", "Dark"),
                 ("light", "Light"),
@@ -857,8 +845,8 @@ class SettingsDialog:
 
         return self._bounded_spin_row(
             "Popup button size",
-            "Size of each popup button in pixels, from 16 (dense) to 32 "
-            "(roomy). Smaller buttons fit more actions on one row.",
+            "Button size in pixels, from 16 (compact) to 32 (large). "
+            "Smaller buttons fit more actions on one row.",
             "popup_button_size",
             _POPUP_BUTTON_PX,
             on_size_changed,
@@ -899,9 +887,9 @@ class SettingsDialog:
 
         row = self._combo_row(
             "Plugin icon style",
-            "Colourful tiles, or uniform mono glyphs that match the plain "
-            "edit icons. Applies to the popup and Plugin Manager.",
-            [("color", "Colourful tiles"), ("glyph", "Simple glyphs")],
+            "Use color tiles or monochrome glyphs matching system icons. "
+            "Applies to the popup and Plugin Manager.",
+            [("color", "Color tiles"), ("glyph", "Monochrome glyphs")],
             current,
             on_style_changed,
         )
@@ -927,8 +915,8 @@ class SettingsDialog:
         # Saving runs on_changed, and main.py has the tray redraw its icon
         return self._combo_row(
             "Tray icon",
-            "Auto follows your panel colour. If it doesn't on your desktop, "
-            "pick Light for a dark panel or Dark for a light panel.",
+            "Auto follows your panel color. If your panel does not recolor "
+            "symbolic icons, choose Light for dark panels or Dark for light panels.",
             [
                 ("color", "Auto (follows panel)"),
                 ("light", "Light mono (dark panels)"),
@@ -941,7 +929,7 @@ class SettingsDialog:
     def _max_popup_buttons_row(self) -> Adw.SpinRow:
         return self._bounded_spin_row(
             "Maximum buttons in the popup",
-            "Actions past this are hidden behind a '+N' chip that opens the Plugin Manager.",
+            "Actions beyond this limit are grouped under a '+N' button that opens the Plugin Manager.",
             "max_popup_buttons",
             _MAX_POPUP_BUTTONS,
             lambda spin, _p: self._save_key("max_popup_buttons", int(spin.get_value())),
@@ -950,14 +938,13 @@ class SettingsDialog:
     def _overflow_mode_row(self) -> Adw.ComboRow:
         return self._combo_row(
             "When actions overflow",
-            "How the popup handles more actions than fit on one line. "
-            "‘One row + expand arrow’ stays compact and reveals the rest on "
-            "click; ‘Wrap’ uses two rows; ‘One row only’ hides extras behind "
-            "a +N chip.",
+            "Choose how the popup handles more actions than fit on one line. "
+            "'One row + expand arrow' reveals remaining actions on click; "
+            "'Wrap' adds a second row; 'One row only' groups extras under a '+N' button.",
             [
                 ("expand", "One row + expand arrow"),
                 ("wrap", "Wrap to two rows"),
-                ("cap", "One row only (+N chip)"),
+                ("cap", "One row only (+N button)"),
             ],
             self._settings.get("popup_overflow_mode") or "expand",
             lambda v: self._save_key("popup_overflow_mode", v or "expand"),
@@ -966,13 +953,12 @@ class SettingsDialog:
     def _build_activation_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Activation")
-        group.set_description("How vinoPop appears.")
+        group.set_description("Configure how and when the popup opens.")
         group.add(
             self._hotkey_row(
                 "Popup hotkey",
-                "Press this anywhere to open the popup. If you have text "
-                "highlighted, it shows actions for that text. If not, it "
-                "shows a paste menu instead.",
+                "Press this anywhere to open the popup. With text selected, it shows "
+                "actions for that selection; otherwise it opens a paste menu.",
                 key="hotkey",
                 recorder_name="Popup hotkey",
                 clear_tooltip="Disable the popup hotkey",
@@ -990,10 +976,10 @@ class SettingsDialog:
 
         double_click_row = self._switch_row(
             "Modifier+double-click for the edit menu",
-            "Hold the modifier below and double-click in a text field for "
-            "Paste / Select all / Backspace. Watches mouse clicks locally; "
-            "nothing is logged. On Wayland it reads /dev/input, so your user "
-            "needs to be in the 'input' group.",
+            "Hold the modifier below and double-click in a text field to show "
+            "Paste, Select all, and Backspace. Clicks are monitored locally and "
+            "never logged. On Wayland, this reads /dev/input and requires your "
+            "user to be in the 'input' group.",
             self._settings.get("double_click_popup_enabled", False),
         )
         double_click_row.connect("notify::active", self._on_switch, "double_click_popup_enabled")
@@ -1048,9 +1034,9 @@ class SettingsDialog:
         row.set_title("Screen OCR hotkey")
         supported, reason = _ocr_support()
         if supported:
-            row.set_subtitle("Draw a box anywhere; the text inside is copied as text.")
+            row.set_subtitle("Drag to select a screen region and copy recognized text.")
         else:
-            row.set_subtitle(f"Setup needed: {reason}.")
+            row.set_subtitle(f"Setup required: {reason}.")
             row.add_suffix(self._ocr_install_button(row, reason))
         self._add_hotkey_recorder(row, "ocr_hotkey", "Screen OCR hotkey", "Disable the OCR hotkey")
         return row
@@ -1067,7 +1053,7 @@ class SettingsDialog:
         button = Gtk.Button(label="Install")
         button.set_valign(Gtk.Align.CENTER)
         button.set_tooltip_text(
-            "Installs the OCR tools in the background (asks for your password)."
+            "Install OCR tools in the background (requires administrator password)."
         )
         if argv is None:
             button.set_sensitive(False)
@@ -1080,7 +1066,7 @@ class SettingsDialog:
             return
         button.set_sensitive(False)
         button.set_label("Installing…")
-        row.set_subtitle("Installing, authorise the password prompt…")
+        row.set_subtitle("Installing; approve the password prompt to continue…")
 
         def install() -> None:
             ok, error = _run_ocr_install(argv)
@@ -1098,7 +1084,7 @@ class SettingsDialog:
         except Exception:
             supported, reason = exited_ok, ""
         if supported:
-            row.set_subtitle("Ready. Draw a box anywhere to copy its text.")
+            row.set_subtitle("Ready. Drag a box on screen to copy recognized text.")
             button.set_label("Installed")
             button.set_sensitive(False)
             # on_changed binds the hotkey now that it can do something
@@ -1108,7 +1094,7 @@ class SettingsDialog:
                 except Exception:
                     pass
         else:
-            row.set_subtitle(f"Install didn't complete: {reason or error}. Try again.")
+            row.set_subtitle(f"Installation did not complete: {reason or error}. Try again.")
             button.set_label("Install")
             button.set_sensitive(True)
         return False
@@ -1118,9 +1104,9 @@ class SettingsDialog:
         # subtitle into a tall ribbon
         row = self._combo_row(
             "Force all plugins modifier",
-            "Hold this key while selecting to show every action, not just "
-            "the ones that fit the text. Each key clashes with something: "
-            "Alt/Super often move windows, Ctrl and Shift change selection.",
+            "Hold this key while selecting text to show all matching actions "
+            "regardless of content type. Modifiers may conflict with desktop "
+            "shortcuts (Alt/Super often move windows; Ctrl and Shift modify selections).",
             [
                 ("", "None (off)"),
                 ("ctrl", "Ctrl"),
@@ -1134,8 +1120,8 @@ class SettingsDialog:
         if not _force_all_supported():
             row.set_sensitive(False)
             row.set_subtitle(
-                "Only works in an X11 session for now: on Wayland vinoPop "
-                "can't see which keys are held when the popup opens."
+                "Available on X11 sessions only. On Wayland, vinoPop cannot "
+                "detect held modifier keys when the popup opens."
             )
         return row
 
@@ -1167,15 +1153,12 @@ class SettingsDialog:
     def _build_snippets_clipboard_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Snippets &amp; Clipboard")
-        group.set_description(
-            "The picker that remembers what you've copied and the snippets "
-            "you save for reuse. Most of vinoPop lives here."
-        )
+        group.set_description("Manage clipboard history and reusable text snippets.")
 
         history_row = self._switch_row(
             "Clipboard history",
-            "Remember things you've recently copied so you can paste them "
-            "later. Turn off to stop vinoPop from watching the clipboard.",
+            "Keep a history of recently copied text and images. "
+            "Turn off to stop monitoring the clipboard.",
             self._settings.get("clipboard_history_enabled", True),
         )
         history_row.connect("notify::active", self._on_switch, "clipboard_history_enabled")
@@ -1183,8 +1166,8 @@ class SettingsDialog:
 
         shortcut_row = self._hotkey_row(
             "Optional clipboard shortcut",
-            "Opens the clipboard picker at the cursor. Optional: the popup "
-            "hotkey (Activation page) opens it too when nothing is highlighted.",
+            "Open the clipboard picker at the pointer. Optional: the popup "
+            "hotkey (on the Activation page) also opens it when no text is selected.",
             key="clipboard_hotkey",
             recorder_name="Clipboard shortcut",
             clear_tooltip="Disable the clipboard shortcut",
@@ -1194,10 +1177,9 @@ class SettingsDialog:
 
         triggers_row = self._switch_row(
             "Snippet triggers (text expansion)",
-            "When ON, typing a snippet's trigger code (e.g. ';email') followed "
-            "by space or tab auto-expands it. Requires vinoPop to watch "
-            "global keystrokes locally - keys are matched against your "
-            "snippet triggers only, never logged or sent anywhere.",
+            "Expand a snippet automatically when you type its trigger (for example, "
+            "';email') followed by Space or Tab. Keystrokes are checked locally "
+            "against your triggers and are never logged or transmitted.",
             self._settings.get("snippet_triggers_enabled", False),
         )
         triggers_row.connect("notify::active", self._on_switch, "snippet_triggers_enabled")
@@ -1218,10 +1200,9 @@ class SettingsDialog:
 
         shell_row = self._switch_row(
             "Shell expansion in snippets",
-            "When ON, snippets containing {shell:CMD} run that command "
-            "in bash and paste the output. Useful for {shell:git branch} "
-            "or {shell:date -u}. Off by default - an imported snippet "
-            "with a hostile command would execute immediately.",
+            "Allow snippets containing {shell:CMD} to run commands in bash "
+            "and paste their output (such as {shell:git branch} or {shell:date -u}). "
+            "Disabled by default because an untrusted snippet could execute arbitrary commands.",
             self._settings.get("snippet_shell_enabled", False),
         )
         shell_row.connect("notify::active", self._on_switch, "snippet_shell_enabled")
@@ -1303,12 +1284,12 @@ class SettingsDialog:
     def _build_filter_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Filters")
-        group.set_description("When the popup should stay hidden.")
+        group.set_description("Control where and when the popup stays hidden.")
 
         skip_short_row = self._switch_row(
             "Skip short auto-popup selections",
-            "The auto-popup ignores selections shorter than the number "
-            "below. The hotkey always works.",
+            "Ignore selections shorter than the minimum length below when "
+            "auto-popup is enabled. The manual hotkey is unaffected.",
             self._settings.get("min_selection_length_enabled"),
         )
         skip_short_row.connect("notify::active", self._on_switch, "min_selection_length_enabled")
@@ -1331,7 +1312,7 @@ class SettingsDialog:
                 "blocklist_patterns",
                 "Don't show in these apps or pages",
                 "Hide the popup in password managers, banking sites, "
-                "and anywhere else you'd rather not see it. Click to add.",
+                "and other sensitive contexts. Click to add patterns.",
                 _POPUP_BLOCKLIST_EDITOR,
             )
         )
@@ -1340,12 +1321,12 @@ class SettingsDialog:
     def _build_timing_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Timing")
-        group.set_description("Seconds for popup show / hide behaviour.")
+        group.set_description("Adjust popup show and hide delays in seconds.")
 
         debounce_row = self._seconds_spin_row(
             "Delay before popup appears",
-            "Seconds to wait after you finish selecting - keeps the "
-            "popup from flashing while you're still dragging.",
+            "Delay after selection changes before showing the popup, "
+            "preventing flicker while dragging.",
             "selection_debounce_ms",
             0.0,
             2.0,
@@ -1399,7 +1380,7 @@ class SettingsDialog:
         custom_row = _plain(Adw.EntryRow())
         custom_row.set_title("Custom search URL ({q} = the selection)")
         custom_row.set_tooltip_text(
-            "Must contain {q} - replaced by the selection.\n"
+            "Must include {q}, which is replaced by the selected text.\n"
             "Example: https://searx.example.com/search?q={q}"
         )
         custom_row.set_text(self._settings.get("search_engine_custom_url") or "")
@@ -1440,16 +1421,16 @@ class SettingsDialog:
             size = "about 4 GB"
         prefetch_row = self._switch_row(
             "Download the AI model in the background",
-            f"One-time download ({size}) when vinoPop starts, so the first AI "
-            "action doesn't wait for it. Off: it downloads on the first AI action.",
+            f"Download the AI model ({size}) once when vinoPop starts so the "
+            "first AI action does not wait. When off, it downloads on your first AI action.",
             self._settings.get("ai_prefetch_model", False),
         )
         prefetch_row.connect("notify::active", self._on_prefetch_switch)
         group.add(prefetch_row)
         describe_row = self._switch_row(
             "Describe images after OCR",
-            "The AI model writes alt text for the captured image, about 10 s each: "
-            "a button on the OCR notification, or straight away when there's no text.",
+            "Generate an AI description for captured images (~10 s each), offered "
+            "via a button on the OCR notification or run automatically when no text is found.",
             self._settings.get("ocr_describe_images", False),
         )
         describe_row.connect(
@@ -1480,11 +1461,13 @@ class SettingsDialog:
             if items:
                 row.set_subtitle(
                     "\n".join(f"{i.label}: {_gb(i.size)}" for i in items)
-                    + "\nDeleting frees the space. The next AI action downloads "
-                    "the model again."
+                    + "\nDeleting frees disk space. The model will download "
+                    "again the next time you use an AI action."
                 )
             else:
-                row.set_subtitle("None. The first AI action downloads the model.")
+                row.set_subtitle(
+                    "No models downloaded. The model downloads on your first AI action."
+                )
             btn.set_sensitive(bool(items))
 
         def _delete() -> None:
@@ -1504,7 +1487,7 @@ class SettingsDialog:
         def _done(freed: int, err: str | None) -> bool:
             _refresh()
             if err is not None:
-                alert = Adw.AlertDialog.new("Couldn't delete the model", err)
+                alert = Adw.AlertDialog.new("Could not delete model", err)
                 alert.add_response("close", "Close")
                 alert.present(self._window)
             elif prefetch_row.get_active():
@@ -1518,8 +1501,8 @@ class SettingsDialog:
                 items = models.on_disk()
                 if models.downloading():
                     alert = Adw.AlertDialog.new(
-                        "A model is downloading",
-                        "Wait for the download to finish, then delete it.",
+                        "Model download in progress",
+                        "Wait for the download to finish before deleting models.",
                     )
                     alert.add_response("close", "Close")
                     alert.present(self._window)
@@ -1528,15 +1511,16 @@ class SettingsDialog:
                 items = []
             total = sum(i.size for i in items)
             body = (
-                f"This deletes {_gb(total)} of AI models and their compiled cache. "
-                "Summarize, rewrite, explain, translate and image descriptions "
+                f"This removes {_gb(total)} of downloaded AI models and their compiled cache. "
+                "Summarize, rewrite, explain, translate, and image descriptions will "
                 "download the model again the next time you use them."
             )
             if prefetch_row.get_active():
                 body += (
-                    "\n\nBackground download is turned off too, so it doesn't come straight back."
+                    "\n\nBackground download will also be turned off so it does "
+                    "not redownload immediately."
                 )
-            confirm = Adw.AlertDialog.new("Delete the AI models?", body)
+            confirm = Adw.AlertDialog.new("Delete AI models?", body)
             confirm.add_response("cancel", "Cancel")
             confirm.add_response("delete", "Delete")
             confirm.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -1608,7 +1592,7 @@ class SettingsDialog:
         def _clicked(*_) -> None:
             nxt = state["next"]
             if nxt == NEXT_CHECK:
-                _busy("Checking GitHub for a newer release.")
+                _busy("Checking GitHub for a newer release…")
 
                 def _worker() -> None:
                     try:
@@ -1621,7 +1605,7 @@ class SettingsDialog:
                 tag, upgrade = state["tag"], update.upgrade_command()
                 if not isinstance(tag, str) or upgrade is None:
                     return
-                _busy(f"Installing {tag}. This can take a few minutes.")
+                _busy(f"Installing {tag}. This may take a few minutes…")
 
                 def _install() -> None:
                     try:
@@ -1640,7 +1624,7 @@ class SettingsDialog:
 
         btn.connect("clicked", _clicked)
         _show(
-            "Checks GitHub for a newer release. Nothing else is sent.",
+            "Checks GitHub for a newer release. No other data is sent.",
             "Check for updates",
             NEXT_CHECK,
         )
@@ -1649,13 +1633,11 @@ class SettingsDialog:
     def _build_advanced_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Advanced")
-        group.set_description(
-            "Experimental switches. Leave alone unless you know what you're doing."
-        )
+        group.set_description("Advanced options for troubleshooting and resetting preferences.")
 
         poll_row = self._switch_row(
             "Trigger hotkey on first press",
-            "Turn on if the popup only appears after pressing the hotkey "
+            "Enable if the popup only opens after pressing the hotkey "
             "2-3 times (common on Cinnamon).",
             self._settings.get("hotkey_use_polling", False),
         )
@@ -1667,10 +1649,9 @@ class SettingsDialog:
         reset_row = _plain(Adw.ActionRow())
         reset_row.set_title("Reset settings to defaults")
         reset_row.set_subtitle(
-            "Restores every preference (hotkeys, timing, popup look, "
-            "AI services, etc.) to its factory default. Your snippets, "
-            "clipboard history, installed plugins, and custom buttons "
-            "are kept - this only resets preferences."
+            "Restore all preferences (hotkeys, timing, appearance, AI, and filters) "
+            "to their defaults. Your snippets, clipboard history, installed plugins, "
+            "and custom buttons are kept."
         )
         reset_btn = Gtk.Button(label="Reset…")
         reset_btn.set_valign(Gtk.Align.CENTER)
@@ -1683,13 +1664,11 @@ class SettingsDialog:
     def _on_reset_to_defaults(self, _btn: Gtk.Button) -> None:
         confirm = Adw.AlertDialog.new(
             "Reset all preferences to defaults?",
-            "Every setting in this window will go back to how "
-            "vinoPop ships out of the box.\n\n"
-            "Kept: your snippets, clipboard history, installed "
-            "plugins, custom buttons.\n"
-            "Reset: hotkeys, timing, popup look, AI services, "
-            "blocklists, search engine, terminal behaviour.\n\n"
-            "There's no undo.",
+            "All preferences in this window will return to their default values.\n\n"
+            "Kept: snippets, clipboard history, installed plugins, and custom buttons.\n"
+            "Reset: hotkeys, timing, popup appearance, AI settings, "
+            "blocklists, search engine, and terminal settings.\n\n"
+            "This action cannot be undone.",
         )
         confirm.add_response("cancel", "Cancel")
         confirm.add_response("reset", "Reset")
@@ -1733,10 +1712,12 @@ class SettingsDialog:
         and probes devices, which would stall this window."""
         group = Adw.PreferencesGroup()
         group.set_title("Diagnostics")
-        group.set_description("What the on-device AI needs from this machine (vinopop --doctor).")
+        group.set_description(
+            "Checks for local AI, OpenVINO devices, and desktop integrations (vinopop --doctor)."
+        )
         buttons = Gtk.Box(spacing=6)
-        rerun = self._suffix_icon_button("view-refresh-symbolic", "Run the checks again")
-        copy = self._suffix_icon_button("edit-copy-symbolic", "Copy a report for a bug report")
+        rerun = self._suffix_icon_button("view-refresh-symbolic", "Run diagnostic checks again")
+        copy = self._suffix_icon_button("edit-copy-symbolic", "Copy diagnostics for a bug report")
         buttons.append(rerun)
         buttons.append(copy)
         group.set_header_suffix(buttons)
@@ -1841,7 +1822,7 @@ class SettingsDialog:
 
         restart = _button_row(
             "Restart vinoPop",
-            "Try this first if the popup, hotkeys or tray stop responding.",
+            "Try this first if the popup, hotkeys, or tray icon stop responding.",
             "Restart",
             lambda *_: self._on_restart() if self._on_restart else None,
         )
@@ -1856,8 +1837,8 @@ class SettingsDialog:
             win.present()
 
         _button_row(
-            "Run the setup again",
-            "Walk through the first-run setup: hotkeys, plugins and permissions.",
+            "Run onboarding tour",
+            "Reopen the first-run walkthrough for hotkeys, plugins, and AI setup.",
             "Open",
             _setup,
         )
@@ -1871,12 +1852,12 @@ class SettingsDialog:
                 for dev in skipped:
                     failures.forget(dev)
                 btn.set_sensitive(False)
-                btn.set_label("Forgotten")
+                btn.set_label("Cleared")
 
             _button_row(
-                "Retry AI devices that failed",
-                f"{', '.join(skipped)} failed to load the model before and are skipped. "
-                "Clear that so the next AI action tries them again.",
+                "Retry failed AI devices",
+                f"{', '.join(skipped)} previously failed to load the model and are "
+                "currently skipped. Clear this list to try them again on the next AI action.",
                 "Retry",
                 _forget,
             )
@@ -1886,7 +1867,7 @@ class SettingsDialog:
         group = Adw.PreferencesGroup()
         group.set_title("Plugins")
         group.set_description(
-            "The popup's buttons come from plugins. Each row opens the Plugin Manager."
+            "Popup buttons are provided by plugins. Select a row below to open the Plugin Manager."
         )
         for title, subtitle, tab in _PLUGIN_LINKS:
             row = _plain(Adw.ActionRow())
@@ -1917,8 +1898,8 @@ class SettingsDialog:
 
         term_row = self._switch_row(
             "Keep terminal open after running",
-            "After running a command, leaves the terminal window open "
-            "so you can read the output. Otherwise it closes right away.",
+            "Keep the terminal window open after a command finishes so you can "
+            "read its output. Otherwise, it closes immediately.",
             self._settings.get("terminal_keep_open", True),
         )
         term_row.connect("notify::active", self._on_switch, "terminal_keep_open")

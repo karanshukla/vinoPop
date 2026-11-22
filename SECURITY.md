@@ -12,7 +12,7 @@ Network requests only happen for explicit online actions:
 
 Only `http`, `https`, `ftp`, and `mailto` links are forwarded to your browser or mail client. Because web pages can control selectable text, custom URI schemes (such as `steam:` or `vscode:`) are rejected, and selecting a `file://` link opens its containing folder rather than executing the file through its MIME handler.
 
-OCR, summarize, rewrite, explain, and translate all run on local OpenVINO models; your selected text never leaves your machine.
+OCR, summarize, rewrite, explain, and translate run on local OpenVINO models without sending your selected text over the network.
 
 OpenVINO includes Intel's usage telemetry package (Google Analytics), which is enabled by default unless opted out. Before importing OpenVINO, vinoPop blocks its `openvino_telemetry` module for the vinoPop process so OpenVINO falls back to a no-op stub, with no option to enable it. Your `~/intel/openvino_telemetry` consent file is left untouched for any other OpenVINO tools you use.
 

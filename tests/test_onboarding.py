@@ -56,7 +56,7 @@ def test_build_pages_keeps_an_empty_hotkey_empty(onboarding, monkeypatch):
     monkeypatch.setattr(onboarding, "_model_to_offer", lambda: None)
     settings = {"hotkey": "", "clipboard_hotkey": "super+shift+v"}
     pages = onboarding._build_pages(settings)
-    summon = next(p for p in pages if p["title"] == "Summon it your way")
+    summon = next(p for p in pages if p["title"] == "Open it your way")
     # an empty hotkey is switched off; it used to fall back to the default
     assert "Super+Shift+Y" not in summon["body"]
     assert onboarding._draw_summon.segs == (1, 2)

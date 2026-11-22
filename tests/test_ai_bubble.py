@@ -196,7 +196,7 @@ def test_a_silent_run_is_given_up(ai_bubble, monkeypatch):
     now[0] += ai_bubble._STALL_TIMEOUT_S + 1
     assert b._check_stall() is True
     assert not b._busy and b._gen == 1  # late output from the hung run is dropped
-    assert "No answer" in b._text_lbl.text
+    assert "No response" in b._text_lbl.text
 
 
 def test_a_streaming_run_is_not_given_up(ai_bubble, monkeypatch):
@@ -285,7 +285,7 @@ def test_keyboard_picks_a_chip_and_announces_it(kbd_bubble):
 def test_enter_waits_for_the_answer(kbd_bubble):
     b, log = kbd_bubble
     assert b._kbd_key("Return")
-    assert ("say", "The answer isn't ready yet") in log
+    assert ("say", "Response is not ready yet") in log
     assert not any(e[0] in ("copy", "ungrab") for e in log)
 
 
@@ -317,7 +317,7 @@ def test_replace_says_why_when_the_answer_is_incomplete(kbd_bubble):
     b._kbd_key("Right")
     b._kbd_key("Return")
     assert not any(e[0] == "replace" for e in log)
-    assert log[-1][1].startswith("The answer is incomplete")
+    assert log[-1][1].startswith("The response is incomplete")
 
 
 def test_escape_closes(kbd_bubble):

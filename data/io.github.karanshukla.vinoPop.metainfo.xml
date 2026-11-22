@@ -14,16 +14,16 @@
   </developer>
   <description>
     <p>
-      Select some text and a small bar of buttons appears right above it.
-      Copy it, search it, translate, summarize or rewrite it with a local
-      model, run it as a command, encode it or do maths on it, without
-      moving your hands from where you were working.
+      Select text in any application to open a floating action bar above it.
+      Copy, search, translate, summarize, or rewrite text with a local AI
+      model, run shell commands, encode values, or evaluate expressions
+      directly where you are working.
     </p>
     <ul>
-      <li>Buttons that fit what you selected: links, commands, file paths, emails and plain text</li>
-      <li>Offline AI on the Intel NPU, GPU or CPU: nothing leaves your machine</li>
-      <li>Clipboard history and snippets with placeholders</li>
-      <li>Plugins are plain Python files, and custom buttons need no code</li>
+      <li>Context-aware actions for links, shell commands, file paths, email addresses, and plain text</li>
+      <li>Local AI inference on Intel NPU, GPU, or CPU via OpenVINO</li>
+      <li>Clipboard history and reusable snippets with placeholders</li>
+      <li>Extensible with standalone Python plugins or the built-in no-code recipe builder</li>
     </ul>
   </description>
   <categories>

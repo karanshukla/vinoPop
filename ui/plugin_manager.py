@@ -225,12 +225,11 @@ class PluginManagerDialog:
         "Developer",
     ]
     _CATEGORY_DESCRIPTIONS = {
-        "Snippets & Clipboard": "The picker that remembers what you've copied and the snippets "
-        "you save for reuse. The core of what vinoPop is for.",
-        "Productivity": "Everyday actions - editing, math, counts, formatting.",
-        "Web shortcuts": "Open the selection in a search engine or web service.",
-        "AI": "Summarize, rewrite, explain and translate offline, on your NPU, GPU or CPU.",
-        "Developer": "Encoders, hashes and converters for technical text.",
+        "Snippets & Clipboard": "Clipboard history and reusable text snippets.",
+        "Productivity": "Everyday text actions: editing, math, word counts, and formatting.",
+        "Web shortcuts": "Open selected text in a search engine or web service.",
+        "AI": "Offline summarize, rewrite, explain, and translate on your NPU, GPU, or CPU.",
+        "Developer": "Encoders, hashes, and converters for technical text.",
     }
 
     def _build_catalog_groups(self) -> list[Adw.PreferencesGroup]:
@@ -344,8 +343,8 @@ class PluginManagerDialog:
         btn.set_valign(Gtk.Align.CENTER)
         btn.add_css_class("suggested-action")
         btn.set_tooltip_text(
-            "Replace your copy with the newer one bundled with vinoPop. "
-            "Changes you made to the file are lost."
+            "Replace your copy with the newer bundled version. "
+            "Local edits to this file will be overwritten."
         )
         btn.set_visible(_status(entry) == "outdated")
         btn.connect("clicked", self._on_update_clicked, entry)
@@ -399,8 +398,8 @@ class PluginManagerDialog:
         group = Adw.PreferencesGroup()
         group.set_title("User plugins")
         group.set_description(
-            "Plugins you currently have. Install more from the Available tab, "
-            "or remove the ones you don't use."
+            "Currently installed plugins. Install more from the Available tab, "
+            "or remove plugins you no longer need."
         )
         self._fill_installed_group(group)
         return group
@@ -452,7 +451,7 @@ class PluginManagerDialog:
                 if path.name in retired:
                     row.set_subtitle(f"No longer bundled with vinoPop. {retired[path.name]}")
                 else:
-                    row.set_subtitle("Installed by hand (not in the catalogue)")
+                    row.set_subtitle("Manually installed (not in the built-in catalog)")
             _icon = entry.get("icon") if entry else None
             if not _icon and sub_names:
                 _p0 = all_plugins.get(sub_names[0])
@@ -630,9 +629,8 @@ class PluginManagerDialog:
         group = Adw.PreferencesGroup()
         group.set_title("Popup button order")
         group.set_description(
-            "Drag-free reordering: ↑ and ↓ buttons move a plugin up or down. "
-            "The popup shows plugins in this order (those not listed fall back "
-            "to their built-in priority)."
+            "Use the ↑ and ↓ buttons to reorder plugins in the popup. "
+            "Unlisted plugins fall back to their default priority."
         )
         self._fill_order_group(group)
         return group

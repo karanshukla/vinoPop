@@ -12,7 +12,7 @@ When you select text in any application, vinoPop shows a floating action bar abo
 - **Offline AI and speech.** Summarize, rewrite, explain, and translate run Gemma 4 locally via OpenVINO on an Intel NPU (falling back to GPU or CPU when no NPU is available). On a 16 TOPS NPU, Gemma 4 E2B runs at ~5.6 tokens/s and draws ~2–4 W. Press `Shift+Super+O` to run OCR on a screen region, or install **Read aloud** from the Plugin Manager to speak selected text using [vinoSpeak](https://github.com/karanshukla/vinoSpeak)'s Kokoro voice on the NPU.
 - **Clipboard history and snippets.** Press `Super+Shift+V` to browse recent text and images, pin entries, and insert snippets with placeholders such as `{date}` and `{clipboard}`.
 - **Plugins and no-code recipes.** Write custom plugins as standalone `.py` files, or use the built-in recipe builder to create web searches, shell commands, and text transforms without code. Built-in tools cover Base64, JSON, hashes, timestamps, colors, a calculator, case conversion, QR codes, and more.
-- **Local-first privacy.** Your text stays on your machine unless you explicitly trigger an online action such as web search or opening a link. There is no telemetry or background phone-home traffic.
+- **Local by default.** Your text stays on your machine unless you explicitly trigger an online action such as web search or opening a link. vinoPop collects no telemetry and makes no background network requests.
 
 vinoPop runs natively on KDE Plasma 6 (Wayland) and via XWayland on GNOME, sway, Hyprland, and other Wayland desktops. Plain Xorg sessions (Cinnamon, XFCE, MATE, and similar desktops) are supported on a best-effort basis.
 
