@@ -217,7 +217,7 @@ Cut, Paste, and other editing actions are hidden when the selection is in a read
 
 1. **Last focus event (valid for 30 s):** When `editable_atspi_listener_enabled` is enabled, an AT-SPI listener records whether each newly focused widget is editable. This is the only reliable per-widget signal in Chromium and Electron apps, whose accessibility tree exposes the top-level frame without a focused descendant even though focus events still fire when clicking an input. After 30 s, the cached event expires because the user may have switched apps without generating a new event.
 2. **Bounded accessibility tree walk:** Also gated on `editable_atspi_listener_enabled`, limited to 150 ms and 10 levels deep so it cannot delay the popup. It searches only inside the active window for a focused widget. Earlier code searched across all apps, causing Cinnamon's permanently focused desktop window to make every app appear non-editable. An active window with no focused widget (such as Electron) yields an unknown result rather than assuming read-only.
-3. **Window class lookup:** Matches the active window's class against a built-in list of read-only viewers (PDF and image viewers, media players, file managers, ebook readers) plus `readonly_app_classes`. Only the class is checked—never the window title—so a class like `eog` does not match a title like "Geography notes". The class is retrieved via the platform backend (`xprop` on X11, KWin on KDE Wayland), covering native Wayland windows.
+3. **Window class lookup:** Matches the active window's class against a built-in list of read-only viewers (PDF and image viewers, media players, file managers, ebook readers) plus `readonly_app_classes`. Only the class is checked (never the window title), so a class like `eog` does not match a title like "Geography notes". The class is retrieved via the platform backend (`xprop` on X11, KWin on KDE Wayland), covering native Wayland windows.
 4. **Default to editable:** If none of the checks yields a definite answer, the widget is treated as editable so useful buttons are not hidden unnecessarily.
 
 The accessibility walk also supplies the selected text's bounding rectangle for anchoring the popup. Because Kate and KWrite report text extents with zero height, a zero height is normalized to 24 px; a zero width or off-screen coordinates fall back to anchoring at the pointer.
@@ -232,7 +232,7 @@ Paste, Cut, text typing, and window activation use python-xlib and the X server'
 
 - **Clearing held modifiers:** Currently held modifiers are released before sending a key chord (matching `xdotool key --clearmodifiers`) and restored afterward so a shortcut's `Super` or `Shift` does not alter `Ctrl+V`.
 - **Characters outside the active layout:** Keysyms missing from the current keyboard map (such as accented letters on a US layout or emoji) are temporarily bound to a spare keycode and restored afterward.
-- **Separate spare keycode per character:** Unlike `xdotool`, each missing keysym receives its own spare keycode. Reusing a single keycode per character raced against client processing under heavy CPU load—3 of 6 test runs produced garbled text on Plasma XWayland with all cores busy (2026-10-20).
+- **Separate spare keycode per character:** Unlike `xdotool`, each missing keysym receives its own spare keycode. Reusing a single keycode per character raced against client processing under heavy CPU load (3 of 6 test runs produced garbled text on Plasma XWayland with all cores busy, 2026-10-20).
 
 `tests/test_x11_keys.py` covers all three behaviors.
 
@@ -240,7 +240,7 @@ Paste, Cut, text typing, and window activation use python-xlib and the X server'
 
 Each global hotkey runs in its own thread with a dedicated X connection (`triggers/hotkey.py`).
 
-- **Lock-modifier variants:** Each hotkey is grabbed four times—one for every combination of Caps Lock and Num Lock—because X11 treats lock states as modifiers and requires an exact match. Individual refused variants are logged; the user is notified of a conflict only if all four grabs fail.
+- **Lock-modifier variants:** Each hotkey is grabbed four times (one for every combination of Caps Lock and Num Lock) because X11 treats lock states as modifiers and requires an exact match. Individual refused variants are logged; the user is notified of a conflict only if all four grabs fail.
 - **Event loop timeout:** The thread blocks in `select()` for up to 1 s (the upper bound on shutdown latency), reduced from 0.2 s to avoid waking every hotkey thread five times per second while idle.
 - **Layout changes (`MappingNotify`):** Because X11 grabs target keycodes, switching keyboard layouts can move a keysym to a different keycode and silently break the grab until it is re-registered. Layout switchers like IBus and `kbdd` emit floods of `MappingNotify` events, which previously caused the first hotkey press to be dropped on Norwegian layouts.
 - **Ignoring key autorepeat:** Autorepeat events arrive as a key release followed by a key press sharing the same server timestamp. Filtering these ensures holding the toggle hotkey (#44) does not immediately close the popup it just opened.
@@ -289,7 +289,7 @@ Snippets containing `{ask:}` prompts do not expand from typed triggers to avoid 
 Because the picker window takes focus, pasting must first restore focus to the previously active application:
 
 - Wait 60 ms after the click, then release all modifiers. Without this, modifiers from the picker shortcut (such as `Super+Shift+V`) can remain logically held and corrupt or block the paste.
-- Activate the target window twice—via Xlib and via `wmctrl -ia` when installed—because on Cinnamon's muffin the first activation call can return before focus changes.
+- Activate the target window twice (via Xlib and via `wmctrl -ia` when installed) because on Cinnamon's muffin the first activation call can return before focus changes.
 - Wait 180 ms (or 300 ms for terminal emulators). Cinnamon queues window activation for the next compositor frame (100 ms was too short), and VTE commits focus-in ~50 ms after activation.
 - If the target window is still not active, activate it one more time and wait an additional 120 ms.
 - Single-line entries up to 2,048 characters are typed via XTEST instead of pasted, because Electron editors (Slack, Discord, Notion, and similar apps) silently drop synthetic `Ctrl+V` events and terminal bracketed paste can desync with readline. Multi-line text is pasted (typing newlines into a shell would execute each line), and entries over 2,048 characters are pasted for speed. If typing fails, vinoPop falls back to sending the paste shortcut.

@@ -72,7 +72,7 @@ class TrayQt:
 
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(self._load_icon())
-        self._tray.setToolTip("vinoPop - clipboard popup assistant")
+        self._tray.setToolTip("vinoPop - text selection actions")
         self._tray.setContextMenu(self._menu)
         self._tray.activated.connect(self._on_activated)
         self._tray.show()

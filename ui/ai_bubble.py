@@ -397,7 +397,7 @@ class ResultBubble:
             return False
         chip = self._chips[self._kbd_index]
         if not chip.get_sensitive():
-            self._say(chip.get_tooltip_text() or "The answer isn't ready yet")
+            self._say(chip.get_tooltip_text() or "Response is not ready yet")
             return True
         label = self._chip_name(chip)
         if label != "Close":
@@ -500,7 +500,7 @@ class ResultBubble:
             return False
         if self._busy and time.monotonic() - self._last_activity > _STALL_TIMEOUT_S:
             self._gen += 1
-            self._finish(None, "No answer from the model, so this was stopped.")
+            self._finish(None, "No response from the model; request timed out.")
         return True
 
     def _sync_spinner(self) -> None:
@@ -522,7 +522,7 @@ class ResultBubble:
         if self._replace_btn is not None:
             self._replace_btn.set_sensitive(ready and not self._incomplete)
             self._replace_btn.set_tooltip_text(
-                "The answer is incomplete, so it can't replace the selection; use Copy"
+                "The response is incomplete and cannot replace the selection. Use Copy instead."
                 if self._incomplete
                 else None
             )

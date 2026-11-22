@@ -253,7 +253,7 @@ class Tray:
 
         actions.notify(
             "Tray icon unavailable",
-            f"The tray process keeps exiting. To get the tray icon, {_PYSIDE_HINT}.",
+            f"The tray process exited repeatedly. To enable the tray icon, {_PYSIDE_HINT}.",
             timeout_ms=None,
             transient=False,
         )
@@ -273,8 +273,8 @@ class Tray:
 
         actions.notify(
             "No tray icon",
-            "This desktop has no system tray, so vinoPop opened Settings "
-            "instead. On GNOME, the AppIndicator extension adds one.",
+            "This desktop does not provide a system tray, so vinoPop opened Settings "
+            "instead. On GNOME, install the AppIndicator extension to add tray support.",
             timeout_ms=None,
             transient=False,
         )

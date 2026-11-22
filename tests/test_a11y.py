@@ -471,15 +471,15 @@ def test_icon_picker_is_named(gtk, stub_backend):
 # it at ~3.2:1 on the light theme, under AA's 4.5:1 (#126). Recaps and
 # previews can stay dim; these can't.
 _INSTRUCTIONS = (
-    "Custom buttons turn any text you select",
-    "Click Next when you're ready",
-    "Pick one. You can change it later",
+    "Custom buttons turn selected text",
+    "Click Next to continue",
+    "Choose an action type",
     "Example: ",
-    "The icon is what shows up in the popup",
+    "The icon appears in the popup bar",
     "Or insert a dynamic value",
-    "Try one of these",
-    "You can leave this as 'always'",
-    "Press Apply to save",
+    "Or start from an example",
+    "Leave this set to 'Always'",
+    "Click Apply to save",
     "Shows on: ",
 )
 

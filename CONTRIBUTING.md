@@ -96,9 +96,9 @@ Open a pull request that adds:
    ```
 3. A matching version header on the file's first line: `# vinopop-plugin-version: 1` (recipes specify `"version": 1` in JSON instead).
 
-Because installing a plugin copies it into `~/.config/vinopop/plugins/`, always increment the version in both the plugin file and `manifest.json` when publishing fixes so the Plugin Manager offers an update. If you remove a bundled plugin, add it to `plugins_repo/retired.json` with a reason so existing installations report it cleanly.
+Because installing a plugin copies it into `~/.config/vinopop/plugins/`, always increment the version in both the plugin file and `manifest.json` when publishing fixes so the Plugin Manager offers an update. If you remove a bundled plugin, add it to `plugins_repo/retired.json` with a reason so existing installations report it clearly.
 
-If your plugin depends on an external command (such as `imagemagick`), check for it with `shutil.which(...)` and fail gracefully with an `actions.notify` message explaining what is missing.
+If your plugin depends on an external command (such as `imagemagick`), check for it with `shutil.which(...)` and display an `actions.notify` message explaining what is missing.
 
 ## Bug reports & feature requests
 

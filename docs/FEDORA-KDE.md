@@ -84,7 +84,7 @@ Logs are written to `~/.cache/vinopop/vinopop.log`.
 
 - **Global hotkey:** Registered through KGlobalAccel; verify that the binding appears under **System Settings → Shortcuts**. If pressing the shortcut does nothing, please file an issue, as the Qt key-sequence encoding may need adjustment for your keyboard layout.
 - **Esc-to-dismiss and click-outside:** Because the popup never takes keyboard focus (so paste actions stay targeted at your active app), `Esc` does not dismiss it on Wayland; instead, it auto-hides on a timer or when the pointer leaves.
-- **Active-window blocklist:** Supported natively—the focused window's class and title are queried via a KWin script while the selection settles.
+- **Active-window blocklist:** Supported natively: the focused window's class and title are queried via a KWin script while the selection settles.
 - **Initial latency:** The first popup after a selection incurs ~100–150 ms of extra latency from the cursor-position round-trip to KWin. A resident helper to reduce this overhead is planned.
 
 Please report other issues in the [GitHub issue tracker](https://github.com/karanshukla/vinoPop/issues).

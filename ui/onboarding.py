@@ -624,7 +624,9 @@ def _summon_snippet(cr, cx, cy, base, t):
         a = _ease_out(_seg(base, 2.0, 2.7))
         _text(cr, fx + 16, ty, expanded, 14, ink, a=a, center=False)
     _sparkle(cr, fx + fw - 22, fy + fh / 2, _bump(_seg(base, 1.95, 2.7)))
-    _text(cr, cx, fy + fh + 22, "Type a shortcut, get the whole text", 11, MUTE, center=True)
+    _text(
+        cr, cx, fy + fh + 22, "Type a short trigger to expand the full text", 11, MUTE, center=True
+    )
 
 
 def _sparkle(cr, scx, scy, spark):
@@ -860,7 +862,7 @@ def _draw_ai(cr, w, h, t):
         cr,
         sx + 40,
         sy + sh - 118,
-        "Stays on your machine",
+        "Runs locally",
         a=_ease_out(_seg(lt, 4.6, 5.0)) * (1 - _seg(lt, T - 0.3, T)),
     )
 
@@ -938,17 +940,16 @@ def _summon_copy(popup_key: str, clip_key: str, history: bool) -> tuple[str, tup
     `tests/test_onboarding.py::test_build_pages_keeps_an_empty_hotkey_empty`)."""
     if not history:
         clip_key = ""
-    body = "It appears automatically when you select text."
+    body = "The popup opens automatically when you select text."
     if popup_key:
-        body += f" Or press <b>{'+'.join(_keys(popup_key))}</b> anywhere."
+        body += f" You can also press <b>{'+'.join(_keys(popup_key))}</b> anywhere."
     if clip_key:
         body += (
-            f" Press <b>{'+'.join(_keys(clip_key))}</b> for clipboard history - which "
-            "also keeps your snippets, so a short trigger expands into the whole "
-            "text as you type."
+            f" Press <b>{'+'.join(_keys(clip_key))}</b> for clipboard history and "
+            "snippets, which expand short triggers into full text as you type."
         )
     elif history:
-        body += " Snippets expand a short trigger into the whole text as you type."
+        body += " Snippets expand short triggers into full text as you type."
     shown = (
         (SEG_POPUP_HOTKEY, bool(popup_key)),
         (SEG_CLIPBOARD, bool(clip_key)),
@@ -978,47 +979,46 @@ def _build_pages(settings):
         _draw_ai.size = model.size
         ai_pages.append(
             dict(
-                title="Offline AI, on your machine",
-                body="Summarize, rewrite, explain and translate run on this "
-                f"computer, from a one-time <b>{model.size}</b> download. Get it "
-                "now, or the first time you use an AI action.",
+                title="Offline AI on your device",
+                body="Summarize, rewrite, explain, and translate run locally "
+                f"after a one-time <b>{model.size}</b> download. Download it "
+                "now, or wait until your first AI action.",
                 draw=_draw_ai,
                 ask_model=True,
             )
         )
     return [
         dict(
-            title="Select text, get instant actions",
-            body="Highlight anything in any app - a link, an error, a "
-            "paragraph - and vinoPop pops up a little bar of actions "
-            "made for what you picked.",
+            title="Select text for instant actions",
+            body="Highlight text in any app, such as a link, error message, or "
+            "paragraph, to open a floating bar of actions tailored to your selection.",
             draw=_draw_how,
         ),
         dict(
-            title="Summon it your way",
+            title="Open it your way",
             body=summon_body,
             draw=_draw_summon,
         ),
         dict(
-            title="Add ready-made plugins",
-            body="Open the tray icon → <b>Plugins</b> → <b>Available</b> and "
-            "one-click install extras: transforms, QR codes, "
-            "word count, search shortcuts and more.",
+            title="Install built-in plugins",
+            body="Open the tray menu → <b>Plugins</b> → <b>Available</b> to "
+            "install extras with one click: text transforms, QR codes, "
+            "word count, search shortcuts, and more.",
             draw=_draw_plugins,
             open_plugins=True,
         ),
         dict(
-            title="Build your own - no code needed",
-            body="In <b>Plugins → Custom</b>, the recipe builder lets you "
-            "snap together your own action: match some text, then run a "
-            "command or open a URL. That's a real plugin.",
+            title="Create custom actions without code",
+            body="In <b>Plugins → Custom</b>, use the recipe builder to create "
+            "your own action: match selected text, then open a URL, run a "
+            "command, or transform the text.",
             draw=_draw_recipe,
         ),
         *ai_pages,
         dict(
             title="You're all set",
-            body="Everything lives in the tray icon in your panel: Settings, "
-            "Plugins, and your own buttons. Off you go!",
+            body="Access Settings, Plugins, and your custom actions anytime "
+            "from the tray icon in your panel.",
             draw=_draw_done,
         ),
     ]
@@ -1270,10 +1270,10 @@ class OnboardingWindow(Adw.Window):
             pass
         buttons.set_visible(False)
         status.set_label(
-            "Downloading in the background. You'll get a notification when it's ready."
+            "Downloading in the background. You will be notified when it is ready."
             if download
-            else "OK. It downloads the first time you use an AI action. "
-            "You can change this in Settings → Advanced."
+            else "The model will download the first time you use an AI action. "
+            "You can change this anytime in Settings → Advanced."
         )
         status.set_visible(True)
         if download and self._on_download_model:

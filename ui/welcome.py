@@ -56,7 +56,7 @@ def show_welcome_dialog(
     hero.add_css_class("compact")
 
     # ---- 4-step usage explainer ----
-    steps_lbl = Gtk.Label(xalign=0, label="How to Use It")
+    steps_lbl = Gtk.Label(xalign=0, label="How to use vinoPop")
     steps_lbl.add_css_class("heading")
     outer.append(steps_lbl)
 
@@ -66,25 +66,25 @@ def show_welcome_dialog(
         (
             1,
             "Highlight text",
-            "Select anything in any app: a link, an error message, a paragraph.",
+            "Select text in any app: a link, an error message, or a paragraph.",
         ),
         (
             2,
-            "Click the popup button",
-            "vinoPop shows a small floating bar of actions tailored to what you selected.",
+            "Click a popup button",
+            "vinoPop displays a floating action bar tailored to your selection.",
         ),
         (
             3,
-            "Find Settings and plugins",
-            "Open vinoPop from the app grid, or from its tray icon where your desktop "
-            "has one, for Settings, the Plugin Manager and your custom buttons.",
+            "Open Settings and plugins",
+            "Open vinoPop from your application menu or system tray icon to access "
+            "Settings, the Plugin Manager, and custom actions.",
         ),
         (
             4,
-            "Starter plugins are installed",
-            "Editing buttons, clipboard history, word count, text transforms, and offline "
-            "translate and AI actions, plus Google, Wikipedia and YouTube search. Open "
-            "the Plugin Manager to add more, like developer tools, a calculator and QR codes.",
+            "Starter plugins are ready",
+            "Editing tools, clipboard history, word count, text transforms, offline AI "
+            "and translation, plus Google, Wikipedia, and YouTube search are preinstalled. "
+            "Open the Plugin Manager to add developer tools, a calculator, QR codes, and more.",
         ),
     ]:
         row = Adw.ActionRow(title=head, subtitle=body)

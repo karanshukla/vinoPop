@@ -140,7 +140,7 @@ class IconPicker:
         header.pack_start(cancel)
 
         self._search = Gtk.SearchEntry()
-        self._search.set_placeholder_text("Search icons, like folder or mail")
+        self._search.set_placeholder_text("Search icons (for example, folder or mail)")
         self._search.update_property([Gtk.AccessibleProperty.LABEL], ["Search icons"])
         self._search.set_hexpand(True)
         self._search.set_max_width_chars(40)
@@ -151,7 +151,7 @@ class IconPicker:
         self._symbolic_toggle = Gtk.CheckButton(label="Symbolic only")
         self._symbolic_toggle.set_active(True)
         self._symbolic_toggle.set_tooltip_text(
-            "Show only monochrome icons (the ones that tint with your theme)."
+            "Show only monochrome icons that adapt to your theme."
         )
         self._symbolic_toggle.connect("toggled", self._on_symbolic_toggle)
         header.pack_end(self._symbolic_toggle)
@@ -216,19 +216,19 @@ class IconPicker:
                 else ""
             )
             self._count_label.set_markup(
-                f"<i>No icons match “{esc_query}”. Standard themes don't ship "
-                f"brand-specific icons (Wikipedia, GitHub etc.).</i>\n"
-                f"<small>Drop your own <tt>.svg</tt> or <tt>.png</tt> files in "
+                f"<i>No icons match “{esc_query}”. Standard icon themes do not include "
+                f"brand-specific icons (such as Wikipedia or GitHub).</i>\n"
+                f"<small>Add custom <tt>.svg</tt> or <tt>.png</tt> files to "
                 f'<a href="{_USER_ICONS_LINK}">'
                 f"~/.config/vinopop/icons/</a>.{symbolic_hint} "
-                f"Or pick a generic one:</small>"
+                f"Or choose a generic icon:</small>"
             )
             self._filtered = _suggestions(_icon_theme())
         else:
             self._count_label.set_markup(
                 f"{len(self._filtered)} matching icons "
-                f"({len(self._all_icons)} total in your theme) - "
-                f'<a href="{_USER_ICONS_LINK}">add your own</a>'
+                f"({len(self._all_icons)} total in theme) · "
+                f'<a href="{_USER_ICONS_LINK}">Add custom icons</a>'
             )
 
         self._render_next_page()
