@@ -10,6 +10,19 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-23
+
+### 🐛 Bug Fixes
+
+- Text with control characters is pasted, not typed, so a stray escape or line break in a clipboard entry can't act as a keystroke. Wayland typing passes the text to `wtype` after `--`, so text starting with a dash is typed as is.
+- Clipboard history previews and names drop control characters, and a pinned entry's text is kept literal.
+- Recipes with shell commands handle `#` comments and arguments past `$9` correctly when quoting your selection.
+- Screenshots taken for OCR are readable only by you, even when the capture tool replaced or moved the file.
+
+### 📚 Documentation
+
+- The README, install guide, Fedora KDE notes, security policy and how-it-works page are rewritten to be shorter and clearer, along with the AppStream description and wording in the settings, onboarding and recipe screens.
+
 ## [1.8.0] - 2026-11-17
 
 ### ✨ Features
@@ -316,7 +329,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/karanshukla/vinoPop/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/karanshukla/vinoPop/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/karanshukla/vinoPop/compare/v1.4.1...v1.6.0
