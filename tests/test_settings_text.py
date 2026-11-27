@@ -12,20 +12,17 @@ def test_no_patterns_shows_the_hint():
 
 
 def test_one_pattern_is_singular():
-    assert text.blocked_patterns_subtitle(["a"], "") == "1 pattern blocked: a. Click to edit."
+    assert text.blocked_patterns_subtitle(["a"], "") == "1 pattern blocked: a"
 
 
 def test_three_patterns_are_all_named():
-    assert (
-        text.blocked_patterns_subtitle(["a", "b", "c"], "")
-        == "3 patterns blocked: a, b, c. Click to edit."
-    )
+    assert text.blocked_patterns_subtitle(["a", "b", "c"], "") == "3 patterns blocked: a, b, c"
 
 
 def test_a_fourth_pattern_is_counted_not_named():
     assert (
         text.blocked_patterns_subtitle(["a", "b", "c", "d"], "")
-        == "4 patterns blocked: a, b, c, +1 more. Click to edit."
+        == "4 patterns blocked: a, b, c, +1 more"
     )
 
 
@@ -42,11 +39,11 @@ def test_variables_round_trip_sorted_by_name():
 
 def test_variables_subtitle_names_the_first_three_tokens():
     assert text.variables_subtitle({}, "Click to add.") == "Click to add."
-    assert text.variables_subtitle({"b": "1"}, "") == "1 variable defined: {var:b}. Click to edit."
+    assert text.variables_subtitle({"b": "1"}, "") == "1 variable defined: {var:b}"
     four = dict.fromkeys(["d", "a", "c", "b"], "")
     assert (
         text.variables_subtitle(four, "")
-        == "4 variables defined: {var:a}, {var:b}, {var:c}, +1 more. Click to edit."
+        == "4 variables defined: {var:a}, {var:b}, {var:c}, +1 more"
     )
 
 

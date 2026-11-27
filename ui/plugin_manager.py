@@ -225,7 +225,6 @@ class PluginManagerDialog:
         "Developer",
     ]
     _CATEGORY_DESCRIPTIONS = {
-        "Snippets & Clipboard": "Clipboard history and reusable text snippets.",
         "Productivity": "Everyday text actions: editing, math, word counts, and formatting.",
         "Web shortcuts": "Open selected text in a search engine or web service.",
         "AI": "Offline summarize, rewrite, explain, and translate on your NPU, GPU, or CPU.",
@@ -236,10 +235,10 @@ class PluginManagerDialog:
         manifest = _load_manifest()
         if not manifest:
             group = Adw.PreferencesGroup()
-            group.set_title("Plugin catalogue")
+            group.set_title("Plugin catalog")
             row = _plain(Adw.ActionRow())
-            row.set_title("Catalogue is empty")
-            row.set_subtitle("plugins_repo/manifest.json is missing or unreadable")
+            row.set_title("Could not load the plugin list.")
+            row.set_subtitle("plugins_repo/manifest.json is missing or unreadable.")
             group.add(row)
             return [group]
 
@@ -397,10 +396,6 @@ class PluginManagerDialog:
     def _build_installed_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("User plugins")
-        group.set_description(
-            "Currently installed plugins. Install more from the Available tab, "
-            "or remove plugins you no longer need."
-        )
         self._fill_installed_group(group)
         return group
 
@@ -451,7 +446,7 @@ class PluginManagerDialog:
                 if path.name in retired:
                     row.set_subtitle(f"No longer bundled with vinoPop. {retired[path.name]}")
                 else:
-                    row.set_subtitle("Manually installed (not in the built-in catalog)")
+                    row.set_subtitle("Manually installed")
             _icon = entry.get("icon") if entry else None
             if not _icon and sub_names:
                 _p0 = all_plugins.get(sub_names[0])
@@ -471,7 +466,6 @@ class PluginManagerDialog:
                     sub_plugin = all_plugins.get(sub_name)
                     sub_row = _plain(Adw.SwitchRow())
                     sub_row.set_title((sub_plugin.tooltip if sub_plugin else sub_name) or sub_name)
-                    sub_row.set_subtitle(f"action: {sub_name}")
                     sub_row.set_active(sub_name not in disabled_names)
                     sub_row.connect(
                         "notify::active",
@@ -522,10 +516,7 @@ class PluginManagerDialog:
     def _build_custom_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Custom actions")
-        group.set_description(
-            "Create your own popup buttons without writing Python. Each recipe "
-            "is a small JSON file in ~/.config/vinopop/recipes/."
-        )
+        group.set_description("Create your own popup buttons without code.")
         self._fill_custom_group_with_header(group)
         return group
 
@@ -628,10 +619,7 @@ class PluginManagerDialog:
     def _build_order_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Popup button order")
-        group.set_description(
-            "Use the ↑ and ↓ buttons to reorder plugins in the popup. "
-            "Unlisted plugins fall back to their default priority."
-        )
+        group.set_description("Reorder how buttons appear in the popup.")
         self._fill_order_group(group)
         return group
 
@@ -662,7 +650,6 @@ class PluginManagerDialog:
         for index, plugin in enumerate(sorted_plugins):
             row = _plain(Adw.ActionRow())
             row.set_title(plugin.tooltip or plugin.name)
-            row.set_subtitle(plugin.name)
             row.add_prefix(self._badge(plugin.icon, plugin.tooltip or plugin.name))
 
             up_btn = _icon_button("go-up-symbolic", "Move up")

@@ -24,7 +24,7 @@ def blocked_patterns_subtitle(patterns: list[str], when_empty: str) -> str:
         return when_empty
     count = len(patterns)
     plural = "s" if count != 1 else ""
-    return f"{count} pattern{plural} blocked: {_first_few(patterns)}. Click to edit."
+    return f"{count} pattern{plural} blocked: {_first_few(patterns)}"
 
 
 def variables_from_text(text: str) -> dict[str, str]:
@@ -52,7 +52,7 @@ def variables_subtitle(variables: dict, when_empty: str) -> str:
     count = len(variables)
     plural = "s" if count != 1 else ""
     tokens = [f"{{var:{name}}}" for name in sorted(variables.keys())]
-    return f"{count} variable{plural} defined: {_first_few(tokens)}. Click to edit."
+    return f"{count} variable{plural} defined: {_first_few(tokens)}"
 
 
 def _has_fix(check: dict) -> bool:

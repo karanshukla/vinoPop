@@ -25,9 +25,9 @@ _ACTIONS = [
         example="Search Wikipedia for the selected word.",
         detail_prompt="What's the address of the page to open?",
         detail_placeholder="https://www.google.com/search?q={text_url}",
-        insert_label="Insert the selected text here",
+        insert_label="Insert selected text",
         insert_text="{text_url}",
-        preview_label='If you select "hello world" and click your button:',
+        preview_label='Preview for "hello world":',
         preview_verb="Opens this address in your browser:",
         examples=[
             ("Google", "https://www.google.com/search?q={text_url}"),
@@ -46,9 +46,9 @@ _ACTIONS = [
         # Unquoted on purpose: a command gets each placeholder as one argument
         # (pinned by `tests/test_recipes.py::test_commands_get_the_value_as_one_argument`)
         detail_placeholder="notify-send 'You selected:' {text}",
-        insert_label="Insert the selected text here",
+        insert_label="Insert selected text",
         insert_text="{text}",
-        preview_label='If you select "hello world" and click your button:',
+        preview_label='Preview for "hello world":',
         preview_verb="Runs this command in the background:",
         warning="Commands can change or delete files. Test with something harmless first.",
         examples=[
@@ -70,9 +70,9 @@ _ACTIONS = [
         example="Show how many characters you've selected.",
         detail_prompt="What should the notification say?",
         detail_placeholder="Selected: {text}",
-        insert_label="Insert the selected text",
+        insert_label="Insert selected text",
         insert_text="{text}",
-        preview_label='If you select "hello world" and click your button:',
+        preview_label='Preview for "hello world":',
         preview_verb="Shows this notification:",
         examples=[
             ("Plain", "Selected: {text}"),
@@ -90,9 +90,9 @@ _ACTIONS = [
         example="Wrap the selection in markdown highlight: ==text==",
         detail_prompt="How should the copied text look?",
         detail_placeholder="=={text}==",
-        insert_label="Insert the selected text",
+        insert_label="Insert selected text",
         insert_text="{text}",
-        preview_label='If you select "hello world" and click your button:',
+        preview_label='Preview for "hello world":',
         preview_verb="Copies this to your clipboard:",
         examples=[
             ("Markdown highlight", "=={text}=="),
@@ -455,14 +455,6 @@ class RecipeWizard:
         for n, icon, head, body in _INTRO_STEPS:
             flow.append(self._build_step_tile(n, icon, head, body))
         page.append(flow)
-
-        hint = _label(
-            "Click <b>Next</b> to continue. You can go back at any time.",
-            "caption",
-            markup=True,
-        )
-        hint.set_margin_top(10)
-        page.append(hint)
         return page, True
 
     def _build_step_tile(self, n: int, icon_name: str, head: str, body: str) -> Gtk.Widget:
@@ -488,12 +480,6 @@ class RecipeWizard:
         page = self._page_box(14)
 
         page.append(_label("What should your button do?", "title-2", wrap=True))
-        page.append(
-            _label(
-                "Choose an action type. You can change it later.",
-                wrap=True,
-            )
-        )
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin_top=8)
         grid.set_column_homogeneous(True)
@@ -608,15 +594,6 @@ class RecipeWizard:
         right.set_size_request(280, -1)
 
         right.append(_label("Live preview", "heading"))
-        right.append(
-            _label(
-                "Preview of how your button will appear in the popup bar "
-                "alongside built-in actions.",
-                "dim-label",
-                "caption",
-                wrap=True,
-            )
-        )
         right.append(self._build_mock_popup())
 
         self._mock_label = _label("", "dim-label", wrap=True)
@@ -806,11 +783,7 @@ class RecipeWizard:
         return row
 
     def _build_dynamic_value_chips(self) -> list[Gtk.Widget]:
-        extra_label = _label(
-            "Or insert a dynamic value (filled in when the button runs):",
-            "caption",
-            wrap=True,
-        )
+        extra_label = _label("Dynamic values", "caption", wrap=True)
         extra_label.set_margin_top(6)
         extra_flow = Gtk.FlowBox()
         extra_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -829,9 +802,7 @@ class RecipeWizard:
         examples = spec.get("examples") or []
         if not examples:
             return []
-        ex_label = _label(
-            "Or start from an example (click to fill the box above):", "caption", wrap=True
-        )
+        ex_label = _label("Examples", "caption", wrap=True)
         ex_label.set_margin_top(4)
         ex_flow = Gtk.FlowBox()
         ex_flow.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -943,12 +914,6 @@ class RecipeWizard:
         page = self._page_box(12)
 
         page.append(_label("When should this button appear?", "title-2", wrap=True))
-        page.append(
-            _label(
-                "Leave this set to 'Always' unless you want to restrict it to specific text types.",
-                wrap=True,
-            )
-        )
 
         self._always_radio = Gtk.CheckButton(label="Always (show for any selected text)")
         page.append(self._always_radio)
@@ -1001,14 +966,6 @@ class RecipeWizard:
         _clear(box)
 
         box.append(_label("Review your custom button", "title-2"))
-        box.append(
-            _label(
-                "Click <b>Apply</b> to save. You can edit or delete this "
-                "button later in the Plugin Manager.",
-                markup=True,
-                wrap=True,
-            )
-        )
         box.append(self._build_summary_card())
 
         errors = self._recipe_errors(self._build_recipe_dict())
