@@ -3,7 +3,7 @@
     "file": "local_ai.py",
     "version": 1,
     "title": "Summarize, rewrite, explain",
-    "description": "Runs a local model on your NPU, GPU or CPU through OpenVINO. Nothing leaves your machine; the model downloads once on first use.",
+    "description": "Summarize, rewrite, or explain text offline with a local OpenVINO model.",
     "category": "AI",
     "tags": [
       "ai",
@@ -16,7 +16,7 @@
     "file": "translate.py",
     "version": 1,
     "title": "Translate",
-    "description": "Translate the selection in a bubble with a language picker, offline on a local OpenVINO model. Nothing leaves your machine; the model downloads once on first use.",
+    "description": "Translate selected text offline in a bubble with a language picker.",
     "category": "AI",
     "tags": [
       "ai",
@@ -29,7 +29,7 @@
     "file": "speak.py",
     "version": 4,
     "title": "Read aloud",
-    "description": "Reads the selection aloud with vinoSpeak's Kokoro voice, on your NPU (GPU or CPU if there's none) through OpenVINO. Nothing leaves your machine; the voice downloads once on first use. Stop it from its notification, your media keys, or click again.",
+    "description": "Read selected text aloud offline with vinoSpeak's Kokoro voice.",
     "category": "AI",
     "tags": [
       "ai",
@@ -43,7 +43,7 @@
     "file": "editing_actions.py",
     "version": 3,
     "title": "Editing - Cut, Paste, Backspace, Select All",
-    "description": "PopClip's bread-and-butter buttons. Cut/Paste/Delete operate on the selection; Select All expands it. Sends Ctrl+X / Ctrl+V / Backspace / Ctrl+A to the focused app.",
+    "description": "Cut, paste, delete, or select all in editable fields.",
     "category": "Productivity",
     "tags": [
       "editing",
@@ -55,7 +55,7 @@
     "file": "formatting.py",
     "version": 2,
     "title": "Formatting - Bold, Italic, Underline",
-    "description": "Rich-text formatting via Ctrl+B / Ctrl+I / Ctrl+U. Works in Google Docs, Word, LibreOffice, Notion, Obsidian and most webmail composers.",
+    "description": "Toggle bold, italic, or underline in rich-text editors.",
     "category": "Productivity",
     "tags": [
       "editing",
@@ -67,7 +67,7 @@
     "file": "large_type.py",
     "version": 1,
     "title": "Large type",
-    "description": "Show the selection in giant fullscreen text. Useful for reading a number aloud, showing a code across the room, or enlarging tiny menu items.",
+    "description": "Display selected text in giant fullscreen type.",
     "category": "Productivity",
     "tags": [
       "accessibility",
@@ -79,7 +79,7 @@
     "file": "clipboard_history.py",
     "version": 6,
     "title": "Clipboard history & snippets",
-    "description": "Recent clipboard entries (text + images) plus saved snippets with triggers, placeholders, and variables. The picker is the home of both.",
+    "description": "Browse recent text and image copies, plus reusable snippets with triggers and variables.",
     "category": "Snippets & Clipboard",
     "tags": [
       "clipboard",

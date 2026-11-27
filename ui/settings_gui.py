@@ -342,45 +342,19 @@ _POPUP_BUTTON_PX = (16, 32)
 _MAX_POPUP_BUTTONS = (4, 40)
 
 _TRIGGER_BLOCKLIST_EDITOR = {
-    "title": "Edit trigger blocklist",
-    "subtitle": "Apps and sites where snippet triggers should never "
-    "auto-expand, such as password managers, terminals, and banking sites.",
-    "placeholder_text": "Enter one app or site per line. Each line is matched "
-    "(case-insensitive) against the focused window's title and class. "
-    "If any line matches as a substring, expansion is skipped for that window.\n\n"
-    "Examples:\n"
-    "  KeePassXC\n"
-    "  gnome-terminal\n"
-    "  bank.example.com\n"
-    "  1Password\n"
-    "  Bitwarden",
+    "title": "Trigger blocklist",
+    "subtitle": "One app or window title per line (case-insensitive substring match).",
+    "placeholder_text": "KeePassXC\ngnome-terminal\nbank.example.com",
 }
 _SNIPPET_VARIABLES_EDITOR = {
-    "title": "Edit snippet variables",
-    "subtitle": "Reusable values that any snippet can reference. "
-    "Define a value once here, then write {var:name} in any snippet. "
-    "Updating a value here updates every snippet that uses it.",
-    "placeholder_text": "Enter one variable per line in the format:\n"
-    "    name = value\n\n"
-    "Reference variables in snippets using {var:name}. Examples:\n\n"
-    "  email     = you@example.com\n"
-    "  signature = Best,\\nAlex\n"
-    "  phone     = +1 555 0100\n"
-    "  company   = Acme Corp\n\n"
-    "Names can use letters, digits, underscores, and hyphens.",
+    "title": "Snippet variables",
+    "subtitle": "One name = value per line. Use {var:name} in any snippet.",
+    "placeholder_text": "email = you@example.com\nsignature = Best,\\nAlex\nphone = +1 555 0100",
 }
 _POPUP_BLOCKLIST_EDITOR = {
-    "title": "Edit popup blocklist",
-    "subtitle": "Apps and pages where the popup should never appear, "
-    "such as password managers and banking sites.",
-    "placeholder_text": "Enter one app or site per line. Each line is matched "
-    "(case-insensitive) against the focused window's title and class. "
-    "If any line matches as a substring, the popup stays hidden for that window.\n\n"
-    "Examples:\n"
-    "  KeePassXC\n"
-    "  1Password\n"
-    "  Bitwarden\n"
-    "  Mozilla Firefox - My Bank",
+    "title": "Popup blocklist",
+    "subtitle": "One app or window title per line (case-insensitive substring match).",
+    "placeholder_text": "KeePassXC\n1Password\nBitwarden",
 }
 
 
@@ -575,17 +549,17 @@ _PLUGIN_LINKS = [
     ),
     (
         "Installed plugins",
-        "Update or remove plugins, or toggle individual actions inside a bundle.",
+        "Update, remove, or toggle individual actions.",
         "installed",
     ),
     (
         "Custom actions",
-        "Create custom popup buttons without writing code.",
+        "Create your own popup buttons without code.",
         "custom",
     ),
     (
         "Popup button order",
-        "Set the order of buttons shown in the popup.",
+        "Reorder how buttons appear in the popup.",
         "order",
     ),
 ]
@@ -716,7 +690,8 @@ class SettingsDialog:
     def _switch_row(self, title: str, subtitle: str, active: bool) -> Adw.SwitchRow:
         row = _plain(Adw.SwitchRow())
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         row.set_active(bool(active))
         return row
 
@@ -735,7 +710,8 @@ class SettingsDialog:
         `tests/test_windows_settings_rows.py::test_a_known_combo_id_is_selected`)."""
         row = _plain(Adw.ComboRow())
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         ids = [key for key, _label in options]
         row.set_model(Gtk.StringList.new([label for _key, label in options]))
         row.set_selected(ids.index(current) if current in ids else 0)
@@ -780,8 +756,7 @@ class SettingsDialog:
         group.add(
             self._spin_row(
                 "Hide tray icon after (minutes)",
-                "Minutes of inactivity before hiding the tray icon. "
-                "It reappears the next time the popup opens. Set to 0 to keep it always visible.",
+                "Reappears when the popup opens. 0 keeps it visible.",
                 "tray_idle_minutes",
                 0,
                 1440,
@@ -800,7 +775,7 @@ class SettingsDialog:
 
         return self._combo_row(
             "Theme",
-            "'Follow system' matches your desktop's light or dark theme.",
+            "",
             [
                 ("dark", "Dark"),
                 ("light", "Light"),
@@ -828,7 +803,8 @@ class SettingsDialog:
         )
         row = _plain(Adw.SpinRow.new(adjustment, 1, 0))
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         row.set_numeric(True)
         row.connect("notify::value", on_changed)
         return row
@@ -845,8 +821,7 @@ class SettingsDialog:
 
         return self._bounded_spin_row(
             "Popup button size",
-            "Button size in pixels, from 16 (compact) to 32 (large). "
-            "Smaller buttons fit more actions on one row.",
+            "Size in pixels (16–32).",
             "popup_button_size",
             _POPUP_BUTTON_PX,
             on_size_changed,
@@ -887,8 +862,7 @@ class SettingsDialog:
 
         row = self._combo_row(
             "Plugin icon style",
-            "Use color tiles or monochrome glyphs matching system icons. "
-            "Applies to the popup and Plugin Manager.",
+            "",
             [("color", "Color tiles"), ("glyph", "Monochrome glyphs")],
             current,
             on_style_changed,
@@ -899,7 +873,7 @@ class SettingsDialog:
     def _text_labels_row(self) -> Adw.SwitchRow:
         row = self._switch_row(
             "Text labels",
-            "Show each popup action's name as plain text instead of its icon.",
+            "Show action names instead of icons.",
             bool(self._settings.get("popup_text_labels", False)),
         )
         row.connect(
@@ -915,8 +889,7 @@ class SettingsDialog:
         # Saving runs on_changed, and main.py has the tray redraw its icon
         return self._combo_row(
             "Tray icon",
-            "Auto follows your panel color. If your panel does not recolor "
-            "symbolic icons, choose Light for dark panels or Dark for light panels.",
+            "Override if your panel doesn't recolor symbolic icons.",
             [
                 ("color", "Auto (follows panel)"),
                 ("light", "Light mono (dark panels)"),
@@ -929,7 +902,7 @@ class SettingsDialog:
     def _max_popup_buttons_row(self) -> Adw.SpinRow:
         return self._bounded_spin_row(
             "Maximum buttons in the popup",
-            "Actions beyond this limit are grouped under a '+N' button that opens the Plugin Manager.",
+            "Extra actions move to a +N button.",
             "max_popup_buttons",
             _MAX_POPUP_BUTTONS,
             lambda spin, _p: self._save_key("max_popup_buttons", int(spin.get_value())),
@@ -938,9 +911,7 @@ class SettingsDialog:
     def _overflow_mode_row(self) -> Adw.ComboRow:
         return self._combo_row(
             "When actions overflow",
-            "Choose how the popup handles more actions than fit on one line. "
-            "'One row + expand arrow' reveals remaining actions on click; "
-            "'Wrap' adds a second row; 'One row only' groups extras under a '+N' button.",
+            "",
             [
                 ("expand", "One row + expand arrow"),
                 ("wrap", "Wrap to two rows"),
@@ -953,12 +924,10 @@ class SettingsDialog:
     def _build_activation_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Activation")
-        group.set_description("Configure how and when the popup opens.")
         group.add(
             self._hotkey_row(
                 "Popup hotkey",
-                "Press this anywhere to open the popup. With text selected, it shows "
-                "actions for that selection; otherwise it opens a paste menu.",
+                "Shows actions for selected text, or a paste menu if nothing is selected.",
                 key="hotkey",
                 recorder_name="Popup hotkey",
                 clear_tooltip="Disable the popup hotkey",
@@ -968,25 +937,23 @@ class SettingsDialog:
 
         on_selection_row = self._switch_row(
             "Auto-popup on selection",
-            "Show the popup automatically whenever you highlight text in any app.",
+            "Open the popup when you highlight text.",
             self._settings.get("show_on_selection"),
         )
         on_selection_row.connect("notify::active", self._on_switch, "show_on_selection")
         group.add(on_selection_row)
 
         double_click_row = self._switch_row(
-            "Modifier+double-click for the edit menu",
-            "Hold the modifier below and double-click in a text field to show "
-            "Paste, Select all, and Backspace. Clicks are monitored locally and "
-            "never logged. On Wayland, this reads /dev/input and requires your "
-            "user to be in the 'input' group.",
+            "Double-click edit menu",
+            "Hold the modifier below and double-click in a text field for "
+            "Paste, Select All, and Backspace.",
             self._settings.get("double_click_popup_enabled", False),
         )
         double_click_row.connect("notify::active", self._on_switch, "double_click_popup_enabled")
         group.add(double_click_row)
         modifier_row = self._combo_row(
             "Modifier key",
-            "The key to hold while double-clicking.",
+            "",
             [
                 ("ctrl", "Ctrl"),
                 ("shift", "Shift"),
@@ -1023,7 +990,8 @@ class SettingsDialog:
     ) -> Adw.ActionRow:
         row = _plain(Adw.ActionRow())
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         self._add_hotkey_recorder(row, key, recorder_name, clear_tooltip)
         return row
 
@@ -1034,7 +1002,7 @@ class SettingsDialog:
         row.set_title("Screen OCR hotkey")
         supported, reason = _ocr_support()
         if supported:
-            row.set_subtitle("Drag to select a screen region and copy recognized text.")
+            row.set_subtitle("Copy text from a screen region.")
         else:
             row.set_subtitle(f"Setup required: {reason}.")
             row.add_suffix(self._ocr_install_button(row, reason))
@@ -1052,9 +1020,7 @@ class SettingsDialog:
             argv = None
         button = Gtk.Button(label="Install")
         button.set_valign(Gtk.Align.CENTER)
-        button.set_tooltip_text(
-            "Install OCR tools in the background (requires administrator password)."
-        )
+        button.set_tooltip_text("Install OCR tools (requires administrator password).")
         if argv is None:
             button.set_sensitive(False)
             button.set_tooltip_text(_ocr_manual_install_hint(reason))
@@ -1066,7 +1032,7 @@ class SettingsDialog:
             return
         button.set_sensitive(False)
         button.set_label("Installing…")
-        row.set_subtitle("Installing; approve the password prompt to continue…")
+        row.set_subtitle("Approve the password prompt to continue…")
 
         def install() -> None:
             ok, error = _run_ocr_install(argv)
@@ -1084,7 +1050,7 @@ class SettingsDialog:
         except Exception:
             supported, reason = exited_ok, ""
         if supported:
-            row.set_subtitle("Ready. Drag a box on screen to copy recognized text.")
+            row.set_subtitle("Copy text from a screen region.")
             button.set_label("Installed")
             button.set_sensitive(False)
             # on_changed binds the hotkey now that it can do something
@@ -1094,7 +1060,7 @@ class SettingsDialog:
                 except Exception:
                     pass
         else:
-            row.set_subtitle(f"Installation did not complete: {reason or error}. Try again.")
+            row.set_subtitle(f"Installation didn't complete: {reason or error}. Try again.")
             button.set_label("Install")
             button.set_sensitive(True)
         return False
@@ -1104,9 +1070,7 @@ class SettingsDialog:
         # subtitle into a tall ribbon
         row = self._combo_row(
             "Force all plugins modifier",
-            "Hold this key while selecting text to show all matching actions "
-            "regardless of content type. Modifiers may conflict with desktop "
-            "shortcuts (Alt/Super often move windows; Ctrl and Shift modify selections).",
+            "Hold while selecting text to show all matching actions.",
             [
                 ("", "None (off)"),
                 ("ctrl", "Ctrl"),
@@ -1118,21 +1082,13 @@ class SettingsDialog:
             lambda v: self._save_key("popup_force_all_modifier", v or ""),
         )
         if not _force_all_supported():
-            row.set_sensitive(False)
-            row.set_subtitle(
-                "Available on X11 sessions only. On Wayland, vinoPop cannot "
-                "detect held modifier keys when the popup opens."
-            )
+            row.set_visible(False)
         return row
 
     def _autostart_row(self) -> Adw.SwitchRow:
         """Start at login is the ~/.config/autostart entry itself, not a
         settings.json key: the desktop reads the file."""
-        row = self._switch_row(
-            "Start at login",
-            "Launch vinoPop automatically when you sign in.",
-            False,
-        )
+        row = self._switch_row("Start at login", "", False)
         try:
             from core import autostart
 
@@ -1153,21 +1109,18 @@ class SettingsDialog:
     def _build_snippets_clipboard_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Snippets &amp; Clipboard")
-        group.set_description("Manage clipboard history and reusable text snippets.")
 
         history_row = self._switch_row(
             "Clipboard history",
-            "Keep a history of recently copied text and images. "
-            "Turn off to stop monitoring the clipboard.",
+            "Save recently copied text and images.",
             self._settings.get("clipboard_history_enabled", True),
         )
         history_row.connect("notify::active", self._on_switch, "clipboard_history_enabled")
         group.add(history_row)
 
         shortcut_row = self._hotkey_row(
-            "Optional clipboard shortcut",
-            "Open the clipboard picker at the pointer. Optional: the popup "
-            "hotkey (on the Activation page) also opens it when no text is selected.",
+            "Clipboard shortcut",
+            "Open the clipboard picker anywhere.",
             key="clipboard_hotkey",
             recorder_name="Clipboard shortcut",
             clear_tooltip="Disable the clipboard shortcut",
@@ -1176,10 +1129,8 @@ class SettingsDialog:
         group.add(shortcut_row)
 
         triggers_row = self._switch_row(
-            "Snippet triggers (text expansion)",
-            "Expand a snippet automatically when you type its trigger (for example, "
-            "';email') followed by Space or Tab. Keystrokes are checked locally "
-            "against your triggers and are never logged or transmitted.",
+            "Snippet triggers",
+            "Expand triggers like ;email when followed by Space or Tab.",
             self._settings.get("snippet_triggers_enabled", False),
         )
         triggers_row.connect("notify::active", self._on_switch, "snippet_triggers_enabled")
@@ -1187,22 +1138,31 @@ class SettingsDialog:
         _enabled_while(history_row, triggers_row)
         group.add(triggers_row)
 
-        group.add(
-            self._pattern_list_row(
-                "trigger_blocklist_patterns",
-                "Don't expand triggers in these apps or sites",
-                "Useful for password fields, terminals, and "
-                "security-sensitive sites. Click to add patterns.",
-                _TRIGGER_BLOCKLIST_EDITOR,
-            )
+        trigger_blocklist_row = self._pattern_list_row(
+            "trigger_blocklist_patterns",
+            "Trigger blocklist",
+            "None — e.g. password managers or terminals",
+            _TRIGGER_BLOCKLIST_EDITOR,
         )
-        group.add(self._snippet_variables_row())
+
+        def _sync_trigger_blocklist(*_args) -> None:
+            trigger_blocklist_row.set_sensitive(
+                history_row.get_active() and triggers_row.get_active()
+            )
+
+        _sync_trigger_blocklist()
+        history_row.connect("notify::active", _sync_trigger_blocklist)
+        triggers_row.connect("notify::active", _sync_trigger_blocklist)
+        group.add(trigger_blocklist_row)
+
+        variables_row = self._snippet_variables_row()
+        _enabled_while(history_row, variables_row)
+        group.add(variables_row)
 
         shell_row = self._switch_row(
             "Shell expansion in snippets",
-            "Allow snippets containing {shell:CMD} to run commands in bash "
-            "and paste their output (such as {shell:git branch} or {shell:date -u}). "
-            "Disabled by default because an untrusted snippet could execute arbitrary commands.",
+            "Allow {shell:CMD} placeholders to run bash commands. "
+            "Only enable for snippets you trust.",
             self._settings.get("snippet_shell_enabled", False),
         )
         shell_row.connect("notify::active", self._on_switch, "snippet_shell_enabled")
@@ -1271,8 +1231,7 @@ class SettingsDialog:
             "Snippet variables",
             subtitle=lambda: settings_text.variables_subtitle(
                 variables(),
-                "Define your email, signature, phone, etc. once and "
-                "use {var:name} across snippets. Click to add.",
+                "Reusable {var:name} values for snippets.",
             ),
             as_text=lambda: settings_text.variables_as_text(variables()),
             save_text=lambda text: self._save_key(
@@ -1284,12 +1243,10 @@ class SettingsDialog:
     def _build_filter_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Filters")
-        group.set_description("Control where and when the popup stays hidden.")
 
         skip_short_row = self._switch_row(
-            "Skip short auto-popup selections",
-            "Ignore selections shorter than the minimum length below when "
-            "auto-popup is enabled. The manual hotkey is unaffected.",
+            "Ignore short selections",
+            "Applies to auto-popup only, not the hotkey.",
             self._settings.get("min_selection_length_enabled"),
         )
         skip_short_row.connect("notify::active", self._on_switch, "min_selection_length_enabled")
@@ -1297,8 +1254,7 @@ class SettingsDialog:
 
         min_length_row = self._spin_row(
             "Minimum characters",
-            "Selections shorter than this are skipped by the "
-            "auto-popup (only when the switch above is on).",
+            "",
             "min_selection_length",
             1,
             100,
@@ -1310,9 +1266,8 @@ class SettingsDialog:
         group.add(
             self._pattern_list_row(
                 "blocklist_patterns",
-                "Don't show in these apps or pages",
-                "Hide the popup in password managers, banking sites, "
-                "and other sensitive contexts. Click to add patterns.",
+                "Blocked apps and sites",
+                "None — e.g. password managers or banking sites",
                 _POPUP_BLOCKLIST_EDITOR,
             )
         )
@@ -1321,12 +1276,11 @@ class SettingsDialog:
     def _build_timing_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Timing")
-        group.set_description("Adjust popup show and hide delays in seconds.")
+        group.set_description("Delays in seconds.")
 
         debounce_row = self._seconds_spin_row(
             "Delay before popup appears",
-            "Delay after selection changes before showing the popup, "
-            "preventing flicker while dragging.",
+            "Prevents flicker while dragging.",
             "selection_debounce_ms",
             0.0,
             2.0,
@@ -1334,7 +1288,7 @@ class SettingsDialog:
         )
         initial_row = self._seconds_spin_row(
             "Auto-hide before mouse arrives",
-            "Seconds the popup waits if you never move the mouse to it.",
+            "Hide if the pointer never reaches the popup.",
             "auto_hide_initial_ms",
             0.5,
             30.0,
@@ -1342,7 +1296,7 @@ class SettingsDialog:
         )
         leave_row = self._seconds_spin_row(
             "Auto-hide after mouse leaves",
-            "Seconds the popup stays visible after you move the cursor away from it.",
+            "",
             "auto_hide_leave_ms",
             0.2,
             20.0,
@@ -1356,13 +1310,6 @@ class SettingsDialog:
     def _build_search_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Web search")
-        group.set_description(
-            GLib.markup_escape_text(
-                'Which engine the popup\'s "Search the web" button uses. '
-                "Google also surfaces Gemini answers; DuckDuckGo and Brave "
-                "are private; Kagi requires an account."
-            )
-        )
 
         try:
             from core.actions import SEARCH_ENGINES
@@ -1386,7 +1333,7 @@ class SettingsDialog:
         custom_row.set_text(self._settings.get("search_engine_custom_url") or "")
 
         def _sync_custom_visibility(engine_id: str | None) -> None:
-            custom_row.set_sensitive(engine_id == "custom")
+            custom_row.set_visible(engine_id == "custom")
 
         def _on_engine_changed(new_id: str) -> None:
             self._save_key("search_engine", new_id or "google")
@@ -1394,7 +1341,7 @@ class SettingsDialog:
 
         engine_row = self._combo_row(
             "Search engine",
-            "The button on the popup will open this site.",
+            "",
             options,
             current,
             _on_engine_changed,
@@ -1416,21 +1363,20 @@ class SettingsDialog:
             from vino_ai import models
 
             model = models.llm_model()
-            size = f"{model.label}, {model.size}"
+            size = f"{model.label} ({model.size})"
         except Exception:
             size = "about 4 GB"
         prefetch_row = self._switch_row(
-            "Download the AI model in the background",
-            f"Download the AI model ({size}) once when vinoPop starts so the "
-            "first AI action does not wait. When off, it downloads on your first AI action.",
+            "Pre-download AI model",
+            f"Download {size} at startup instead of on your first AI action.",
             self._settings.get("ai_prefetch_model", False),
         )
         prefetch_row.connect("notify::active", self._on_prefetch_switch)
         group.add(prefetch_row)
         describe_row = self._switch_row(
             "Describe images after OCR",
-            "Generate an AI description for captured images (~10 s each), offered "
-            "via a button on the OCR notification or run automatically when no text is found.",
+            "Offer an AI description for OCR captures, or run automatically if "
+            "no text is found (~10 s).",
             self._settings.get("ocr_describe_images", False),
         )
         describe_row.connect(
@@ -1459,15 +1405,9 @@ class SettingsDialog:
             except Exception:
                 items = []
             if items:
-                row.set_subtitle(
-                    "\n".join(f"{i.label}: {_gb(i.size)}" for i in items)
-                    + "\nDeleting frees disk space. The model will download "
-                    "again the next time you use an AI action."
-                )
+                row.set_subtitle("\n".join(f"{i.label}: {_gb(i.size)}" for i in items))
             else:
-                row.set_subtitle(
-                    "No models downloaded. The model downloads on your first AI action."
-                )
+                row.set_subtitle("None downloaded (downloads on first AI action)")
             btn.set_sensitive(bool(items))
 
         def _delete() -> None:
@@ -1511,15 +1451,11 @@ class SettingsDialog:
                 items = []
             total = sum(i.size for i in items)
             body = (
-                f"This removes {_gb(total)} of downloaded AI models and their compiled cache. "
-                "Summarize, rewrite, explain, translate, and image descriptions will "
-                "download the model again the next time you use them."
+                f"Removes {_gb(total)} of AI models and cache. "
+                "They'll download again next time you use an AI action."
             )
             if prefetch_row.get_active():
-                body += (
-                    "\n\nBackground download will also be turned off so it does "
-                    "not redownload immediately."
-                )
+                body += "\n\nBackground download will be turned off."
             confirm = Adw.AlertDialog.new("Delete AI models?", body)
             confirm.add_response("cancel", "Cancel")
             confirm.add_response("delete", "Delete")
@@ -1624,7 +1560,7 @@ class SettingsDialog:
 
         btn.connect("clicked", _clicked)
         _show(
-            "Checks GitHub for a newer release. No other data is sent.",
+            "Checks GitHub for a newer release.",
             "Check for updates",
             NEXT_CHECK,
         )
@@ -1633,12 +1569,10 @@ class SettingsDialog:
     def _build_advanced_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Advanced")
-        group.set_description("Advanced options for troubleshooting and resetting preferences.")
 
         poll_row = self._switch_row(
             "Trigger hotkey on first press",
-            "Enable if the popup only opens after pressing the hotkey "
-            "2-3 times (common on Cinnamon).",
+            "Workaround if the hotkey needs 2–3 presses to open (common on Cinnamon).",
             self._settings.get("hotkey_use_polling", False),
         )
         poll_row.connect("notify::active", self._on_switch, "hotkey_use_polling")
@@ -1649,9 +1583,8 @@ class SettingsDialog:
         reset_row = _plain(Adw.ActionRow())
         reset_row.set_title("Reset settings to defaults")
         reset_row.set_subtitle(
-            "Restore all preferences (hotkeys, timing, appearance, AI, and filters) "
-            "to their defaults. Your snippets, clipboard history, installed plugins, "
-            "and custom buttons are kept."
+            "Restore preferences to defaults. Snippets, clipboard history, "
+            "plugins, and custom actions are kept."
         )
         reset_btn = Gtk.Button(label="Reset…")
         reset_btn.set_valign(Gtk.Align.CENTER)
@@ -1663,12 +1596,10 @@ class SettingsDialog:
 
     def _on_reset_to_defaults(self, _btn: Gtk.Button) -> None:
         confirm = Adw.AlertDialog.new(
-            "Reset all preferences to defaults?",
-            "All preferences in this window will return to their default values.\n\n"
-            "Kept: snippets, clipboard history, installed plugins, and custom buttons.\n"
-            "Reset: hotkeys, timing, popup appearance, AI settings, "
-            "blocklists, search engine, and terminal settings.\n\n"
-            "This action cannot be undone.",
+            "Reset settings to defaults?",
+            "Hotkeys, timing, appearance, AI, blocklists, search, and terminal "
+            "settings will reset. Your snippets, clipboard history, plugins, "
+            "and custom actions are kept.",
         )
         confirm.add_response("cancel", "Cancel")
         confirm.add_response("reset", "Reset")
@@ -1712,9 +1643,7 @@ class SettingsDialog:
         and probes devices, which would stall this window."""
         group = Adw.PreferencesGroup()
         group.set_title("Diagnostics")
-        group.set_description(
-            "Checks for local AI, OpenVINO devices, and desktop integrations (vinopop --doctor)."
-        )
+        group.set_description("Checks local AI, OpenVINO devices, and desktop setup.")
         buttons = Gtk.Box(spacing=6)
         rerun = self._suffix_icon_button("view-refresh-symbolic", "Run diagnostic checks again")
         copy = self._suffix_icon_button("edit-copy-symbolic", "Copy diagnostics for a bug report")
@@ -1811,7 +1740,8 @@ class SettingsDialog:
         def _button_row(title: str, subtitle: str, label: str, on_click) -> Adw.ActionRow:
             row = _plain(Adw.ActionRow())
             row.set_title(title)
-            row.set_subtitle(subtitle)
+            if subtitle:
+                row.set_subtitle(subtitle)
             btn = Gtk.Button(label=label)
             btn.set_valign(Gtk.Align.CENTER)
             btn.connect("clicked", on_click)
@@ -1838,7 +1768,7 @@ class SettingsDialog:
 
         _button_row(
             "Run onboarding tour",
-            "Reopen the first-run walkthrough for hotkeys, plugins, and AI setup.",
+            "Replay the welcome tour.",
             "Open",
             _setup,
         )
@@ -1854,10 +1784,10 @@ class SettingsDialog:
                 btn.set_sensitive(False)
                 btn.set_label("Cleared")
 
+            devs = ", ".join(skipped)
             _button_row(
                 "Retry failed AI devices",
-                f"{', '.join(skipped)} previously failed to load the model and are "
-                "currently skipped. Clear this list to try them again on the next AI action.",
+                f"Skipped after an earlier error: {devs}. Clear to try them again.",
                 "Retry",
                 _forget,
             )
@@ -1866,9 +1796,7 @@ class SettingsDialog:
     def _build_plugins_group(self) -> Adw.PreferencesGroup:
         group = Adw.PreferencesGroup()
         group.set_title("Plugins")
-        group.set_description(
-            "Popup buttons are provided by plugins. Select a row below to open the Plugin Manager."
-        )
+        group.set_description("Manage popup buttons in the Plugin Manager.")
         for title, subtitle, tab in _PLUGIN_LINKS:
             row = _plain(Adw.ActionRow())
             row.set_title(title)
@@ -1898,8 +1826,7 @@ class SettingsDialog:
 
         term_row = self._switch_row(
             "Keep terminal open after running",
-            "Keep the terminal window open after a command finishes so you can "
-            "read its output. Otherwise, it closes immediately.",
+            "Leave the terminal open after a command finishes to read its output.",
             self._settings.get("terminal_keep_open", True),
         )
         term_row.connect("notify::active", self._on_switch, "terminal_keep_open")
@@ -1917,7 +1844,8 @@ class SettingsDialog:
     ) -> Adw.SpinRow:
         row = _plain(Adw.SpinRow.new_with_range(lo, hi, step))
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         row.set_value(self._settings.get_int(key))
         row.connect("notify::value", self._on_spin, key)
         return row
@@ -1935,7 +1863,8 @@ class SettingsDialog:
         *_ms keys in settings.json expect."""
         row = _plain(Adw.SpinRow.new_with_range(lo_s, hi_s, step_s))
         row.set_title(title)
-        row.set_subtitle(subtitle)
+        if subtitle:
+            row.set_subtitle(subtitle)
         row.set_digits(2 if step_s < 0.1 else 1)
         row.set_tooltip_text("Value in seconds")
         row.set_value(self._settings.get_int(key) / 1000.0)

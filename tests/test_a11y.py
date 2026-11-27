@@ -472,14 +472,10 @@ def test_icon_picker_is_named(gtk, stub_backend):
 # previews can stay dim; these can't.
 _INSTRUCTIONS = (
     "Custom buttons turn selected text",
-    "Click Next to continue",
-    "Choose an action type",
     "Example: ",
     "The icon appears in the popup bar",
-    "Or insert a dynamic value",
-    "Or start from an example",
-    "Leave this set to 'Always'",
-    "Click Apply to save",
+    "Dynamic values",
+    "Examples",
     "Shows on: ",
 )
 
