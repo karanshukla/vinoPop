@@ -10,6 +10,12 @@ hand-refined. The release workflow reads its notes from here, so edits stick.
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-11-27
+
+### 🎨 Changed
+
+- Unnecessary prose is trimmed from the popup and settings text.
+
 ## [1.8.1] - 2026-11-23
 
 ### 🐛 Bug Fixes
@@ -329,7 +335,8 @@ Wayland is KDE only (other compositors run under XWayland).
 Versions before 1.0.0 are LinuxPop's; see its
 [releases](https://github.com/GaimsDevSoftware/linuxpop/releases).
 
-[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/karanshukla/vinoPop/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/karanshukla/vinoPop/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/karanshukla/vinoPop/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/karanshukla/vinoPop/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/karanshukla/vinoPop/compare/v1.6.0...v1.7.0
